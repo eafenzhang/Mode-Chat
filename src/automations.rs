@@ -74,6 +74,50 @@ pub fn load(db_path: &Path, bots: &[BotRef<'_>]) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
+/// 设置页「+ 新建任务」：写一条与壳同 schema 的 automation（scope 归当前 Bot）。
+pub fn create_task(
+    db_path: &Path,
+    workspace_path: &str,
+    workspace_identity: Option<&str>,
+    title: &str,
+    cron_expr: &str,
+    prompt: &str,
+    recurring: bool,
+) -> Result<String, String> {
+    let repo = AutomationRepo::with_busy_timeout(db_path, 5_000);
+    let service = automation_service::AutomationService::new(
+        repo,
+        automation_service::AutomationServiceOptions {
+            offset_secs: crate::time::local_offset_secs() as i32,
+        },
+    );
+    let scope = AutomationScope {
+        workspace_path: Some(workspace_path.to_string()),
+        workspace_identity: workspace_identity.map(str::to_string),
+    };
+    let created = service.create(
+        &automation_service::CreateParams {
+            title: title.to_string(),
+            cron_expr: cron_expr.to_string(),
+            relative_delay_minutes: None,
+            prompt: prompt.to_string(),
+            model_selection: None,
+            mode: None,
+            target_task_id: None,
+            bot_delivery_target: None,
+            recurring: Some(recurring),
+            max_runs: None,
+            end_at: None,
+            interval_unit: None,
+            interval: None,
+            schedule_rule: None,
+        },
+        &scope,
+        crate::time::now_ms() as i64,
+    )?;
+    Ok(created.automation_id)
+}
+
 pub fn set_enabled(
     db_path: &Path,
     automation_id: &str,

@@ -923,6 +923,57 @@ impl Render for AllowlistFormState {
     }
 }
 
+/// 「新建定时任务」表单（DS 的 + 新建任务）。
+struct ScheduleFormState {
+    bot_id: String,
+    title: Entity<SimpleInput>,
+    cron: Entity<SimpleInput>,
+    prompt: Entity<SimpleInput>,
+    recurring: bool,
+    error: Option<String>,
+}
+
+impl Render for ScheduleFormState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let recurring = self.recurring;
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(dialog_field("schedule-title", i18n::t("标题"), &self.title))
+            .child(dialog_field(
+                "schedule-cron",
+                i18n::t("cron（五段，本地时区）"),
+                &self.cron,
+            ))
+            .child(dialog_field(
+                "schedule-prompt",
+                i18n::t("到点后发给 Bot 的指令"),
+                &self.prompt,
+            ))
+            .child(
+                settings_row(
+                    i18n::t("循环运行").to_string(),
+                    Some(if recurring {
+                        i18n::t("按 cron 重复").to_string()
+                    } else {
+                        i18n::t("只运行一次").to_string()
+                    }),
+                )
+                .child(switch("schedule-recurring", recurring).on_click(cx.listener(
+                    |this, _event, _window, cx| {
+                        this.recurring = !this.recurring;
+                        cx.notify();
+                    },
+                ))),
+            );
+        if let Some(error) = &self.error {
+            body = body.child(settings_error(error.clone()));
+        }
+        body
+    }
+}
+
 /// 群目标编辑对话框状态（写回 `{data_root}/v2/groups/<gid>/goal.json`）。
 struct GroupGoalState {
     group_id: String,
@@ -7239,34 +7290,26 @@ impl PilotApp {
         appearance_rows.push(
             settings_row(i18n::t("显示思考过程").to_string(), None)
                 .child(
-                    settings_button(
-                        SharedString::from("show-thinking-toggle"),
-                        if self.show_thinking { i18n::t("已显示") } else { i18n::t("已隐藏") },
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.show_thinking = !this.show_thinking;
-                        save_ui_bool("show_thinking", this.show_thinking);
-                        cx.notify();
-                    })),
+                    switch("show-thinking-toggle", self.show_thinking).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            this.show_thinking = !this.show_thinking;
+                            save_ui_bool("show_thinking", this.show_thinking);
+                            cx.notify();
+                        },
+                    )),
                 )
                 .into_any_element(),
         );
         appearance_rows.push(
             settings_row(i18n::t("后台通知").to_string(), None)
                 .child(
-                    settings_button(
-                        SharedString::from("notify-background-toggle"),
-                        if self.background_notifications {
-                            i18n::t("已开启")
-                        } else {
-                            i18n::t("已关闭")
-                        },
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.background_notifications = !this.background_notifications;
-                        save_ui_bool("notify_background", this.background_notifications);
-                        cx.notify();
-                    })),
+                    switch("notify-background-toggle", self.background_notifications).on_click(
+                        cx.listener(|this, _event, _window, cx| {
+                            this.background_notifications = !this.background_notifications;
+                            save_ui_bool("notify_background", this.background_notifications);
+                            cx.notify();
+                        }),
+                    ),
                 )
                 .into_any_element(),
         );
@@ -7274,21 +7317,22 @@ impl PilotApp {
             .child(settings_group(appearance_rows))
             .child(settings_section(i18n::t("输入")))
             .child(settings_group(vec![
-                settings_row(i18n::t("回车发送").to_string(), None)
+                settings_row(
+                    i18n::t("回车发送").to_string(),
+                    Some(i18n::t("关闭后 Enter 换行，Ctrl+Enter 发送").to_string()),
+                )
                 .child(
-                    settings_button(
-                        SharedString::from("enter-to-send-toggle"),
-                        if self.enter_to_send { i18n::t("已开启") } else { i18n::t("已关闭") },
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.enter_to_send = !this.enter_to_send;
-                        save_ui_bool("enter_to_send", this.enter_to_send);
-                        let enabled = this.enter_to_send;
-                        this.input.update(cx, |input, cx| {
-                            input.set_submit_on_enter(enabled, cx);
-                        });
-                        cx.notify();
-                    })),
+                    switch("enter-to-send-toggle", self.enter_to_send).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            this.enter_to_send = !this.enter_to_send;
+                            save_ui_bool("enter_to_send", this.enter_to_send);
+                            let enabled = this.enter_to_send;
+                            this.input.update(cx, |input, cx| {
+                                input.set_submit_on_enter(enabled, cx);
+                            });
+                            cx.notify();
+                        },
+                    )),
                 )
                 .into_any_element(),
                 settings_row(
@@ -7311,7 +7355,7 @@ impl PilotApp {
             ]))
             .child(settings_section(i18n::t("侧栏分组")));
         if self.sidebar_sections.sections.is_empty() {
-            body = body.child(hint_row(i18n::t("还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/频道移入")));
+            body = body.child(settings_empty(i18n::t("还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/频道移入")));
         } else {
             let mut section_rows: Vec<gpui::AnyElement> = Vec::new();
             for section in self.sidebar_sections.sections.clone() {
@@ -7692,9 +7736,16 @@ impl PilotApp {
         body = body
             .child(settings_section(i18n::t("当前 Bot")))
             .child(settings_group(vec![kv_row(current, i18n::t("当前选择")).into_any_element()]))
-            .child(settings_section(i18n::t("Provider 与模型")));
+            .child(settings_section_action(
+                tri!("Provider 与模型 · {}", "Providers & models · {}", providers.len()),
+                settings_action_button("provider-add", i18n::t("+ 添加服务商")).on_click(
+                    cx.listener(|this, _event, window, cx| {
+                        this.open_add_provider_dialog(window, cx);
+                    }),
+                ),
+            ));
         if providers.is_empty() {
-            body = body.child(hint_row(
+            body = body.child(settings_empty(
                 i18n::t("没有读到 provider_config.json（缺失或没有已配置的 provider）"),
             ));
         } else {
@@ -7880,13 +7931,6 @@ impl PilotApp {
                 body = body.child(settings_group(provider_rows));
             }
         }
-        body = body.child(div().flex().justify_end().child(
-            settings_button(SharedString::from("provider-add"), i18n::t("从模板新增")).on_click(
-                cx.listener(|this, _event, window, cx| {
-                    this.open_add_provider_dialog(window, cx);
-                }),
-            ),
-        ));
         body.into_any_element()
     }
 
@@ -7967,7 +8011,7 @@ impl PilotApp {
                     kv_row(current_label.clone(), i18n::t("当前引擎")).into_any_element(),
                 ]));
         } else {
-            body = body.child(hint_row(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
+            body = body.child(settings_empty(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
         }
         body = body.child(settings_section(i18n::t("支持的引擎")));
         let mut engine_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -8089,28 +8133,17 @@ impl PilotApp {
     fn settings_page_bots(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let bots = self.roster.bots.clone();
         let hidden = self.roster.hidden_bots.clone();
-        let mut body = settings_page_body("Bot").child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(8.))
-                .child(settings_note(tri!(
-                    "共 {} 个 Bot（名册与产品共享）。",
-                    "{} bots (the roster is shared with the product).",
-                    bots.len()
-                )))
-                .child(
-                    settings_button("settings-new-bot", i18n::t("新建 Bot")).on_click(cx.listener(
-                        |this, _event, _window, cx| {
-                            this.open_new_dialog(cx);
-                        },
-                    )),
-                ),
-        );
-        body = body.child(settings_section(i18n::t("全部 Bot")));
+        let mut body = settings_page_body("Bot");
+        body = body.child(settings_section_action(
+            tri!("全部 Bot · {}", "All bots · {}", bots.len()),
+            settings_action_button("settings-new-bot", i18n::t("新建 Bot")).on_click(
+                cx.listener(|this, _event, _window, cx| {
+                    this.open_new_dialog(cx);
+                }),
+            ),
+        ));
         if bots.is_empty() {
-            body = body.child(hint_row(i18n::t("名册里还没有 Bot")));
+            body = body.child(settings_empty(i18n::t("名册里还没有 Bot")));
         }
         let mut bot_rows: Vec<gpui::AnyElement> = Vec::new();
         for bot in &bots {
@@ -8176,24 +8209,17 @@ impl PilotApp {
         let groups = self.roster.groups.clone();
         let hidden = self.roster.hidden_groups.clone();
         let archived = self.roster.archived_groups.clone();
-        let mut body = settings_page_body("频道").child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(8.))
-                .child(settings_note(if i18n::is_en() { format!("{}.", count_channels(groups.len())) } else { format!("共 {} 个频道。", groups.len()) }))
-                .child(
-                    settings_button("settings-new-group", i18n::t("新建频道")).on_click(cx.listener(
-                        |this, _event, _window, cx| {
-                            this.open_new_group_dialog(cx);
-                        },
-                    )),
-                ),
-        );
-        body = body.child(settings_section(i18n::t("全部频道")));
+        let mut body = settings_page_body("频道");
+        body = body.child(settings_section_action(
+            tri!("全部频道 · {}", "All channels · {}", groups.len()),
+            settings_action_button("settings-new-group", i18n::t("新建频道")).on_click(
+                cx.listener(|this, _event, _window, cx| {
+                    this.open_new_group_dialog(cx);
+                }),
+            ),
+        ));
         if groups.is_empty() {
-            body = body.child(hint_row(i18n::t("还没有频道")));
+            body = body.child(settings_empty(i18n::t("还没有频道")));
         }
         let mut group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &groups {
@@ -8366,7 +8392,7 @@ impl PilotApp {
                 )),
         );
         if rows.is_empty() {
-            body = body.child(hint_row(i18n::t("还没有 IM 机器人；点上方按钮新建并扫码。")));
+            body = body.child(settings_empty(i18n::t("还没有 IM 机器人；点上方按钮新建并扫码。")));
             return body.into_any_element();
         }
         body = body.child(settings_section(count_bots(rows.len())));
@@ -8955,29 +8981,23 @@ impl PilotApp {
                     ),
                 )
                 .child(
-                    settings_button(
-                        SharedString::from("memory-review-toggle"),
-                        if self.memory_review_enabled {
-                            i18n::t("已开启")
-                        } else {
-                            i18n::t("已关闭")
-                        },
-                    )
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.memory_review_enabled = !this.memory_review_enabled;
-                        match crate::memory_review::set_enabled(this.memory_review_enabled) {
-                            Ok(()) => this.toast(
-                                if this.memory_review_enabled {
-                                    i18n::t("已开启群记忆自动回顾")
-                                } else {
-                                    i18n::t("已关闭群记忆自动回顾")
-                                },
-                                cx,
-                            ),
-                            Err(message) => this.toast(message, cx),
-                        }
-                        cx.notify();
-                    })),
+                    switch("memory-review-toggle", self.memory_review_enabled).on_click(
+                        cx.listener(|this, _event, _window, cx| {
+                            this.memory_review_enabled = !this.memory_review_enabled;
+                            match crate::memory_review::set_enabled(this.memory_review_enabled) {
+                                Ok(()) => this.toast(
+                                    if this.memory_review_enabled {
+                                        i18n::t("已开启群记忆自动回顾")
+                                    } else {
+                                        i18n::t("已关闭群记忆自动回顾")
+                                    },
+                                    cx,
+                                ),
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        }),
+                    ),
                 )
                 .into_any_element(),
             ]))
@@ -8985,7 +9005,7 @@ impl PilotApp {
             .child(self.team_memory_section(cx))
             .child(settings_section(i18n::t("频道文件记忆")));
         if self.roster.groups.is_empty() {
-            body = body.child(hint_row(i18n::t("名册里还没有频道")));
+            body = body.child(settings_empty(i18n::t("名册里还没有频道")));
         }
         let mut memory_group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &self.roster.groups {
@@ -9109,7 +9129,7 @@ impl PilotApp {
                 if let Some(url) = connector_sign_in_url(spec.id) {
                     let url = url.to_string();
                     actions = actions.child(
-                        settings_button(
+                        connector_link(
                             SharedString::from(format!("connector-signin-{}", spec.id)),
                             i18n::t("获取密钥"),
                         )
@@ -9123,7 +9143,7 @@ impl PilotApp {
                 let test_id = spec.id.to_string();
                 let test_workspace = workspace.clone();
                 actions = actions.child(
-                    settings_button(
+                    connector_link(
                         SharedString::from(format!("connector-test-{}", spec.id)),
                         i18n::t("测试连接"),
                     )
@@ -9268,22 +9288,25 @@ impl PilotApp {
         }
         let view = self.automations_view.as_ref().expect("just loaded");
         let db_path = automations::db_path(&self.roster.data_root);
-        let mut body = settings_page_body("定时任务").child(settings_note(
-            i18n::t("汇总所有 Bot 的定时任务，由内置 20 秒调度器执行。"),
-        ));
+        let mut body = settings_page_body("定时任务");
         if let Some(error) = &view.error {
             return body
                 .child(settings_error(tri!("读取定时任务失败：{error}", "Failed to read scheduled tasks: {error}")))
                 .into_any_element();
         }
+        body = body.child(settings_section_action(
+            tri!("定时任务 · {}", "Schedules · {}", view.entries.len()),
+            settings_action_button("automation-new", i18n::t("新建任务")).on_click(
+                cx.listener(|this, _event, window, cx| {
+                    this.open_schedule_dialog(window, cx);
+                }),
+            ),
+        ));
         if view.entries.is_empty() {
             return body
-                .child(hint_row(
-                    i18n::t("还没有定时任务。直接让 Bot 用 automation_create 工具创建；内置调度器会执行。"),
-                ))
+                .child(settings_empty(i18n::t("还没有定时任务。")))
                 .into_any_element();
         }
-        body = body.child(settings_section(count_tasks(view.entries.len())));
         let mut task_rows: Vec<gpui::AnyElement> = Vec::new();
         for entry in &view.entries {
             let automation = &entry.automation;
@@ -9336,7 +9359,7 @@ impl PilotApp {
                 let toggle_db = db_path.clone();
                 let next_on = !enabled;
                 actions = actions.child(
-                    settings_button(
+                    settings_action_button(
                         SharedString::from(format!("automation-toggle-{automation_id}")),
                         if enabled { i18n::t("暂停") } else { i18n::t("启用") },
                     )
@@ -9361,7 +9384,7 @@ impl PilotApp {
                 let run_key = workspace_key.clone();
                 let run_db = db_path.clone();
                 actions = actions.child(
-                    settings_button(
+                    settings_action_button(
                         SharedString::from(format!("automation-run-{automation_id}")),
                         i18n::t("立即运行"),
                     )
@@ -9388,7 +9411,7 @@ impl PilotApp {
             let history_db = db_path.clone();
             let history_title = title.clone();
             actions = actions.child(
-                settings_button(
+                settings_action_button(
                     SharedString::from(format!("automation-history-{automation_id}")),
                     i18n::t("历史"),
                 )
@@ -9415,7 +9438,7 @@ impl PilotApp {
                 title: title.clone(),
             };
             actions = actions.child(
-                settings_button(
+                settings_action_button(
                     SharedString::from(format!("automation-delete-{automation_id}")),
                     i18n::t("删除"),
                 )
@@ -9439,7 +9462,7 @@ impl PilotApp {
     fn settings_page_secrets(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
         let mut body = settings_page_body("密钥").child(settings_note(
-            i18n::t("本机插件密钥库，值只写不读，供 ${secret:NAME} 引用。"),
+            i18n::t("值只写不读，供 ${secret:NAME} 引用；名称仅限字母、数字、下划线，最多 64 字符。"),
         ));
         let names = match secrets::list(&data_root) {
             Ok(names) => names,
@@ -9449,14 +9472,23 @@ impl PilotApp {
                     .into_any_element();
             }
         };
-        body = body.child(settings_section(tri!("已保存密钥（{}）", "Saved secrets ({})", names.len())));
+        body = body.child(settings_section_action(
+            tri!("密钥 · {}", "Secrets · {}", names.len()),
+            settings_action_button("secret-add", i18n::t("+ 添加密钥")).on_click(cx.listener(
+                |this, _event, window, cx| {
+                    this.open_secret_dialog(window, cx);
+                },
+            )),
+        ));
         if names.is_empty() {
-            body = body.child(hint_row(i18n::t("还没有保存密钥；在下方添加插件需要的密钥。")));
+            body = body.child(settings_empty(i18n::t(
+                "还没有密钥。Bot 需要时，会在对话里弹出一张卡片。",
+            )));
         }
         let mut secret_rows: Vec<gpui::AnyElement> = Vec::new();
         for name in names {
             let stored_name = name.clone();
-            let row = settings_row(stored_name.clone(), None);
+            let row = settings_row(stored_name.clone(), Some(i18n::t("已保存").to_string()));
             if self.confirm_remove_secret.as_deref() == Some(stored_name.as_str()) {
                 let remove_root = data_root.clone();
                 let remove_name = stored_name.clone();
@@ -9498,62 +9530,96 @@ impl PilotApp {
                     .into_any_element(),
                 );
             } else {
-                secret_rows.push(row.child(
-                    settings_button(
-                        SharedString::from(format!("secret-delete-{stored_name}")),
-                        i18n::t("删除"),
+                secret_rows.push(
+                    row.child(
+                        settings_button(
+                            SharedString::from(format!("secret-delete-{stored_name}")),
+                            i18n::t("删除"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.confirm_remove_secret = Some(stored_name.clone());
+                            cx.notify();
+                        })),
                     )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.confirm_remove_secret = Some(stored_name.clone());
-                        cx.notify();
-                    })),
-                ).into_any_element());
+                    .into_any_element(),
+                );
             }
         }
         if !secret_rows.is_empty() {
             body = body.child(settings_group(secret_rows));
         }
-        body = body
-            .child(settings_section(i18n::t("添加密钥")))
-            .child(dialog_field(
-                "secret-name-field",
-                i18n::t("名称"),
-                &self.secret_name_input,
-            ))
-            .child(dialog_field(
-                "secret-value-field",
-                i18n::t("值"),
-                &self.secret_value_input,
-            ))
-            .child(settings_note(
-                i18n::t("名称仅限字母、数字、下划线，最多 64 字符。"),
-            ));
-        let save_root = data_root;
-        body.child(div().flex().child(
-            settings_button("secret-save", i18n::t("保存密钥")).on_click(cx.listener(
-                move |this, _event, window, cx| {
-                    let name = this
-                        .secret_name_input
-                        .read(cx)
-                        .content()
-                        .trim()
-                        .to_string();
-                    let value = this.secret_value_input.read(cx).content().to_string();
-                    match secrets::set(&save_root, &name, &value) {
+        body.into_any_element()
+    }
+
+    /// 「+ 添加密钥」弹窗：名称 + 值（保存后清空，值只写不读）。
+    fn open_secret_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.secret_name_input
+            .update(cx, |input, cx| input.clear(window, cx));
+        self.secret_value_input
+            .update(cx, |input, cx| input.clear(window, cx));
+        let name_input = self.secret_name_input.clone();
+        let value_input = self.secret_value_input.clone();
+        let handle = name_input.read(cx).focus_handle(cx);
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let name_field = name_input.clone();
+            let value_field = value_input.clone();
+            let name_ok = name_input.clone();
+            let value_ok = value_input.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(i18n::t("添加密钥"))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(dialog_field(
+                                "secret-dialog-name",
+                                i18n::t("名称"),
+                                &name_field,
+                            ))
+                            .child(dialog_field(
+                                "secret-dialog-value",
+                                i18n::t("值"),
+                                &value_field,
+                            ))
+                            .child(settings_note(i18n::t(
+                                "保存后清空；Bot 只能通过 ${secret:NAME} 使用，看不到明文。",
+                            ))),
+                    )
+                })
+                .on_ok(move |_, _, cx| {
+                    let name = name_ok.read(cx).content().trim().to_string();
+                    let value = value_ok.read(cx).content().to_string();
+                    match secrets::set(&data::data_root(), &name, &value) {
                         Ok(_) => {
-                            this.secret_name_input
-                                .update(cx, |input, cx| input.clear(window, cx));
-                            this.secret_value_input
-                                .update(cx, |input, cx| input.clear(window, cx));
-                            this.toast(tri!("已保存密钥：{name}", "Saved secret: {name}"), cx);
+                            let _ = weak.update(cx, |this, cx| {
+                                this.toast(
+                                    tri!("已保存密钥：{name}", "Saved secret: {name}"),
+                                    cx,
+                                );
+                                cx.notify();
+                            });
+                            true
                         }
-                        Err(message) => this.toast(message, cx),
+                        Err(message) => {
+                            let _ = weak.update(cx, |this, cx| this.toast(message, cx));
+                            false
+                        }
                     }
-                    cx.notify();
-                },
-            )),
-        ))
-        .into_any_element()
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
     /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
@@ -10087,7 +10153,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 ),
         );
         if entries.is_empty() {
-            body = body.child(hint_row(
+            body = body.child(settings_empty(
                 i18n::t("还没有团队记忆；新增后会在下一次对话时注入（与主程序同一份）。"),
             ));
         }
@@ -10200,7 +10266,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             i18n::t("自动回顾写入，下一轮群聊会注入。"),
         ));
         if entries.is_empty() {
-            body = body.child(hint_row(
+            body = body.child(settings_empty(
                 i18n::t("还没有频道记忆；回合结束后自动回顾会沉淀，也可以手动新增。"),
             ));
         }
@@ -12517,6 +12583,103 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 })
                 .on_close(move |event, window, cx| restore(event, window, cx))
         });
+    }
+
+    /// 新建定时任务：DS 的「+ 新建任务」弹窗（标题 / cron / 指令 / 是否循环）。
+    fn open_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bot) = self.selected_bot().cloned() else {
+            self.toast(i18n::t("先在左栏选中一个 Bot"), cx);
+            return;
+        };
+        let title = cx.new(|cx| SimpleInput::new(i18n::t("例如：每日简报"), theme::ink_tertiary, cx));
+        let cron = cx.new(|cx| SimpleInput::new("0 9 * * *", theme::ink_tertiary, cx));
+        let prompt = cx.new(|cx| {
+            SimpleInput::new(i18n::t("到点后发给 Bot 的指令"), theme::ink_tertiary, cx)
+        });
+        cron.update(cx, |input, cx| input.set_content("0 9 * * *", cx));
+        let form = cx.new(|_| ScheduleFormState {
+            bot_id: bot.id.clone(),
+            title,
+            cron,
+            prompt,
+            recurring: true,
+            error: None,
+        });
+        let handle = form.read(cx).title.read(cx).focus_handle(cx);
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(i18n::t("新建定时任务"))
+                .width(px(460.))
+                .centered()
+                .ok_text(i18n::t("创建"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let (bot_id, title, cron, prompt, recurring) = {
+                        let form = form_ok.read(cx);
+                        (
+                            form.bot_id.clone(),
+                            form.title.read(cx).content().trim().to_string(),
+                            form.cron.read(cx).content().trim().to_string(),
+                            form.prompt.read(cx).content().to_string(),
+                            form.recurring,
+                        )
+                    };
+                    let (workspace, identity) = {
+                        let Ok(Some(bot)) = weak.update(cx, |this, _| {
+                            this.roster.bot_by_id(&bot_id).cloned()
+                        }) else {
+                            return false;
+                        };
+                        let workspace = if bot.directory.trim().is_empty() {
+                            backend::fallback_workspace().to_string_lossy().into_owned()
+                        } else {
+                            bot.directory.clone()
+                        };
+                        (workspace, bot.identity())
+                    };
+                    let result = automations::create_task(
+                        &automations::db_path(&data::data_root()),
+                        &workspace,
+                        Some(&identity),
+                        &title,
+                        &cron,
+                        &prompt,
+                        recurring,
+                    );
+                    match result {
+                        Ok(_) => {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.automations_view = None;
+                                this.toast(
+                                    tri!("已创建定时任务：{title}", "Created schedule: {title}"),
+                                    cx,
+                                );
+                                cx.notify();
+                            });
+                            true
+                        }
+                        Err(message) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
     /// 运行历史：kit AlertDialog + 只读列表（打开时已取好快照）。
@@ -15231,22 +15394,6 @@ fn count_bots(n: usize) -> String {
     }
 }
 
-fn count_tasks(n: usize) -> String {
-    if i18n::is_en() {
-        i18n::n(n, "task", "tasks")
-    } else {
-        format!("共 {n} 个任务")
-    }
-}
-
-fn count_channels(n: usize) -> String {
-    if i18n::is_en() {
-        i18n::n(n, "channel", "channels")
-    } else {
-        format!("共 {n} 个频道")
-    }
-}
-
 fn short_id(id: &str) -> String {
     truncate_chars(id, 8)
 }
@@ -16902,6 +17049,112 @@ fn settings_section(title: impl Into<SharedString>) -> impl IntoElement {
         .child(title.into())
 }
 
+/// 分区标题 + 右侧动作（对齐 DS `.bt-set-section` + 头部 soft 按钮）。
+fn settings_section_action(
+    title: impl Into<SharedString>,
+    action: impl IntoElement,
+) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .w_full()
+        .px(px(4.))
+        .pt(px(10.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(8.))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .child(title.into()),
+        )
+        .child(action)
+}
+
+/// 设置页分区头部的小动作按钮（32 高，比正文 soft 按钮轻一档）。
+fn settings_action_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let wechat = wecom_theme::active();
+    div()
+        .id(id)
+        .h(px(32.))
+        .rounded(px(999.))
+        .bg(if wechat {
+            wecom_theme::chip_bg()
+        } else {
+            theme::hover()
+        })
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::raised_hover()))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .child(label.into()),
+        )
+}
+
+/// 设置页空态：DS 的空态是卡片里一行 hint，不是裸文字。
+fn settings_empty(text: impl Into<SharedString>) -> impl IntoElement {
+    settings_group(vec![
+        div()
+            .w_full()
+            .px(px(12.))
+            .py(px(10.))
+            .child(settings_note(text))
+            .into_any_element(),
+    ])
+}
+
+/// 连接器卡片里的文字动作（获取密钥/测试）：DS 卡片只保留轻量文字按钮。
+fn connector_link(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(20.))
+        .px(px(2.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .line_height(px(16.))
+        .text_color(theme::ink_secondary())
+        .hover(|style| style.text_color(theme::accent()))
+        .child(label.into())
+}
+
 /// 设置页说明文字（12/16 次级色）。
 fn settings_note(text: impl Into<SharedString>) -> impl IntoElement {
     let wechat = wecom_theme::active();
@@ -18266,8 +18519,13 @@ impl PilotApp {
     }
 
     fn wecom_list(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 设置页导航照 DS 的 198px；普通会话列表仍是微信的 246px。
         let list = div()
-            .w(px(wecom_theme::LIST_WIDTH))
+            .w(px(if self.settings_open {
+                198.
+            } else {
+                wecom_theme::LIST_WIDTH
+            }))
             .flex_shrink_0()
             .h_full()
             .flex()
@@ -18277,15 +18535,17 @@ impl PilotApp {
             let mut rows = div().flex().flex_col().gap(px(2.)).px(px(8.));
             for (index, label) in SETTINGS_PAGES.iter().enumerate() {
                 let active = self.settings_tab == index;
-                if index == 14 {
+                if index == 13 {
                     rows = rows.child(
                         div()
                             .mx(px(8.))
                             .my(px(6.))
-                            .h(px(1.))
+                            .h(px(0.5))
                             .bg(wecom_theme::divider()),
                     );
                 }
+                // 尾部信息页照 DS 用次级色（关于/反馈/浏览器/电脑操控/更多）。
+                let secondary = index >= 13;
                 rows = rows.child(
                     div()
                         .id(SharedString::from(format!("wechat-set-{index}")))
@@ -18316,6 +18576,8 @@ impl PilotApp {
                             16.,
                             if active {
                                 wecom_theme::send_enabled()
+                            } else if secondary {
+                                wecom_theme::time_label()
                             } else {
                                 wecom_theme::icon()
                             },
@@ -18330,6 +18592,8 @@ impl PilotApp {
                                 .line_height(px(18.))
                                 .text_color(if active {
                                     wecom_theme::chat_title()
+                                } else if secondary {
+                                    wecom_theme::time_label()
                                 } else {
                                     wecom_theme::list_title()
                                 })
@@ -18337,30 +18601,16 @@ impl PilotApp {
                         ),
                 );
             }
-            return list
-                .child(
-                    div()
-                        .h(px(56.))
-                        .flex_shrink_0()
-                        .px(px(16.))
-                        .flex()
-                        .items_center()
-                        .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(14.))
-                        .line_height(px(20.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(wecom_theme::list_title())
-                        .child(i18n::t("设置")),
-                )
-                .child(
-                    div()
-                        .id("wechat-settings-list")
-                        .flex_1()
-                        .min_h(px(0.))
-                        .overflow_y_scroll()
-                        .scrollbar_width(px(6.))
-                        .child(rows),
-                );
+            return list.child(
+                div()
+                    .id("wechat-settings-list")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .py(px(16.))
+                    .child(rows),
+            );
         }
         let rows = self.wecom_list_rows(cx);
         let count = rows.len();
