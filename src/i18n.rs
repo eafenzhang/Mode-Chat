@@ -487,6 +487,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "添加密钥" => Some("Add secret"),
         "打开配置文件" => Some("Open config file"),
         "强调色" => Some("Accent color"),
+        "全部" => Some("All"),
         "气泡宽度" => Some("Bubble width"),
         "会话气泡的最大宽度" => Some("Maximum width of chat bubbles"),
         "连接" => Some("Connect"),
