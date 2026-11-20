@@ -759,6 +759,81 @@ impl RpiSession {
     }
 }
 
+
+/// 从 JSONL 会话文件还原用户/助手文本（重启后的历史回放）。
+pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|item| item.as_str()) != Some("message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let kind = message
+            .get("kind")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        let at = value
+            .get("timestamp")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(0);
+        let mut text_body = String::new();
+        let mut reasoning = String::new();
+        for content in message
+            .get("content")
+            .and_then(|item| item.as_array())
+            .into_iter()
+            .flatten()
+        {
+            match content.get("type").and_then(|item| item.as_str()) {
+                Some("text") => text_body.push_str(
+                    content
+                        .get("text")
+                        .and_then(|item| item.as_str())
+                        .unwrap_or(""),
+                ),
+                Some("thinking") => reasoning.push_str(
+                    content
+                        .get("thinking")
+                        .and_then(|item| item.as_str())
+                        .unwrap_or(""),
+                ),
+                _ => {}
+            }
+        }
+        if !reasoning.trim().is_empty() {
+            out.push(crate::backend::HistoryEntry {
+                user: false,
+                reasoning: true,
+                text: reasoning.trim().to_string(),
+                tool: None,
+                attachments: Vec::new(),
+                member: None,
+                at,
+            });
+        }
+        if !text_body.trim().is_empty() {
+            out.push(crate::backend::HistoryEntry {
+                user: kind == "user",
+                reasoning: false,
+                text: text_body.trim().to_string(),
+                tool: None,
+                attachments: Vec::new(),
+                member: None,
+                at,
+            });
+        }
+    }
+    out
+}
+
 /// 把待发附件转成 pi-rust 的 inline image；非图片/超限直接报错（当前引擎不支持任意文件）。
 pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageContent>, String> {
     use base64::Engine as _;

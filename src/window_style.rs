@@ -9,7 +9,7 @@
 //!    `WM_NCCALCSIZE` 把非客户区让给自绘——wndproc 在 gpui 内部，本试点不改。
 //!    宁可没有投影，也不引入"系统边框吃掉内容"的风险。
 //!
-//! 两件事都走 `FindWindowW("Zed::Window", "Mode Bot")` 定位自己的 HWND（gpui 这版没有
+//! 两件事都走 `FindWindowW("Zed::Window", "Mode Chat")` 定位自己的 HWND（gpui 这版没有
 //! 暴露 raw window handle 的公开路径）。
 
 /// 随包嵌入的应用图标（与产品安装包同一个 .ico）。
@@ -44,7 +44,7 @@ pub fn apply() {
     }
 
     let class = wide("Zed::Window");
-    let title = wide("Mode Bot");
+    let title = wide("Mode Chat");
     // SAFETY: 两个指针都指向以 NUL 结尾的宽字符串。
     let hwnd = unsafe { FindWindowW(class.as_ptr(), title.as_ptr()) };
     if hwnd.is_null() {
@@ -102,7 +102,7 @@ fn window_handle() -> Option<*mut std::ffi::c_void> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     };
     let class = wide("Zed::Window");
-    let title = wide("Mode Bot");
+    let title = wide("Mode Chat");
     // SAFETY: 两个指针都指向以 NUL 结尾的宽字符串。
     let hwnd = unsafe { FindWindowW(class.as_ptr(), title.as_ptr()) };
     (!hwnd.is_null()).then_some(hwnd)

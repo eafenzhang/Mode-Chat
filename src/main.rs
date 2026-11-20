@@ -4004,7 +4004,7 @@ impl PilotApp {
                     .unwrap_or_else(|| "会话".to_string());
                 notify_background(
                     self.background_notifications,
-                    "Mode Bot",
+                    "Mode Chat",
                     &format!("{name}：回合失败"),
                 );
             }
@@ -4323,7 +4323,7 @@ impl PilotApp {
                             });
                             notify_background(
                                 self.background_notifications,
-                                "Mode Bot",
+                                "Mode Chat",
                                 i18n::t("有工具调用等待审批"),
                             );
                         }
@@ -4348,7 +4348,7 @@ impl PilotApp {
                             chat.questions.push(PendingQuestion { card, sent: false });
                             notify_background(
                                 self.background_notifications,
-                                "Mode Bot",
+                                "Mode Chat",
                                 i18n::t("有一个问题等待回答"),
                             );
                         }
@@ -4397,7 +4397,7 @@ impl PilotApp {
                             });
                             notify_background(
                                 self.background_notifications,
-                                "Mode Bot",
+                                "Mode Chat",
                                 i18n::t("有一个表单等待填写"),
                             );
                         }
@@ -7437,7 +7437,7 @@ impl PilotApp {
                         settings_button(SharedString::from("notify-test"), i18n::t("测试")).on_click(
                             cx.listener(|this, _event, _window, cx| {
                                 #[cfg(windows)]
-                                tray::notify("Mode Bot", i18n::t("测试通知：托盘气泡显示正常"));
+                                tray::notify("Mode Chat", i18n::t("测试通知：托盘气泡显示正常"));
                                 this.toast(i18n::t("已发送测试通知"), cx);
                                 cx.notify();
                             }),
@@ -10489,7 +10489,7 @@ impl PilotApp {
     fn settings_page_feedback(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let version = update::current_version();
         let diagnostics = format!(
-            "Mode Bot {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.10 / gpui-pre 0.3.12)",
+            "Mode Chat {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.10 / gpui-pre 0.3.12)",
         );
         let body = settings_page_body("反馈")
             .child(settings_note(
@@ -11353,7 +11353,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             })
                             .map(|group| group.name.clone())
                     })
-                    .unwrap_or_else(|| "Mode Bot".to_string());
+                    .unwrap_or_else(|| "Mode Chat".to_string());
                 if let Some(chat) = self.chats.get(&key) {
                     let mut lines = Vec::new();
                     for message in &chat.messages {
@@ -13367,7 +13367,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .line_height(px(20.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(theme::ink())
-                            .child("Mode Bot"),
+                            .child("Mode Chat"),
                     )
                     .child(div().flex_1())
                     .child(
@@ -13690,7 +13690,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         } else if let Some(group) = self.selected_group() {
             (group.name.clone(), group.id.clone(), true)
         } else {
-            ("Mode Bot".to_string(), "mode-bot".to_string(), false)
+            ("Mode Chat".to_string(), "mode-bot".to_string(), false)
         };
         let panel_open = self.right_panel_open;
         let capsule_focus = self.tab_focus["header-capsule"].clone();
@@ -19029,7 +19029,7 @@ impl PilotApp {
         } else if let Some(group) = self.selected_group() {
             group.name.clone()
         } else {
-            "Mode Bot".to_string()
+            "Mode Chat".to_string()
         };
         let is_bot_chat = self.selected_bot().is_some();
         div()
@@ -19858,7 +19858,7 @@ fn configure_kit_theme(cx: &mut App) {
 fn main() {
     // 发布打包脚本用它核对构建期注入的版本（MODE_BOT_VERSION）是否真的进了二进制。
     if std::env::args_os().any(|arg| matches!(arg.to_str(), Some("--version" | "-V"))) {
-        println!("Mode Bot {}", update::current_version());
+        println!("Mode Chat {}", update::current_version());
         return;
     }
     let _ = BOOT_AT.set(std::time::Instant::now());
@@ -19876,7 +19876,7 @@ fn main() {
         instance::Acquire::Acquired(lock) => Some(lock),
         instance::Acquire::AlreadyRunning => {
             eprintln!("[instance] 已有试点实例在运行，已请求置前并退出");
-            instance::focus_existing_window("Mode Bot");
+            instance::focus_existing_window("Mode Chat");
             return;
         }
         instance::Acquire::Failed(error) => {
@@ -19974,7 +19974,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(window_bounds),
             titlebar: Some(TitlebarOptions {
-                title: Some("Mode Bot".into()),
+                title: Some("Mode Chat".into()),
                 appears_transparent: true,
                 traffic_light_position: None,
             }),

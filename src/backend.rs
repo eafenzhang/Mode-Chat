@@ -2178,6 +2178,13 @@ async fn run_agent(
                                 }
                                 let session = Arc::new(session);
                                 let path = session.path.clone();
+                                let history = crate::rpi_engine::history_entries(&path);
+                                if !history.is_empty() {
+                                    let _ = events.send(BackendEvent::Session {
+                                        key: key.clone(),
+                                        event: SessionEvent::History(history),
+                                    });
+                                }
                                 sessions.insert(
                                     key.clone(),
                                     SessionCtx {

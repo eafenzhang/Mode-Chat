@@ -175,7 +175,7 @@ static TRAY_HWND: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 fn main_window() -> Hwnd {
     let class = wide("Zed::Window");
-    let title = wide("Mode Bot");
+    let title = wide("Mode Chat");
     // SAFETY: 两个指针都指向 NUL 结尾的宽字符串。
     unsafe { FindWindowW(class.as_ptr(), title.as_ptr()) }
 }
@@ -272,7 +272,7 @@ pub fn install() -> bool {
     std::thread::spawn(move || {
         let hicon = hicon.take();
         let class_name = wide("ModeBotPilotTray");
-        let title = wide("Mode Bot Tray");
+        let title = wide("Mode Chat Tray");
         // SAFETY: 类名/标题都是 NUL 结尾宽字符串；窗口从不 ShowWindow，不会上任务栏。
         unsafe {
             let instance = GetModuleHandleW(std::ptr::null());
@@ -311,7 +311,7 @@ pub fn install() -> bool {
                 return;
             }
             let mut tip = [0u16; 128];
-            for (slot, ch) in tip.iter_mut().zip("Mode Bot · 点击唤起".encode_utf16()) {
+            for (slot, ch) in tip.iter_mut().zip("Mode Chat · 点击唤起".encode_utf16()) {
                 *slot = ch;
             }
             let data = NotifyIconDataW {

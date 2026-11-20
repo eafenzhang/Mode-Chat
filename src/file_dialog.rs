@@ -67,7 +67,7 @@ pub fn pick_files() -> Vec<String> {
         .collect();
     let title = wide("选择附件");
     let class = wide("Zed::Window");
-    let window_title = wide("Mode Bot");
+    let window_title = wide("Mode Chat");
     // SAFETY: 指针都指向本函数栈上/堆上、以 NUL 结尾的宽字符串或缓冲；缓冲足够大。
     unsafe {
         let owner = FindWindowW(class.as_ptr(), window_title.as_ptr());
