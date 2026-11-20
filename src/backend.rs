@@ -237,7 +237,7 @@ pub fn local_engine() -> Option<String> {
 pub fn active_engine_label() -> String {
     local_engine()
         .map(|command| acp_engine_label(&command))
-        .unwrap_or_else(|| "内置引擎（pi-rust）".to_string())
+        .unwrap_or_else(|| "内置引擎（Pi-Rust）".to_string())
 }
 
 fn acp_engine_label(command: &str) -> String {

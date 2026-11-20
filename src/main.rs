@@ -1564,7 +1564,7 @@ impl Render for GroupTasksState {
             .flex_col()
             .gap(px(6.))
             .child(settings_note(
-                i18n::t("与 WebView 同一份 tasks.jsonl：每轮群发言一个根容器，被 @ 的成员各一条子任务。"),
+                i18n::t("与主程序同一份 tasks.jsonl：每轮群发言一个根容器，被 @ 的成员各一条子任务。"),
             ));
         if self.tasks.is_empty() {
             body = body.child(hint_row(i18n::t("还没有任务记录")));
@@ -2459,16 +2459,29 @@ struct AutomationsView {
     error: Option<String>,
 }
 
-/// 在 GPUI 后台线程里为需要 Tokio 的宿主能力建一个临时运行时。
+/// 宿主能力（浏览器/MCP）的常驻 Tokio runtime。
+///
+/// 不能每次调用临时建 runtime：浏览器会话的 WebSocket 读任务与 MCP 子进程
+/// 都挂在 runtime 上，runtime 一销毁，后续操作就会报
+/// 「Tokio 1.x context ... being shutdown」。
+fn host_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
+        std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("host tokio runtime")
+    })
+}
+
+/// 在 GPUI 后台线程里把宿主 future 交给常驻 runtime 执行（阻塞到完成）。
 fn tokio_block_on<F, T>(future: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
 {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("Tokio 运行时初始化失败：{error}"))?;
-    runtime.block_on(future)
+    host_runtime().block_on(future)
 }
 
 fn save_preview_png(bytes: &[u8]) -> Option<std::path::PathBuf> {
@@ -6846,9 +6859,9 @@ impl PilotApp {
                             .child(
                                 div()
                                     .id("settings-pin-page")
-                                    .h(px(28.))
-                                    .px(px(8.))
-                                    .rounded(px(6.))
+                                    .h(px(32.))
+                                    .px(px(10.))
+                                    .rounded(px(999.))
                                     .flex()
                                     .items_center()
                                     .gap(px(5.))
@@ -7886,7 +7899,7 @@ impl PilotApp {
             .unwrap_or("mode")
             .to_string();
         let current_label = if current == "mode" {
-            "内置引擎（pi-rust）".to_string()
+            "内置引擎（Pi-Rust）".to_string()
         } else {
             agents
                 .iter()
@@ -7895,7 +7908,7 @@ impl PilotApp {
                 .unwrap_or_else(|| current.clone())
         };
         let mut body = settings_page_body("智能体").child(settings_note(
-            i18n::t("内置引擎是进程内 pi-rust（无 Node/Mode Agent）；本地 Pi/DeepSeek/Hermes/ZCode 通过 ACP 接入。"),
+            i18n::t("内置引擎是进程内 Pi-Rust（无 Node/Mode Agent）；本地 Pi/DeepSeek/Hermes/ZCode 通过 ACP 接入。"),
         ));
         if backend::local_engine().is_some() {
             body = body.child(settings_note(tri!(
@@ -9536,7 +9549,7 @@ impl PilotApp {
         let chat = self.active_key().and_then(|key| self.chats.get(&key));
         let session = chat
             .and_then(|chat| chat.session_id.clone())
-            .map(|id| short_session(&id))
+            .map(|id| display_session_id(&id))
             .unwrap_or_else(|| i18n::t("未建立会话").to_string());
         let usage = chat.and_then(|chat| chat.usage);
         let todo_count = chat.map(|chat| chat.todos.len()).unwrap_or(0);
@@ -10021,7 +10034,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         );
         if entries.is_empty() {
             body = body.child(hint_row(
-                i18n::t("还没有团队记忆；新增后会在下一次对话时注入（与 WebView 同一份）。"),
+                i18n::t("还没有团队记忆；新增后会在下一次对话时注入（与主程序同一份）。"),
             ));
         }
         let mut entry_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -11625,7 +11638,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             .to_string();
         let mut engines = vec![(
             "mode".to_string(),
-            i18n::t("内嵌引擎（pi-rust）").to_string(),
+            i18n::t("内嵌引擎（Pi-Rust）").to_string(),
             true,
         )];
         for agent in data::local_agents() {
@@ -14925,7 +14938,7 @@ fn bot_details(
         );
     }
     if overflow > 0 {
-        rows = rows.child(hint_row(&tri!("还有 {overflow} 条较早会话（WebView 侧可见）", "{overflow} earlier chats (visible in WebView)")));
+        rows = rows.child(hint_row(&tri!("还有 {overflow} 条较早会话", "{overflow} earlier chats")));
     }
     rows = rows.child(section_label(i18n::t("工作目录")));
     rows = rows.child(kv_row(directory, i18n::t("目录")));
@@ -15921,12 +15934,13 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(if wechat { 12. } else { 11. }))
-                .line_height(px(16.))
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
                     wecom_theme::list_preview()
                 } else {
-                    theme::ink_tertiary()
+                    theme::ink_secondary()
                 })
                 .child(i18n::t(label)),
         )
@@ -15935,7 +15949,7 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
                 .id(id)
                 .key_context("Dialog")
                 .h(px(36.))
-                .rounded(px(if wechat { 4. } else { theme::RADIUS_FIELD }))
+                .rounded(px(8.))
                 .border_1()
                 .border_color(if wechat {
                     wecom_theme::panel_divider()
@@ -15954,8 +15968,8 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(if wechat { 14. } else { 13. }))
-                .line_height(px(if wechat { 22. } else { 18. }))
+                .text_size(px(13.))
+                .line_height(px(18.))
                 .text_color(if wechat {
                     wecom_theme::chat_title()
                 } else {
@@ -15984,12 +15998,13 @@ fn dialog_field_tall(
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(if wechat { 12. } else { 11. }))
-                .line_height(px(16.))
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
                     wecom_theme::list_preview()
                 } else {
-                    theme::ink_tertiary()
+                    theme::ink_secondary()
                 })
                 .child(i18n::t(label)),
         )
@@ -15998,7 +16013,7 @@ fn dialog_field_tall(
                 .id(id)
                 .key_context("Dialog")
                 .h(px(height))
-                .rounded(px(if wechat { 4. } else { theme::RADIUS_FIELD }))
+                .rounded(px(8.))
                 .border_1()
                 .border_color(if wechat {
                     wecom_theme::panel_divider()
@@ -16018,8 +16033,8 @@ fn dialog_field_tall(
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(if wechat { 14. } else { 13. }))
-                .line_height(px(if wechat { 22. } else { 18. }))
+                .text_size(px(13.))
+                .line_height(px(18.))
                 .text_color(if wechat {
                     wecom_theme::chat_title()
                 } else {
@@ -16072,7 +16087,7 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
                 theme::accent()
             }
         } else if wechat {
-            wecom_theme::chip_bg()
+            wecom_theme::panel_divider()
         } else {
             theme::hover()
         })
@@ -16083,14 +16098,8 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
             div()
                 .size(px(16.))
                 .rounded_full()
-                .bg(wecom_theme::nav_text_active())
-                .ml(px(if on { 18. } else { 2. }))
-                .border_1()
-                .border_color(if wechat {
-                    wecom_theme::panel_divider()
-                } else {
-                    theme::edge()
-                }),
+                .bg(gpui::white())
+                .ml(px(if on { 18. } else { 2. })),
         )
 }
 
@@ -16853,14 +16862,14 @@ fn settings_button(
     let wechat = wecom_theme::active();
     div()
         .id(id)
-        .h(px(28.))
-        .rounded(px(if wechat { 4. } else { 999. }))
+        .h(px(36.))
+        .rounded(px(999.))
         .bg(if wechat {
             wecom_theme::chip_bg()
         } else {
             theme::hover()
         })
-        .px(px(12.))
+        .px(px(16.))
         .flex()
         .items_center()
         .cursor_pointer()
@@ -16872,8 +16881,8 @@ fn settings_button(
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(12.))
-                .line_height(px(16.))
+                .text_size(px(14.))
+                .line_height(px(20.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
                     wecom_theme::chat_title()
@@ -16957,6 +16966,7 @@ fn settings_row(title: String, detail: Option<String>) -> gpui::Div {
                 .min_w(px(0.))
                 .flex()
                 .flex_col()
+                .gap(px(2.))
                 .child(
                     div()
                         .font_family(if wechat {
@@ -17019,7 +17029,7 @@ fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
         let mut cell = div().w_full();
         if index + 1 < count {
             cell = cell
-                .border_b_1()
+                .border_b(px(0.5))
                 .border_color(if wechat {
                     wecom_theme::divider()
                 } else {
@@ -18377,9 +18387,9 @@ impl PilotApp {
                     .child(
                         div()
                             .id("wecom-settings-pin")
-                            .h(px(28.))
-                            .px(px(8.))
-                            .rounded(px(6.))
+                            .h(px(32.))
+                            .px(px(10.))
+                            .rounded(px(999.))
                             .flex()
                             .items_center()
                             .gap(px(5.))
@@ -18524,7 +18534,7 @@ impl PilotApp {
                                 cx.notify();
                             }))
                             .child(icons::icon(
-                                icons::Icon::Settings,
+                                icons::Icon::Ellipsis,
                                 22.,
                                 wecom_theme::icon(),
                             )),

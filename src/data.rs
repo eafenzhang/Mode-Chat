@@ -286,7 +286,7 @@ pub struct LocalAgentInfo {
 }
 
 const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
-    ("mode", "内置引擎（pi-rust）", "mode-agent", true),
+    ("mode", "内置引擎（Pi-Rust）", "mode-agent", true),
     // 产品只支持这四个本地引擎（全部走 ACP 适配层）；不再探测 Claude/Codex/Gemini 等。
     ("pi-acp", "Pi（ACP）", "pi-acp", false),
     ("deepseek", "DeepSeek（ACP）", "deepseek-acp", false),
