@@ -92,3 +92,13 @@ serde_json = "1"
 # 附件上传（v4 sendText）：分片 base64 + sha256 校验。
 base64 = "0.22"
 sha2 = "0.10"
+
+# 内嵌 Agent 引擎：pi-rust（MIT），固定到 v0.26.1 的提交，避免上游漂移。
+rpi-agent = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c245d204053510b04a208a230a1" }
+rpi-ai = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c245d204053510b04a208a230a1", features = ["providers"] }
+rpi-harness = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c245d204053510b04a208a230a1" }
+rpi-tools = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c245d204053510b04a208a230a1" }
+futures = "0.3"
+# pi-rust 的 Provider 构造器接收 reqwest 0.12 的 Client；应用其它网络代码用 0.13。
+reqwest012 = { package = "reqwest", version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+
