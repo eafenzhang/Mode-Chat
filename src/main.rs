@@ -2459,6 +2459,18 @@ struct AutomationsView {
     error: Option<String>,
 }
 
+/// 在 GPUI 后台线程里为需要 Tokio 的宿主能力建一个临时运行时。
+fn tokio_block_on<F, T>(future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("Tokio 运行时初始化失败：{error}"))?;
+    runtime.block_on(future)
+}
+
 fn save_preview_png(bytes: &[u8]) -> Option<std::path::PathBuf> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -7040,8 +7052,11 @@ impl PilotApp {
                     .child(
                         settings_button(SharedString::from("browser-open"), i18n::t("打开浏览器"))
                             .on_click(cx.listener(|_this, _event, _window, cx| {
+                                let task = cx.background_executor().spawn(async move {
+                                    tokio_block_on(crate::browser_tools::launch_for_ui())
+                                });
                                 cx.spawn(async move |this, cx| {
-                                    let result = crate::browser_tools::launch_for_ui().await;
+                                    let result = task.await;
                                     let _ = this.update(cx, |this, cx| match result {
                                         Ok(message) => this.toast(message, cx),
                                         Err(message) => this.toast(message, cx),
@@ -7053,8 +7068,11 @@ impl PilotApp {
                     .child(
                         settings_button(SharedString::from("browser-close"), i18n::t("关闭浏览器"))
                             .on_click(cx.listener(|_this, _event, _window, cx| {
+                                let task = cx.background_executor().spawn(async move {
+                                    tokio_block_on(crate::browser_tools::close_for_ui())
+                                });
                                 cx.spawn(async move |this, cx| {
-                                    let result = crate::browser_tools::close_for_ui().await;
+                                    let result = task.await;
                                     let _ = this.update(cx, |this, cx| match result {
                                         Ok(()) => this.toast(i18n::t("浏览器已关闭"), cx),
                                         Err(message) => this.toast(message, cx),
@@ -7066,8 +7084,11 @@ impl PilotApp {
                     .child(
                         settings_button(SharedString::from("browser-shot"), i18n::t("页面截图"))
                             .on_click(cx.listener(|_this, _event, _window, cx| {
+                                let task = cx.background_executor().spawn(async move {
+                                    tokio_block_on(crate::browser_tools::screenshot_png())
+                                });
                                 cx.spawn(async move |this, cx| {
-                                    let result = crate::browser_tools::screenshot_png().await;
+                                    let result = task.await;
                                     let _ = this.update(cx, |this, cx| match result {
                                         Ok(bytes) => match save_preview_png(&bytes) {
                                             Some(path) => {
@@ -9054,8 +9075,11 @@ impl PilotApp {
                     .on_click(cx.listener(move |_this, _event, _window, cx| {
                         let id = test_id.clone();
                         let workspace = test_workspace.clone();
+                        let task = cx.background_executor().spawn(async move {
+                            tokio_block_on(crate::mcp_host::McpHost::test_connector(&id, &workspace))
+                        });
                         cx.spawn(async move |this, cx| {
-                            let result = crate::mcp_host::McpHost::test_connector(&id, &workspace).await;
+                            let result = task.await;
                             let _ = this.update(cx, |this, cx| match result {
                                 Ok(message) => this.toast(message, cx),
                                 Err(message) => this.toast(message, cx),
@@ -19653,5 +19677,18 @@ mod image_transcode_tests {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         let decoded = image::load_from_memory(&png).expect("decode png");
         assert_eq!(decoded.to_rgba8().get_pixel(0, 0).0[0], 220);
+    }
+}
+
+#[cfg(test)]
+mod tokio_bridge_tests {
+    #[test]
+    fn block_on_works_without_reactor() {
+        let value = super::tokio_block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            Ok::<u32, String>(7)
+        })
+        .expect("block_on");
+        assert_eq!(value, 7);
     }
 }
