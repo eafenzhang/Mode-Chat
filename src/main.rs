@@ -7818,7 +7818,7 @@ impl PilotApp {
     fn settings_page_plugins(&mut self, _cx: &mut Context<Self>) -> gpui::AnyElement {
         settings_page_body("插件")
             .child(settings_note(i18n::t(
-                "当前内嵌引擎不提供插件市场；插件与 MCP 连接器将在后续宿主桥接中恢复。",
+                "插件市场尚未接入内嵌引擎；MCP 连接器已在「连接器」页可用。",
             )))
             .into_any_element()
     }
@@ -8956,7 +8956,7 @@ impl PilotApp {
                 backend::fallback_workspace().to_string_lossy().into_owned()
             });
         let mut body = settings_page_body("连接器").child(settings_note(
-            i18n::t("连接器即 MCP 服务器，启用后随回合注入 createSession。"),
+            i18n::t("连接器即 MCP 服务器，启用后其工具会注入内嵌引擎的会话。"),
         ));
         let state = connectors::state(&data_root);
         let configured = match secrets::list(&data_root) {
@@ -9200,7 +9200,7 @@ impl PilotApp {
         if view.entries.is_empty() {
             return body
                 .child(hint_row(
-                    i18n::t("还没有定时任务。直接让 Bot 用 CronCreate 创建；GPUI 调度器会执行。"),
+                    i18n::t("还没有定时任务。直接让 Bot 用 automation_create 工具创建；内置调度器会执行。"),
                 ))
                 .into_any_element();
         }
