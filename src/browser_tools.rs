@@ -278,6 +278,38 @@ async fn get_session() -> Result<Arc<Browser>, String> {
     Ok(browser)
 }
 
+/// 设置页显示：本机浏览器路径。
+pub fn browser_path() -> Option<String> {
+    find_browser().map(|path| path.display().to_string())
+}
+
+/// 设置页「打开浏览器」：启动并返回一句状态。
+pub async fn launch_for_ui() -> Result<String, String> {
+    get_session().await?;
+    Ok("浏览器已启动（独立 profile）".to_string())
+}
+
+/// 设置页「关闭浏览器」。
+pub async fn close_for_ui() -> Result<(), String> {
+    close_session().await
+}
+
+/// 设置页「页面截图」：返回 PNG 字节。
+pub async fn screenshot_png() -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    let browser = get_session().await?;
+    let result = browser
+        .send("Page.captureScreenshot", json!({"format": "png"}))
+        .await?;
+    let data = result
+        .get("data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "截图没有返回数据".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| format!("截图解码失败：{error}"))
+}
+
 async fn close_session() -> Result<(), String> {
     let slot = session_slot().await;
     let mut guard = slot.lock().await;

@@ -306,6 +306,7 @@ async fn open_rpi_session(
     ));
     extra_tools.extend(crate::browser_tools::tools());
     extra_tools.extend(crate::computer_tools::tools());
+    extra_tools.extend(crate::cua_tree::tools());
     let options = crate::rpi_engine::OpenOptions {
         workspace: workspace.into(),
         resume_path: resume.filter(|path| std::path::Path::new(path).is_file()),
@@ -885,6 +886,7 @@ async fn run_agent(
                         ));
                         extra_tools.extend(crate::browser_tools::tools());
                         extra_tools.extend(crate::computer_tools::tools());
+                        extra_tools.extend(crate::cua_tree::tools());
                         let options = crate::rpi_engine::OpenOptions {
                             workspace: workspace.clone().into(),
                             resume_path,
@@ -1191,6 +1193,7 @@ async fn run_agent(
             }
             Command::EnsureGroup { spec } => {
                 groups.insert(spec.group_key.clone(), spec.clone());
+                let mut merged_history: Vec<HistoryEntry> = Vec::new();
                 for member in &spec.members {
                     let internal = member_session_key(&spec.group_key, &member.member_id);
                     if sessions.contains_key(&internal) {
@@ -1209,6 +1212,17 @@ async fn run_agent(
                     match opened {
                         Ok((session, _model)) => {
                             let path = session.path.clone();
+                            for mut entry in crate::rpi_engine::history_entries(&path) {
+                                if entry.user {
+                                    let Some(text) = group_user_text(&entry.text) else {
+                                        continue;
+                                    };
+                                    entry.text = text;
+                                } else {
+                                    entry.member = Some(member.name.clone());
+                                }
+                                merged_history.push(entry);
+                            }
                             sessions.insert(
                                 internal.clone(),
                                 SessionCtx {
@@ -1234,6 +1248,16 @@ async fn run_agent(
                             });
                         }
                     }
+                }
+                merged_history.sort_by_key(|entry| entry.at);
+                if merged_history.len() > 80 {
+                    merged_history.drain(..merged_history.len() - 80);
+                }
+                if !merged_history.is_empty() {
+                    let _ = events.send(BackendEvent::Session {
+                        key: spec.group_key.clone(),
+                        event: SessionEvent::History(merged_history),
+                    });
                 }
             }
             Command::SendGroup {
@@ -1569,6 +1593,16 @@ async fn run_agent(
         }
     }
     Ok(())
+}
+
+/// 从群 prompt 里取出用户原话（群成员的 user 消息是合成 prompt，不能直接上屏）。
+fn group_user_text(prompt: &str) -> Option<String> {
+    let marker = "用户刚说：";
+    let start = prompt.find(marker)? + marker.len();
+    let rest = prompt[start..].trim_start_matches('\n');
+    let end = rest.find("\n\n请直接写").unwrap_or(rest.len());
+    let text = rest[..end].trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// 频道成员会话在 sessions 表里的内部键（UI 只看 group_key）。

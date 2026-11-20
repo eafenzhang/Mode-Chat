@@ -200,6 +200,35 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(cursor.into_inner()))
 }
 
+/// 左键点击屏幕坐标（供 UI Automation 回退使用）。
+pub fn click_at(x: i32, y: i32) -> Result<(), String> {
+    // SAFETY: 坐标来自调用方；SendInput 复制数据。
+    unsafe {
+        SetCursorPos(x, y);
+    }
+    send_mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0);
+    send_mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0);
+    Ok(())
+}
+
+/// 设置页「屏幕截图」：返回 PNG 字节。
+pub fn screenshot_png() -> Result<Vec<u8>, String> {
+    let (width, height, rgba) = capture_screen()?;
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| "截屏缓冲尺寸不匹配".to_string())?;
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|error| format!("PNG 编码失败：{error}"))?;
+    Ok(cursor.into_inner())
+}
+
+/// 主屏幕尺寸。
+pub fn screen_size() -> (i32, i32) {
+    // SAFETY: GetSystemMetrics 只读系统指标。
+    unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) }
+}
+
 fn send_mouse(flags: MOUSE_EVENT_FLAGS, dx: i32, dy: i32, data: i32) {
     let input = INPUT {
         r#type: INPUT_MOUSE,

@@ -1336,6 +1336,7 @@ impl RpiTurnOps {
         ));
         extra_tools.extend(crate::browser_tools::tools());
         extra_tools.extend(crate::computer_tools::tools());
+        extra_tools.extend(crate::cua_tree::tools());
         let options = crate::rpi_engine::OpenOptions {
             workspace: PathBuf::from(workspace),
             resume_path: resume.filter(|path| Path::new(path).is_file()),

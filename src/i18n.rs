@@ -621,6 +621,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "选择" => Some("Choose"),
         "选择会话" => Some("Choose chat"),
         "选择模型" => Some("Choose model"),
+        "选择运行时" => Some("Choose runtime"),
         "选用" => Some("Use"),
         "通用" => Some("General"),
         "通讯录" => Some("Contacts"),

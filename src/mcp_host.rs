@@ -431,6 +431,48 @@ impl McpHost {
         Ok(out)
     }
 
+    /// 设置页「测试连接」：只连一个连接器，返回工具数量。
+    pub async fn test_connector(id: &str, workspace: &str) -> Result<String, String> {
+        let root = data_root();
+        let state = connectors_service::ConnectorState {
+            version: 1,
+            enabled: vec![id.to_string()],
+        };
+        let secrets = crate::secrets::values(&root).unwrap_or_default();
+        let specs = connectors_service::resolve_mcp_servers(&state, &secrets, Some(workspace))?;
+        let spec = specs
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("未知连接器：{id}"))?;
+        ensure_node().await?;
+        let node_path = path_with_runtime_node();
+        let server = spawn_server(
+            &spec.name,
+            &spec.command,
+            &spec.args,
+            &spec.env,
+            node_path.as_deref(),
+        )?;
+        send_request(
+            &server,
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "mode-chat", "version": env!("CARGO_PKG_VERSION")},
+            }),
+        )
+        .await?;
+        send_notification(&server, "notifications/initialized", json!({})).await;
+        let listed = send_request(&server, "tools/list", json!({})).await?;
+        let count = listed
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .map(Vec::len)
+            .unwrap_or(0);
+        Ok(format!("{} 连接成功，{count} 个工具", spec.name))
+    }
+
     /// 把 MCP 工具包装成 pi-rust 的 HarnessTool。
     pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
         self.tools

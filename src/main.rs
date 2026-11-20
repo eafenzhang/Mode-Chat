@@ -40,6 +40,7 @@ mod automation_scope;
 mod automation_tools;
 mod browser_tools;
 mod computer_tools;
+mod cua_tree;
 mod update;
 // 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
 #[allow(dead_code)]
@@ -2456,6 +2457,40 @@ struct AutomationHistoryState {
 struct AutomationsView {
     entries: Vec<automations::Entry>,
     error: Option<String>,
+}
+
+fn save_preview_png(bytes: &[u8]) -> Option<std::path::PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let path = std::env::temp_dir().join(format!("mode-chat-shot-{stamp}.png"));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+fn connector_sign_in_url(id: &str) -> Option<&'static str> {
+    match id {
+        "github" => Some("https://github.com/settings/tokens"),
+        "notion" => Some("https://www.notion.so/my-integrations"),
+        "slack" => Some("https://api.slack.com/apps"),
+        "linear" => Some("https://linear.app/settings/api"),
+        "figma" => Some("https://www.figma.com/developers/api#access-tokens"),
+        "cloudflare" => Some("https://dash.cloudflare.com/profile/api-tokens"),
+        "brave-search" => Some("https://api.search.brave.com/app/keys"),
+        _ => None,
+    }
+}
+
+fn display_session_id(raw: &str) -> String {
+    if !raw.contains('/') && !raw.contains(std::path::MAIN_SEPARATOR) {
+        return raw.to_string();
+    }
+    let stem = std::path::Path::new(raw)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(raw);
+    stem.rsplit('_').next().unwrap_or(stem).to_string()
 }
 
 struct PilotApp {
@@ -6002,7 +6037,7 @@ impl PilotApp {
             (i18n::t("新建频道").to_string(), "Ctrl+G".to_string(), PaletteCmd::NewChannel),
             (i18n::t("新会话").to_string(), "Ctrl+N".to_string(), PaletteCmd::NewSession),
             (i18n::t("搜索历史消息").to_string(), "Ctrl+F".to_string(), PaletteCmd::FindMessages),
-            (i18n::t("选择模型").to_string(), String::new(), PaletteCmd::PickModel),
+            (i18n::t("选择运行时").to_string(), String::new(), PaletteCmd::PickModel),
             (i18n::t("审批白名单").to_string(), String::new(), PaletteCmd::EditAllowlist),
             (i18n::t("打开设置").to_string(), "Ctrl+,".to_string(), PaletteCmd::OpenSettings),
         ];
@@ -6986,29 +7021,99 @@ impl PilotApp {
     }
 
     fn settings_page_browser(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut body = settings_page_body("浏览器")
-            .child(settings_note(
-                i18n::t("用系统默认浏览器打开 URL，页面操作由 Bot 的 Playwright MCP 完成。"),
-            ));
-        if self.selected_bot().is_none() {
-            return body
-                .child(hint_row(i18n::t("先在左栏选中一个 Bot")))
-                .into_any_element();
-        }
-        body = body.child(settings_section(i18n::t("浏览器工具")));
-        body.child(self.control_card(1, cx)).into_any_element()
+        let mut body = settings_page_body("浏览器").child(settings_note(
+            i18n::t("内嵌引擎通过 CDP 直接控制本机 Edge/Chrome；Bot 可用 browser_open / snapshot / screenshot / click / type / eval。"),
+        ));
+        let status = crate::browser_tools::browser_path()
+            .map(|path| format!("已找到：{path}"))
+            .unwrap_or_else(|| i18n::t("未找到 Edge/Chrome，浏览器控制不可用").to_string());
+        body = body
+            .child(settings_section(i18n::t("状态")))
+            .child(settings_group(vec![
+                kv_row(status, "Edge / Chrome").into_any_element()
+            ]))
+            .child(settings_section(i18n::t("控制")))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        settings_button(SharedString::from("browser-open"), i18n::t("打开浏览器"))
+                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                cx.spawn(async move |this, cx| {
+                                    let result = crate::browser_tools::launch_for_ui().await;
+                                    let _ = this.update(cx, |this, cx| match result {
+                                        Ok(message) => this.toast(message, cx),
+                                        Err(message) => this.toast(message, cx),
+                                    });
+                                })
+                                .detach();
+                            })),
+                    )
+                    .child(
+                        settings_button(SharedString::from("browser-close"), i18n::t("关闭浏览器"))
+                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                cx.spawn(async move |this, cx| {
+                                    let result = crate::browser_tools::close_for_ui().await;
+                                    let _ = this.update(cx, |this, cx| match result {
+                                        Ok(()) => this.toast(i18n::t("浏览器已关闭"), cx),
+                                        Err(message) => this.toast(message, cx),
+                                    });
+                                })
+                                .detach();
+                            })),
+                    )
+                    .child(
+                        settings_button(SharedString::from("browser-shot"), i18n::t("页面截图"))
+                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                cx.spawn(async move |this, cx| {
+                                    let result = crate::browser_tools::screenshot_png().await;
+                                    let _ = this.update(cx, |this, cx| match result {
+                                        Ok(bytes) => match save_preview_png(&bytes) {
+                                            Some(path) => {
+                                                this.image_preview = Some(path);
+                                                cx.notify();
+                                            }
+                                            None => this.toast(i18n::t("截图保存失败"), cx),
+                                        },
+                                        Err(message) => this.toast(message, cx),
+                                    });
+                                })
+                                .detach();
+                            })),
+                    ),
+            );
+        body.into_any_element()
     }
 
     fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut body = settings_page_body(i18n::t("电脑操控")).child(settings_note(
-            i18n::t("computer-use 插件的 workspace 开关，远程桌面尚未接线。"),
-        ));
-        if self.selected_bot().is_none() {
-            return body
-                .child(hint_row(i18n::t("先在左栏选中一个 Bot")))
-                .into_any_element();
-        }
-        body = body.child(self.control_card(2, cx));
+        let (width, height) = crate::computer_tools::screen_size();
+        let body = settings_page_body(i18n::t("电脑操控"))
+            .child(settings_note(i18n::t(
+                "内嵌引擎用 Win32 直接截屏与注入鼠标键盘；Bot 可用 computer_screenshot / click / type / key / scroll。",
+            )))
+            .child(settings_section(i18n::t("状态")))
+            .child(settings_group(vec![
+                kv_row(format!("{width} × {height}"), i18n::t("主屏幕")).into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("控制")))
+            .child(
+                div().flex().gap(px(8.)).child(
+                    settings_button(SharedString::from("computer-shot"), i18n::t("截屏预览"))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            match crate::computer_tools::screenshot_png() {
+                                Ok(bytes) => match save_preview_png(&bytes) {
+                                    Some(path) => {
+                                        this.image_preview = Some(path);
+                                        cx.notify();
+                                    }
+                                    None => this.toast(i18n::t("截图保存失败"), cx),
+                                },
+                                Err(message) => this.toast(message, cx),
+                            }
+                        })),
+                ),
+            );
         body.into_any_element()
     }
 
@@ -8843,6 +8948,13 @@ impl PilotApp {
 
     fn settings_page_connectors(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
+        let workspace = self
+            .selected_bot()
+            .map(|bot| bot.directory.clone())
+            .filter(|directory| !directory.trim().is_empty())
+            .unwrap_or_else(|| {
+                backend::fallback_workspace().to_string_lossy().into_owned()
+            });
         let mut body = settings_page_body("连接器").child(settings_note(
             i18n::t("连接器即 MCP 服务器，启用后随回合注入 createSession。"),
         ));
@@ -8916,6 +9028,40 @@ impl PilotApp {
                             Err(message) => this.toast(message, cx),
                         }
                         cx.notify();
+                    })),
+                );
+                if let Some(url) = connector_sign_in_url(spec.id) {
+                    let url = url.to_string();
+                    actions = actions.child(
+                        settings_button(
+                            SharedString::from(format!("connector-signin-{}", spec.id)),
+                            i18n::t("获取密钥"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if let Err(message) = crate::shell_open::open_url(&url) {
+                                this.toast(message, cx);
+                            }
+                        })),
+                    );
+                }
+                let test_id = spec.id.to_string();
+                let test_workspace = workspace.clone();
+                actions = actions.child(
+                    settings_button(
+                        SharedString::from(format!("connector-test-{}", spec.id)),
+                        i18n::t("测试连接"),
+                    )
+                    .on_click(cx.listener(move |_this, _event, _window, cx| {
+                        let id = test_id.clone();
+                        let workspace = test_workspace.clone();
+                        cx.spawn(async move |this, cx| {
+                            let result = crate::mcp_host::McpHost::test_connector(&id, &workspace).await;
+                            let _ = this.update(cx, |this, cx| match result {
+                                Ok(message) => this.toast(message, cx),
+                                Err(message) => this.toast(message, cx),
+                            });
+                        })
+                        .detach();
                     })),
                 );
                 let mut connector_card: Vec<gpui::AnyElement> = Vec::new();
@@ -10546,7 +10692,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .get(&key)
                     .and_then(|chat| chat.session_id.clone())
                 {
-                    cx.write_to_clipboard(ClipboardItem::new_string(session_id));
+                    cx.write_to_clipboard(ClipboardItem::new_string(display_session_id(&session_id)));
                     self.toast(i18n::t("已复制会话 ID"), cx);
                 }
             }
@@ -11448,6 +11594,28 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             .bot_by_id(&bot_id)
             .and_then(|bot| bot.model.clone());
         let options = data::available_models();
+        let current_engine = self
+            .sessions
+            .engine_of(&bot_id)
+            .unwrap_or("mode")
+            .to_string();
+        let mut engines = vec![(
+            "mode".to_string(),
+            i18n::t("内嵌引擎（Mode）").to_string(),
+            true,
+        )];
+        for agent in data::local_agents() {
+            let adapter = agent.wired
+                || matches!(
+                    agent.command,
+                    "pi-acp" | "deepseek-acp" | "zcode-acp-server" | "hermes"
+                );
+            engines.push((
+                agent.command.to_string(),
+                agent.name.to_string(),
+                adapter && agent.path.is_some(),
+            ));
+        }
         let viewport_height = f32::from(window.viewport_size().height);
         let weak = cx.weak_entity();
         let restore = self.dialog_focus_restore(cx);
@@ -11456,9 +11624,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             let restore = restore.clone();
             let bot_id = bot_id.clone();
             let current = current.clone();
+            let current_engine = current_engine.clone();
             let options = options.clone();
+            let engines = engines.clone();
             alert
-                .title(i18n::t("选择模型"))
+                .title(i18n::t("选择运行时"))
                 .width(px(420.))
                 .centered()
                 .ok_text(i18n::t("关闭"))
@@ -11560,6 +11730,75 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                     .children(selected.then(current_marker)),
                             );
                         }
+                    }
+                    body = body.child(section_label(i18n::t("本地引擎")));
+                    for (engine_id, label, available) in &engines {
+                        let selected = current_engine == *engine_id;
+                        let engine_id = engine_id.clone();
+                        let label = label.clone();
+                        let available = *available;
+                        let weak_for_click = weak.clone();
+                        let weak_for_restore = weak.clone();
+                        let bot_id = bot_id.clone();
+                        let engine_for_click = engine_id.clone();
+                        let label_for_click = label.clone();
+                        let click = move |_event: &gpui::ClickEvent,
+                                          window: &mut Window,
+                                          cx: &mut App| {
+                            if !available {
+                                return;
+                            }
+                            let engine_id = engine_for_click.clone();
+                            let label = label_for_click.clone();
+                            let bot_id_for_update = bot_id.clone();
+                            let weak = weak_for_click.clone();
+                            let _ = weak.update(cx, move |this, cx| {
+                                if this.sessions.set_engine(&bot_id_for_update, &engine_id) {
+                                    this.sessions.save();
+                                }
+                                let key = bot_key(&bot_id_for_update);
+                                this.backend.reset_session(&key);
+                                this.chats.remove(&key);
+                                if let Some(index) = this
+                                    .roster
+                                    .bots
+                                    .iter()
+                                    .position(|bot| bot.id == bot_id_for_update)
+                                {
+                                    this.ensure_bot(index);
+                                }
+                                this.toast(format!("已切换到 {label}"), cx);
+                                cx.notify();
+                            });
+                            window.close_dialog(cx);
+                            Self::defer_focus_restore(weak_for_restore.clone(), window, cx);
+                        };
+                        body = body.child(
+                            div()
+                                .id(SharedString::from(format!("runtime-{engine_id}")))
+                                .h(px(30.))
+                                .rounded(px(6.))
+                                .px(px(8.))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .cursor_pointer()
+                                .opacity(if available { 1.0 } else { 0.55 })
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(click)
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(12.))
+                                        .text_color(theme::ink())
+                                        .child(if available {
+                                            label
+                                        } else {
+                                            format!("{label} · {}", i18n::t("未安装"))
+                                        }),
+                                )
+                                .children(selected.then(current_marker)),
+                        );
                     }
                     content.child(
                         div()
@@ -14534,7 +14773,7 @@ fn bot_details(
         let label = sessions
             .title(&session)
             .map(str::to_string)
-            .unwrap_or_else(|| session.clone());
+            .unwrap_or_else(|| display_session_id(&session));
         kv_row(label, session_note).into_any_element()
     } else {
         hint_row(session_note).into_any_element()
