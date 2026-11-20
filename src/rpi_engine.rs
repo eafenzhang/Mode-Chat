@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
 use rpi_agent::{
-    AgentEmitter, AgentEvent, BeforeToolCall, BeforeToolCallContext, BeforeToolCallResult,
+    AgentEmitter, AgentEvent, AgentTool, AgentToolResult, BeforeToolCall, BeforeToolCallContext,
+    BeforeToolCallResult,
 };
 use rpi_ai::providers::anthropic::AnthropicProvider;
 use rpi_ai::providers::openai_completions::OpenAiCompletionsProvider;
@@ -357,6 +358,10 @@ impl ApprovalGate {
     ) -> Option<BeforeToolCallResult> {
         use bot_team::approval::{decide, ApprovalDecision};
 
+        // 无人值守测试/自动化：显式跳过审批（仅测试环境使用）。
+        if std::env::var("BOT_PILOT_AUTO_APPROVE").ok().as_deref() == Some("1") {
+            return None;
+        }
         match decide(self.level, &self.allowlist, &tool_name) {
             ApprovalDecision::Allow => None,
             ApprovalDecision::Deny => Some(blocked("已拒绝（审批策略）")),
@@ -621,6 +626,8 @@ pub struct OpenOptions {
     pub member: Option<String>,
     pub approval_level: bot_team::approval::ApprovalLevel,
     pub allowlist: Vec<String>,
+    /// 额外工具（MCP / 浏览器 / 电脑控制等宿主能力）。
+    pub extra_tools: Vec<HarnessTool>,
 }
 
 pub struct RpiSession {
@@ -628,6 +635,7 @@ pub struct RpiSession {
     lane: Arc<dyn AgentLane>,
     pub path: String,
     pub gate: Arc<ApprovalGate>,
+    pub questions: Arc<QuestionGate>,
 }
 
 impl RpiSession {
@@ -699,14 +707,22 @@ impl RpiSession {
             options.approval_level,
             options.allowlist,
         ));
+        let questions = Arc::new(QuestionGate::new(
+            options.events.clone(),
+            options.key.clone(),
+            options.member.clone(),
+        ));
 
         let mut harness_options = AgentHarnessOptions::default();
         harness_options.model = options.model.model;
         harness_options.models = vec![options.model.provider];
         harness_options.tools = tool_set(&workspace);
-        harness_options.active_tool_names = ["read", "write", "edit", "bash"]
-            .into_iter()
-            .map(String::from)
+        harness_options.tools.extend(options.extra_tools);
+        harness_options.tools.push(questions.tool());
+        harness_options.active_tool_names = harness_options
+            .tools
+            .iter()
+            .map(|tool| tool.tool.schema().name.clone())
             .collect();
         harness_options.system_prompt = Some(options.system_prompt);
         harness_options.thinking_level = options.thinking;
@@ -722,11 +738,15 @@ impl RpiSession {
         // 工具串行更贴近 Mode 的回合语义；并行会让审批卡顺序不可预测。
         harness_options.tool_execution = rpi_harness::types::HarnessToolExecution::Sequential;
 
+        let tool_count = harness_options.active_tool_names.len();
         let harness = AgentHarness::create(harness_options)
             .await
             .map_err(|error| format!("Agent 会话初始化失败：{error}"))?;
         if debug {
-            eprintln!("[rpi] harness ok id={}", harness.session_id());
+            eprintln!(
+                "[rpi] harness ok id={} tools={tool_count}",
+                harness.session_id()
+            );
         }
         let lane = harness.lane("main");
         Ok(Self {
@@ -734,6 +754,7 @@ impl RpiSession {
             lane,
             path,
             gate,
+            questions,
         })
     }
 
@@ -865,4 +886,212 @@ pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageCo
         images.push(image);
     }
     Ok(images)
+}
+
+// ── AskUserQuestion：向用户提问并等待作答 ────────────────────────────────
+
+pub struct QuestionGate {
+    events: UnboundedSender<BackendEvent>,
+    key: String,
+    member: Option<String>,
+    pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
+    seq: std::sync::atomic::AtomicU64,
+}
+
+impl QuestionGate {
+    pub fn new(
+        events: UnboundedSender<BackendEvent>,
+        key: String,
+        member: Option<String>,
+    ) -> Self {
+        Self {
+            events,
+            key,
+            member,
+            pending: Mutex::new(HashMap::new()),
+            seq: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn tool(self: &Arc<Self>) -> HarnessTool {
+        HarnessTool::new(Arc::new(AskUserQuestionTool {
+            gate: Arc::clone(self),
+            tool: rpi_ai::types::Tool {
+                name: "ask_user_question".to_string(),
+                description: "向用户提出一个问题并等待回答；可提供选项，也可让用户自由输入。"
+                    .to_string(),
+                parameters: rpi_ai::Schema(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "options": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "可选：给出几个选项"
+                        }
+                    },
+                    "required": ["question"]
+                })),
+                constrained_sampling: None,
+            },
+        }))
+    }
+
+    pub fn answer(&self, request_id: &str, answer: Option<String>) -> bool {
+        let sender = self
+            .pending
+            .lock()
+            .expect("question pending poisoned")
+            .remove(request_id);
+        match sender {
+            Some(sender) => {
+                let _ = sender.send(answer);
+                true
+            }
+            None => false,
+        }
+    }
+
+    async fn ask(
+        &self,
+        question: String,
+        options: Vec<String>,
+        signal: tokio_util::sync::CancellationToken,
+    ) -> Result<String, String> {
+        let id = format!(
+            "question-{}-{}",
+            std::process::id(),
+            self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let (tx, rx) = oneshot::channel();
+        self.pending
+            .lock()
+            .expect("question pending poisoned")
+            .insert(id.clone(), tx);
+        let _ = self.events.send(BackendEvent::Session {
+            key: self.key.clone(),
+            event: SessionEvent::Question(crate::backend::QuestionCard {
+                request_id: id.clone(),
+                question,
+                options: options
+                    .into_iter()
+                    .map(|option| (option.clone(), option))
+                    .collect(),
+                member: self.member.clone(),
+            }),
+        });
+        tokio::select! {
+            answer = rx => {
+                self.pending
+                    .lock()
+                    .expect("question pending poisoned")
+                    .remove(&id);
+                let _ = self.events.send(BackendEvent::Session {
+                    key: self.key.clone(),
+                    event: SessionEvent::QuestionResolved { request_id: id },
+                });
+                answer
+                    .map_err(|_| "提问通道关闭".to_string())?
+                    .ok_or_else(|| "用户取消了提问".to_string())
+            }
+            _ = signal.cancelled() => {
+                self.pending
+                    .lock()
+                    .expect("question pending poisoned")
+                    .remove(&id);
+                Err("提问已取消".to_string())
+            }
+        }
+    }
+}
+
+struct AskUserQuestionTool {
+    gate: Arc<QuestionGate>,
+    tool: rpi_ai::types::Tool,
+}
+
+#[async_trait::async_trait]
+impl AgentTool for AskUserQuestionTool {
+    fn schema(&self) -> &rpi_ai::types::Tool {
+        &self.tool
+    }
+
+    fn label(&self) -> &str {
+        &self.tool.name
+    }
+
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        params: serde_json::Value,
+        signal: tokio_util::sync::CancellationToken,
+        _on_update: Arc<dyn Fn(rpi_agent::ToolResultPartial) + Send + Sync>,
+    ) -> Result<AgentToolResult, rpi_agent::AgentError> {
+        let question = params
+            .get("question")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| rpi_agent::AgentError::Tool("缺少 question".to_string()))?
+            .to_string();
+        let options = params
+            .get("options")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let answer = self
+            .gate
+            .ask(question, options, signal)
+            .await
+            .map_err(rpi_agent::AgentError::Tool)?;
+        Ok(AgentToolResult {
+            content: vec![rpi_agent::TextContentOrImage::Text(rpi_ai::TextContent {
+                kind: rpi_ai::types::TextContentType,
+                text: answer,
+                text_signature: None,
+            })],
+            details: serde_json::Value::Null,
+            usage: None,
+            added_tool_names: Vec::new(),
+            terminate: false,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ask_user_question_roundtrip() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BackendEvent>();
+        let gate = Arc::new(QuestionGate::new(tx, "test".to_string(), None));
+        let tool = gate.tool();
+        let task = tokio::spawn({
+            let tool = Arc::clone(&tool.tool);
+            async move {
+                tool.execute(
+                    "id",
+                    serde_json::json!({"question":"选一个","options":["A","B"]}),
+                    tokio_util::sync::CancellationToken::new(),
+                    Arc::new(|_| {}),
+                )
+                .await
+            }
+        });
+        let event = rx.recv().await.expect("event");
+        let BackendEvent::Session { event: SessionEvent::Question(card), .. } = event else {
+            panic!("expected question card");
+        };
+        assert_eq!(card.question, "选一个");
+        assert!(gate.answer(&card.request_id, Some("A".to_string())));
+        let result = task.await.expect("join").expect("execute");
+        match &result.content[0] {
+            rpi_agent::TextContentOrImage::Text(text) => assert_eq!(text.text, "A"),
+            _ => panic!("expected text"),
+        }
+    }
 }

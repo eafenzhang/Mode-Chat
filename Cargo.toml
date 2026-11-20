@@ -8,6 +8,7 @@ resolver = "2"
 members = [
   "crates/atomic-file",
   "crates/automation-repo",
+  "crates/automation-service",
   "crates/automation-runtime",
   "crates/automation-schedule",
   "crates/bot-team",
@@ -62,6 +63,7 @@ bots-service = { path = "crates/bots-service" }
 automation-repo = { path = "crates/automation-repo" }
 automation-schedule = { path = "crates/automation-schedule" }
 automation-runtime = { path = "crates/automation-runtime" }
+automation-service = { path = "crates/automation-service" }
 # 连接器目录/状态/MCP 解析（与壳共用同一份 catalog 与 connectors.json）。
 connectors-service = { path = "crates/connectors-service" }
 # IM 通道：与壳共用同一份 bot 凭据库（`v2/credentials.json`，键 `bot:<id>:credential`）。
@@ -92,6 +94,9 @@ rpi-ai = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c
 rpi-harness = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c245d204053510b04a208a230a1" }
 rpi-tools = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3eb4c245d204053510b04a208a230a1" }
 futures = "0.3"
+async-trait = "0.1"
+tokio-tungstenite = "0.24"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
 # pi-rust 的 Provider 构造器接收 reqwest 0.12 的 Client；应用其它网络代码用 0.13。
 reqwest012 = { package = "reqwest", version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 

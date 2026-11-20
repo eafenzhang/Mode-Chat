@@ -32,10 +32,14 @@ mod im_runtime;
 mod im_service;
 mod instance;
 mod rpi_engine;
+mod mcp_host;
 mod memory_review;
 mod automations;
 mod automation_scheduler;
 mod automation_scope;
+mod automation_tools;
+mod browser_tools;
+mod computer_tools;
 mod update;
 // 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
 #[allow(dead_code)]
@@ -53,6 +57,7 @@ mod composer_input;
 #[allow(dead_code)]
 mod theme;
 mod time;
+mod tls;
 
 /// 动态文案：中文/英文模板二选一，格式参数两边共用（含 inline capture）。
 macro_rules! tri {
@@ -8897,14 +8902,17 @@ impl PilotApp {
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         match connectors::set_enabled(&toggle_root, &toggle_id, !on) {
-                            Ok(_) => this.toast(
-                                if on {
-                                    i18n::t("已停用连接器").to_string()
-                                } else {
-                                    i18n::t("已启用连接器；缺密钥请填写").to_string()
-                                },
-                                cx,
-                            ),
+                            Ok(_) => {
+                                crate::mcp_host::refresh_all();
+                                this.toast(
+                                    if on {
+                                        i18n::t("已停用连接器").to_string()
+                                    } else {
+                                        i18n::t("已启用连接器；缺密钥请填写").to_string()
+                                    },
+                                    cx,
+                                );
+                            }
                             Err(message) => this.toast(message, cx),
                         }
                         cx.notify();
@@ -9011,6 +9019,7 @@ impl PilotApp {
                                 match error {
                                     Some(message) => this.toast(message, cx),
                                     None if saved > 0 => {
+                                        crate::mcp_host::refresh_all();
                                         this.toast(if i18n::is_en() { format!("Saved {}", i18n::n(saved, "secret", "secrets")) } else { format!("已保存 {saved} 个密钥") }, cx)
                                     }
                                     None => this.toast(i18n::t("没有填写新密钥"), cx),

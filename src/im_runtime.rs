@@ -1284,7 +1284,7 @@ fn turn_ops(data_root: &std::path::Path) -> Arc<dyn BotTurnOps> {
 
 /// 内嵌 pi-rust 的 IM 回合操作：每个 IM 会话一个持久 JSONL 会话。
 pub struct RpiTurnOps {
-    _data_root: PathBuf,
+    data_root: PathBuf,
     sessions: tokio::sync::Mutex<HashMap<String, Arc<RpiEntry>>>,
     open_lock: tokio::sync::Mutex<()>,
 }
@@ -1305,7 +1305,7 @@ struct RpiEntry {
 impl RpiTurnOps {
     pub fn new(data_root: PathBuf) -> Self {
         Self {
-            _data_root: data_root,
+            data_root,
             sessions: tokio::sync::Mutex::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),
         }
@@ -1326,6 +1326,16 @@ impl RpiTurnOps {
         let system_prompt =
             crate::rpi_engine::system_prompt_for(std::path::Path::new(workspace));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::backend::BackendEvent>();
+        let mut extra_tools = crate::mcp_host::for_workspace(workspace)
+            .await
+            .harness_tools();
+        extra_tools.extend(crate::automation_tools::tools(
+            &self.data_root,
+            workspace,
+            identity,
+        ));
+        extra_tools.extend(crate::browser_tools::tools());
+        extra_tools.extend(crate::computer_tools::tools());
         let options = crate::rpi_engine::OpenOptions {
             workspace: PathBuf::from(workspace),
             resume_path: resume.filter(|path| Path::new(path).is_file()),
@@ -1337,6 +1347,7 @@ impl RpiTurnOps {
             member: None,
             approval_level,
             allowlist,
+            extra_tools,
         };
         let session = Arc::new(crate::rpi_engine::RpiSession::open(options).await?);
         let state = Arc::new(Mutex::new(RpiTurnState::default()));

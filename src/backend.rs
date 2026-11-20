@@ -296,6 +296,16 @@ async fn open_rpi_session(
     let engine_model = crate::rpi_engine::resolve_model(&spec)?;
     let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, workspace);
     let system_prompt = crate::rpi_engine::system_prompt_for(std::path::Path::new(workspace));
+    let mut extra_tools = crate::mcp_host::for_workspace(workspace)
+        .await
+        .harness_tools();
+    extra_tools.extend(crate::automation_tools::tools(
+        &crate::data::data_root(),
+        workspace,
+        identity,
+    ));
+    extra_tools.extend(crate::browser_tools::tools());
+    extra_tools.extend(crate::computer_tools::tools());
     let options = crate::rpi_engine::OpenOptions {
         workspace: workspace.into(),
         resume_path: resume.filter(|path| std::path::Path::new(path).is_file()),
@@ -307,6 +317,7 @@ async fn open_rpi_session(
         member,
         approval_level,
         allowlist,
+        extra_tools,
     };
     let session = crate::rpi_engine::RpiSession::open(options).await?;
     Ok((session, spec))
@@ -864,6 +875,16 @@ async fn run_agent(
                         let resume_path = resume_id
                             .clone()
                             .filter(|path| std::path::Path::new(path).is_file());
+                        let mut extra_tools = crate::mcp_host::for_workspace(&workspace)
+                            .await
+                            .harness_tools();
+                        extra_tools.extend(crate::automation_tools::tools(
+                            &crate::data::data_root(),
+                            &workspace,
+                            &identity,
+                        ));
+                        extra_tools.extend(crate::browser_tools::tools());
+                        extra_tools.extend(crate::computer_tools::tools());
                         let options = crate::rpi_engine::OpenOptions {
                             workspace: workspace.clone().into(),
                             resume_path,
@@ -875,6 +896,7 @@ async fn run_agent(
                             member: None,
                             approval_level,
                             allowlist,
+                            extra_tools,
                         };
                         match crate::rpi_engine::RpiSession::open(options).await {
                             Ok(session) => {
@@ -1115,14 +1137,30 @@ async fn run_agent(
                     handle.resolve(request_id, option_id);
                 }
             }
-            Command::AnswerQuestion { key, .. } => {
-                let _ = events.send(BackendEvent::Session {
-                    key,
-                    event: SessionEvent::Error {
-                        member: None,
-                        message: "当前引擎不支持问题卡（AskUserQuestion）".to_string(),
-                    },
-                });
+            Command::AnswerQuestion {
+                key,
+                request_id,
+                answer,
+                ..
+            } => {
+                let mut answered = false;
+                for ctx in sessions.values() {
+                    if let SessionEngine::Rpi(session) = &ctx.engine
+                        && session.questions.answer(&request_id, answer.clone())
+                    {
+                        answered = true;
+                        break;
+                    }
+                }
+                if !answered {
+                    let _ = events.send(BackendEvent::Session {
+                        key,
+                        event: SessionEvent::Error {
+                            member: None,
+                            message: "提问已失效或已被回答".to_string(),
+                        },
+                    });
+                }
             }
             Command::AnswerElicitation {
                 key,

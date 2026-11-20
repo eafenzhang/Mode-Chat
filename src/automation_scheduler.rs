@@ -78,6 +78,9 @@ impl DispatchPort for RpiDispatchPort {
                 crate::rpi_engine::system_prompt_for(Path::new(&request.workspace_path));
             let (tx, mut rx) =
                 tokio::sync::mpsc::unbounded_channel::<crate::backend::BackendEvent>();
+            let mcp_tools = crate::mcp_host::for_workspace(&request.workspace_path)
+                .await
+                .harness_tools();
             let options = crate::rpi_engine::OpenOptions {
                 workspace: request.workspace_path.clone().into(),
                 resume_path: None,
@@ -89,6 +92,7 @@ impl DispatchPort for RpiDispatchPort {
                 member: None,
                 approval_level,
                 allowlist,
+                extra_tools: mcp_tools,
             };
             let session = Arc::new(crate::rpi_engine::RpiSession::open(options).await?);
             let state = Arc::new(Mutex::new(RpiRunState::default()));
