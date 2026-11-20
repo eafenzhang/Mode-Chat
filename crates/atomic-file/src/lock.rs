@@ -92,7 +92,10 @@ pub fn acquire_file_lock(
                 Err(ClaimOutcome::Busy) => {}
                 Err(ClaimOutcome::Failed(error)) => return Err(error),
             },
+            // Windows 上并发 create/remove 同名目录时，create_dir 可能返回
+            // ERROR_ACCESS_DENIED（5）而不是 AlreadyExists；按竞争重试，不能直接失败。
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) if transient_lock_error(&error) => {}
             Err(error) => return Err(AtomicError::Io(error)),
         }
 
@@ -121,6 +124,21 @@ pub fn acquire_file_lock(
     unreachable!("锁获取循环必须通过 return 退出")
 }
 
+/// 并发目录操作的短暂共享冲突（Windows 常见 `ERROR_ACCESS_DENIED`）。
+fn transient_lock_error(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        matches!(error.raw_os_error(), Some(5 | 32 | 33))
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 enum ClaimOutcome {
     /// 目录已存在或已被替换：按竞争继续等。
     Busy,
@@ -139,7 +157,10 @@ fn claim(
         .open(owner_file)
     {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+        Err(error)
+            if error.kind() == std::io::ErrorKind::AlreadyExists
+                || transient_lock_error(&error) =>
+        {
             return Err(ClaimOutcome::Busy);
         }
         Err(error) => return Err(ClaimOutcome::Failed(AtomicError::Io(error))),
@@ -167,6 +188,7 @@ fn claim(
                 Err(ClaimOutcome::Busy)
             }
         }
+        Err(error) if transient_lock_error(&error) => Err(ClaimOutcome::Busy),
         Err(error) => {
             let _ = fs::remove_file(owner_file);
             let _ = fs::remove_dir(lock_dir);
@@ -180,6 +202,7 @@ fn reclaim_abandoned(lock_dir: &Path, grace: Duration) -> Result<bool, AtomicErr
     let metadata = match fs::metadata(lock_dir) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if transient_lock_error(&error) => return Ok(false),
         Err(error) => return Err(AtomicError::Io(error)),
     };
 
@@ -190,6 +213,7 @@ fn reclaim_abandoned(lock_dir: &Path, grace: Duration) -> Result<bool, AtomicErr
                 .map(|entry| entry.path())
                 .collect(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if transient_lock_error(&error) => return Ok(false),
             Err(error) => return Err(AtomicError::Io(error)),
         };
         let owners: Vec<&PathBuf> = entries

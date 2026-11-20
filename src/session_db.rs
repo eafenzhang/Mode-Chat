@@ -142,35 +142,6 @@ pub fn usage(session_id: &str) -> Option<UsageSummary> {
     Some(summary)
 }
 
-/// 全库累计用量（设置 → 用量页；所有会话加总，不含首 token 延迟）。
-pub fn usage_totals() -> Option<UsageSummary> {
-    let connection = open_ro()?;
-    let mut statement = connection
-        .prepare(
-            "SELECT COUNT(*),
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(computed_total_tokens), 0)
-             FROM turn_usage",
-        )
-        .ok()?;
-    let summary = statement
-        .query_row([], |row| {
-            Ok(UsageSummary {
-                turns: row.get::<_, i64>(0)?,
-                input_tokens: row.get::<_, i64>(1)?,
-                output_tokens: row.get::<_, i64>(2)?,
-                total_tokens: row.get::<_, i64>(3)?,
-                last_ttft_ms: None,
-            })
-        })
-        .ok()?;
-    if summary.turns == 0 {
-        return None;
-    }
-    Some(summary)
-}
-
 /// 一条全文搜索命中（消息文本级）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchHit {

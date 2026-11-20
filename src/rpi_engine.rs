@@ -371,10 +371,19 @@ impl ApprovalGate {
                     .lock()
                     .expect("approval pending poisoned")
                     .insert(request_id.clone(), tx);
-                let risk = if tool_name.eq_ignore_ascii_case("bash") {
+                // 风险档位按「实际副作用」分：本地执行/浏览器/电脑控制是 exec，写文件、
+                // 定时任务与 MCP 外部工具是 write，其余（读文件、提问）是 read。
+                // 自定义工具以前一律落到 read，审批卡上会把「建定时任务」标成只读。
+                let lowered = tool_name.to_ascii_lowercase();
+                let risk = if lowered == "bash"
+                    || lowered.starts_with("computer_")
+                    || lowered.starts_with("browser_")
+                {
                     "exec"
-                } else if tool_name.eq_ignore_ascii_case("write")
-                    || tool_name.eq_ignore_ascii_case("edit")
+                } else if lowered == "write"
+                    || lowered == "edit"
+                    || lowered.starts_with("automation_")
+                    || lowered.starts_with("mcp__")
                 {
                     "write"
                 } else {
@@ -802,6 +811,64 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
             .unwrap_or(0);
         let mut text_body = String::new();
         let mut reasoning = String::new();
+        // 纯文本用户消息在 JSONL 里是 `"content": "…"`（不是数组）；只处理数组会把
+        // 重启后的用户发言整段丢掉，导出 Markdown 也只剩助手消息。
+        if let Some(text) = message.get("content").and_then(|item| item.as_str()) {
+            text_body.push_str(text);
+        }
+        // 工具结果不是「助手发言」：历史里还原成工具卡（否则浏览器快照等原始输出
+        // 会伪装成 Bot 说的话上屏，导出 Markdown 也会混进去）。
+        if kind == "tool_result" || kind == "toolResult" {
+            let mut output = String::new();
+            for content in message
+                .get("content")
+                .and_then(|item| item.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if content.get("type").and_then(|item| item.as_str()) == Some("text") {
+                    output.push_str(
+                        content
+                            .get("text")
+                            .and_then(|item| item.as_str())
+                            .unwrap_or(""),
+                    );
+                }
+            }
+            if !output.trim().is_empty() {
+                let name = message
+                    .get("toolName")
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                let call_id = message
+                    .get("toolCallId")
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let is_error = message
+                    .get("isError")
+                    .and_then(|item| item.as_bool())
+                    .unwrap_or(false);
+                let detail: String = output.trim().chars().take(6_000).collect();
+                out.push(crate::backend::HistoryEntry {
+                    user: false,
+                    reasoning: false,
+                    text: String::new(),
+                    tool: Some(crate::backend::ToolCard {
+                        call_id,
+                        name: name.clone(),
+                        state: if is_error { "error" } else { "done" }.to_string(),
+                        title: name,
+                        detail,
+                    }),
+                    attachments: Vec::new(),
+                    member: None,
+                    at,
+                });
+            }
+            continue;
+        }
         for content in message
             .get("content")
             .and_then(|item| item.as_array())
@@ -848,6 +915,191 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
         }
     }
     out
+}
+
+/// 在本地 JSONL 会话里做全文搜索（每个会话最多一条命中，按时间倒序）。
+///
+/// 会话已全面切到 pi-rust JSONL，旧 `db.sqlite` 的 LIKE 搜索对新会话永远空。
+pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::SearchHit> {
+    let needle = query.trim().to_lowercase();
+    if needle.chars().count() < 2 || limit == 0 {
+        return Vec::new();
+    }
+    let mut hits = Vec::new();
+    collect_search(&sessions_root(), &needle, limit, &mut hits);
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+    hits.truncate(limit);
+    hits
+}
+
+fn collect_search(
+    dir: &std::path::Path,
+    needle: &str,
+    limit: usize,
+    out: &mut Vec<crate::session_db::SearchHit>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_search(&path, needle, limit, out);
+            if out.len() >= limit * 4 {
+                return;
+            }
+            continue;
+        }
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        if !name.ends_with(".jsonl") || name.ends_with(".progress.jsonl") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut title = String::new();
+        let mut best: Option<(u64, String)> = None;
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if value.get("kind").and_then(|item| item.as_str()) == Some("header") {
+                if let Some(cwd) = value.get("cwd").and_then(|item| item.as_str()) {
+                    title = cwd
+                        .rsplit(['\\', '/'])
+                        .find(|part| !part.is_empty())
+                        .unwrap_or(cwd)
+                        .to_string();
+                }
+                continue;
+            }
+            if value.get("type").and_then(|item| item.as_str()) != Some("message") {
+                continue;
+            }
+            let Some(message) = value.get("message") else {
+                continue;
+            };
+            let kind = message.get("kind").and_then(|item| item.as_str()).unwrap_or("");
+            if kind != "user" && kind != "assistant" {
+                continue;
+            }
+            let mut body = String::new();
+            if let Some(text) = message.get("content").and_then(|item| item.as_str()) {
+                body.push_str(text);
+            }
+            for content in message
+                .get("content")
+                .and_then(|item| item.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if content.get("type").and_then(|item| item.as_str()) == Some("text") {
+                    body.push_str(
+                        content
+                            .get("text")
+                            .and_then(|item| item.as_str())
+                            .unwrap_or(""),
+                    );
+                }
+            }
+            let lower = body.to_lowercase();
+            let Some(byte_pos) = lower.find(needle) else {
+                continue;
+            };
+            let at = value
+                .get("timestamp")
+                .and_then(|item| item.as_u64())
+                .unwrap_or(0);
+            let char_pos = lower[..byte_pos].chars().count();
+            let chars: Vec<char> = body.chars().collect();
+            let start = char_pos.saturating_sub(24);
+            let end = (char_pos + needle.chars().count() + 40).min(chars.len());
+            let mut snippet: String = chars[start..end].iter().collect();
+            snippet = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+            if best.as_ref().is_none_or(|(best_at, _)| at >= *best_at) {
+                best = Some((at, snippet));
+            }
+        }
+        if let Some((at, snippet)) = best {
+            out.push(crate::session_db::SearchHit {
+                session_id: path.to_string_lossy().into_owned(),
+                title: if title.is_empty() {
+                    "会话".to_string()
+                } else {
+                    title
+                },
+                snippet,
+                at,
+            });
+        }
+    }
+}
+
+/// 一个 JSONL 会话的累计用量（assistant 消息里的 usage）。
+///
+/// 用量页过去读 `db.sqlite` 的 turn_usage：内嵌引擎的会话是 JSONL，那条路永远是空的。
+pub fn session_usage(path: &str) -> Option<crate::session_db::UsageSummary> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut summary = crate::session_db::UsageSummary::default();
+    accumulate_usage(&text, &mut summary);
+    (summary.turns > 0).then_some(summary)
+}
+
+/// 全库累计：扫本机所有 JSONL 会话（进度文件不含用量，跳过）。
+pub fn usage_totals() -> Option<crate::session_db::UsageSummary> {
+    let mut summary = crate::session_db::UsageSummary::default();
+    collect_usage(&sessions_root(), &mut summary);
+    (summary.turns > 0).then_some(summary)
+}
+
+fn accumulate_usage(text: &str, summary: &mut crate::session_db::UsageSummary) {
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("kind").and_then(|item| item.as_str()) != Some("entry") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        if message.get("kind").and_then(|item| item.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(usage) = message.get("usage") else {
+            continue;
+        };
+        let input = usage.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
+        let output = usage.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
+        let total = usage
+            .get("totalTokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(input + output);
+        summary.turns += 1;
+        summary.input_tokens += input;
+        summary.output_tokens += output;
+        summary.total_tokens += total;
+    }
+}
+
+fn collect_usage(dir: &std::path::Path, summary: &mut crate::session_db::UsageSummary) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_usage(&path, summary);
+            continue;
+        }
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        if !name.ends_with(".jsonl") || name.ends_with(".progress.jsonl") {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            accumulate_usage(&text, summary);
+        }
+    }
 }
 
 /// 把待发附件转成 pi-rust 的 inline image；非图片/超限直接报错（当前引擎不支持任意文件）。

@@ -1181,7 +1181,17 @@ impl Render for GroupGoalState {
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .child(div().flex_1().h(px(34.)).child(self.stage.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(px(36.))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::card())
+                                .px(px(10.))
+                                .child(self.stage.clone()),
+                        )
                         .child(
                             div()
                                 .id("goal-add-stage")
@@ -1325,7 +1335,17 @@ impl Render for GroupGoalState {
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .child(div().flex_1().h(px(34.)).child(self.stage.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(px(36.))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::card())
+                                .px(px(10.))
+                                .child(self.stage.clone()),
+                        )
                         .child(
                             div()
                                 .id("goal-new-add-stage")
@@ -2303,6 +2323,13 @@ impl ChatState {
         let Some(session_id) = self.session_id.clone() else {
             return;
         };
+        // 内嵌引擎的会话是 pi-rust JSONL：用量从 assistant 消息的 usage 聚合，
+        // 旧 `db.sqlite` 的 turn_usage 只覆盖已删除的 v4 会话。
+        if session_id.ends_with(".jsonl") {
+            self.todos = Vec::new();
+            self.usage = crate::rpi_engine::session_usage(&session_id);
+            return;
+        }
         self.todos = session_db::todos(&session_id);
         self.usage = session_db::usage(&session_id);
     }
@@ -2562,6 +2589,8 @@ struct PilotApp {
 
     /// 定时任务页快照（None = 下次渲染时重读）。
     automations_view: Option<AutomationsView>,
+    /// 用量页「全库累计」快照：外层 None = 未加载，内层 None = 还没有会话。
+    usage_totals_view: Option<Option<session_db::UsageSummary>>,
     /// 设置 → 密钥：新增密钥的两个输入框。
     secret_name_input: Entity<SimpleInput>,
     secret_value_input: Entity<SimpleInput>,
@@ -2990,6 +3019,7 @@ impl PilotApp {
             menu_focus: cx.focus_handle(),
             pending_group_dialog: None,
             automations_view: None,
+            usage_totals_view: None,
             pending_model_dialog: None,
             pending_allowlist_dialog: None,
             pending_group_goal_dialog: None,
@@ -4045,24 +4075,9 @@ impl PilotApp {
                             }
                             _ => entries,
                         };
-                        chat.messages = entries
-                            .into_iter()
-                            .map(|entry| {
-                                let mut message = match entry.tool {
-                                    Some(card) => Message::tool(card),
-                                    None => Message::text(
-                                        if entry.user { Role::User } else { Role::Assistant },
-                                        entry.text,
-                                        false,
-                                    ),
-                                };
-                                message.member = entry.member;
-                                if entry.at > 0 {
-                                    message.at = entry.at;
-                                }
-                                message
-                            })
-                            .collect();
+                        // 统一走 history_messages：reasoning/tool/附件/成员/时间全部按
+                        // 同一套规则还原（内联版本漏了 reasoning 与附件）。
+                        chat.messages = history_messages(entries);
                         chat.member_stream.clear();
                         chat.rebuild_tool_index();
                         chat.streaming = false;
@@ -5428,7 +5443,13 @@ impl PilotApp {
         let risk = if prompt.risk.is_empty() {
             String::new()
         } else {
-            tri!("风险 {}", "Risk {}", prompt.risk)
+            let label = match prompt.risk.as_str() {
+                "exec" => tri!("执行", "Execute"),
+                "write" => tri!("写入", "Write"),
+                "read" => tri!("读取", "Read"),
+                other => other.to_string(),
+            };
+            tri!("风险 {}", "Risk {}", label)
         };
 
         let mut options = div().flex().flex_wrap().gap(px(6.));
@@ -5671,6 +5692,7 @@ impl PilotApp {
         debug_action("SettingsShortcut");
         self.settings_open = true;
         self.automations_view = None;
+        self.usage_totals_view = None;
         self.pending_bot_dialog = None;
         self.detail_menu_open = false;
         self.settings_focus.clone().focus(window, cx);
@@ -5866,7 +5888,17 @@ impl PilotApp {
                 }
                 let results = cx
                     .background_executor()
-                    .spawn(async move { session_db::search_messages(&query, 8) })
+                    .spawn(async move {
+                        // 旧会话库 + 当前 pi-rust JSONL 两路合并；JSONL 覆盖全部新会话。
+                        let mut results = session_db::search_messages(&query, 8);
+                        let remaining = 8usize.saturating_sub(results.len());
+                        if remaining > 0 {
+                            results.extend(crate::rpi_engine::search_sessions(&query, remaining));
+                        }
+                        results.sort_by_key(|hit| std::cmp::Reverse(hit.at));
+                        results.truncate(8);
+                        results
+                    })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     if this.find_seq == seq
@@ -5984,7 +6016,13 @@ impl PilotApp {
     /// 跳到搜索结果：私聊直接切换会话；频道成员会话只切过去（暂不支持换成员会话）。
     fn jump_to_hit(&mut self, hit: &session_db::SearchHit, cx: &mut Context<Self>) {
         let session_id = hit.session_id.clone();
-        match self.find_owner_of_session(&session_id) {
+        // JSONL 历史会话可能不在当前 Bot 的会话映射里（不同 Bot/旧槽位）：退回当前
+        // 选中的 Bot 打开它，否则用户只能看到搜索结果却点不动。
+        let owner = self.find_owner_of_session(&session_id).or(match self.selection {
+            selection @ Some(Selection::Bot(_)) => selection,
+            _ => None,
+        });
+        match owner {
             Some(Selection::Bot(index)) => {
                 let Some(bot) = self.roster.bots.get(index).cloned() else {
                     return;
@@ -6151,7 +6189,7 @@ impl PilotApp {
         cx.notify();
     }
 
-    fn on_palette_submit(&mut self, _: &PaletteSubmit, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_palette_submit(&mut self, _: &PaletteSubmit, window: &mut Window, cx: &mut Context<Self>) {
         debug_action("PaletteSubmit");
         if self.ime_composing(cx) {
             return;
@@ -6165,12 +6203,17 @@ impl PilotApp {
             return;
         };
         self.palette = None;
-        self.run_palette_command(command, cx);
+        self.run_palette_command(command, window, cx);
         cx.notify();
     }
 
     /// 执行命令面板的一项（关面板由调用方保证）。
-    fn run_palette_command(&mut self, command: PaletteCmd, cx: &mut Context<Self>) {
+    fn run_palette_command(
+        &mut self,
+        command: PaletteCmd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match command {
             PaletteCmd::NewBot => self.open_new_dialog(cx),
             PaletteCmd::EditBot => {
@@ -6214,8 +6257,7 @@ impl PilotApp {
                 cx.notify();
             }
             PaletteCmd::OpenSettings => {
-                self.settings_open = true;
-                self.automations_view = None;
+                self.open_settings_at(self.settings_tab, window, cx);
                 cx.notify();
             }
             PaletteCmd::PickModel => {
@@ -6993,6 +7035,7 @@ impl PilotApp {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.settings_tab = index;
                         this.automations_view = None;
+                        this.usage_totals_view = None;
                         cx.notify();
                     }))
                     .child(icons::icon(
@@ -7959,7 +8002,7 @@ impl PilotApp {
                 theme::ink_tertiary()
             };
             let detail = if agent.wired {
-                tri!("{} · 内置运行时（随应用分发）", "{} · built-in runtime (bundled with the app)", agent.id)
+                tri!("进程内 · 随应用分发（无 Node）", "in-process · bundled (no Node)")
             } else {
                 format!(
                     "{} · {}",
@@ -9516,7 +9559,7 @@ impl PilotApp {
     /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
     fn settings_page_capabilities(&self) -> gpui::AnyElement {
         let mut body = settings_page_body("能力").child(settings_note(
-            i18n::t("壳真实广告的能力集，未接线项不会对 Agent 生效。"),
+            i18n::t("宿主能力集：只列出真实接入的能力，未接线项不会对 Agent 生效。"),
         ));
         let mut capability_rows: Vec<gpui::AnyElement> = Vec::new();
         for row in capabilities::rows() {
@@ -9544,7 +9587,15 @@ impl PilotApp {
         body.into_any_element()
     }
 
-    fn settings_page_usage(&self) -> gpui::AnyElement {
+    /// 全库用量快照（懒加载；打开设置/切页时清空重读）。
+    fn get_or_load_usage_totals(&mut self) -> &Option<session_db::UsageSummary> {
+        if self.usage_totals_view.is_none() {
+            self.usage_totals_view = Some(crate::rpi_engine::usage_totals());
+        }
+        self.usage_totals_view.as_ref().expect("just loaded")
+    }
+
+    fn settings_page_usage(&mut self) -> gpui::AnyElement {
         let chat = self.active_key().and_then(|key| self.chats.get(&key));
         let session = chat
             .and_then(|chat| chat.session_id.clone())
@@ -9552,9 +9603,10 @@ impl PilotApp {
             .unwrap_or_else(|| i18n::t("未建立会话").to_string());
         let usage = chat.and_then(|chat| chat.usage);
         let todo_count = chat.map(|chat| chat.todos.len()).unwrap_or(0);
-        let totals = session_db::usage_totals();
+        // 快照只在切到本页/打开设置时重读：扫全部 JSONL 不能进每帧渲染路径。
+        let totals = *self.get_or_load_usage_totals();
         let mut body = settings_page_body("用量").child(settings_note(
-            i18n::t("只读统计，来自会话库的 turn_usage 与 todo。"),
+            i18n::t("只读统计，来自会话 JSONL 的 assistant usage 与待办。"),
         ));
         body = body
             .child(settings_section(i18n::t("当前会话")))
@@ -10760,13 +10812,17 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
 
     /// 右栏「⋯」菜单（鼠标与 ↑/↓/Enter 键盘共用同一套条目）。
     /// 打开设置并落到指定页（底栏菜单的深链入口）。
-    fn open_settings_at(&mut self, tab: usize) {
+    fn open_settings_at(&mut self, tab: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_open = true;
         self.settings_tab = tab.min(SETTINGS_PAGES.len().saturating_sub(1));
         self.automations_view = None;
+        self.usage_totals_view = None;
         self.pending_bot_dialog = None;
         self.detail_menu_open = false;
         self.footer_menu_open = false;
+        // 菜单/导轨打开设置时也要把焦点交给设置页：否则焦点还在会话输入框上，
+        // Esc 会被输入框吃掉，用户以为「Esc 关不掉设置」。
+        self.settings_focus.clone().focus(window, cx);
     }
 
     /// 侧栏分组 CRUD（本机 UI 偏好；失败只影响下次启动）。
@@ -11015,7 +11071,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         cx.listener(|this, _event, _window, cx| {
                                             cx.stop_propagation();
                                             this.me_card_open = false;
-                                            this.open_settings_at(0);
+                                            this.open_settings_at(0, _window, cx);
                                             cx.notify();
                                         }),
                                     ),
@@ -11025,7 +11081,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         cx.listener(|this, _event, _window, cx| {
                                             cx.stop_propagation();
                                             this.me_card_open = false;
-                                            this.open_settings_at(13);
+                                            this.open_settings_at(13, _window, cx);
                                             cx.notify();
                                         }),
                                     ),
@@ -11118,7 +11174,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             this.footer_menu_open = false;
                             match action {
                                 FooterMenuAction::InstallUpdate => this.start_update(cx),
-                                FooterMenuAction::Settings(tab) => this.open_settings_at(tab),
+                                FooterMenuAction::Settings(tab) => {
+                                    this.open_settings_at(tab, _window, cx)
+                                }
                                 FooterMenuAction::CheckUpdates => this.check_updates(cx),
                             }
                             cx.notify();
@@ -11426,7 +11484,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.palette = None;
-                        this.run_palette_command(command.clone(), cx);
+                        this.run_palette_command(command.clone(), _window, cx);
                         cx.notify();
                     }))
                     .child(
@@ -14412,6 +14470,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
                                 this.settings_open = true;
                                 this.automations_view = None;
+                                this.usage_totals_view = None;
                                 this.pending_bot_dialog = None;
                                 this.settings_focus.clone().focus(window, cx);
                                 cx.notify();
@@ -14419,6 +14478,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.settings_open = true;
                                 this.automations_view = None;
+                                this.usage_totals_view = None;
                                 this.pending_bot_dialog = None;
                                 this.settings_focus.clone().focus(window, cx);
                                 cx.notify();
@@ -17949,7 +18009,7 @@ impl PilotApp {
                     .bg(gpui::rgba(0x00000000))
                     .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.open_settings_at(tab);
+                        this.open_settings_at(tab, _window, cx);
                         cx.notify();
                     }))
                     .child(icons::icon(
@@ -17977,6 +18037,15 @@ impl PilotApp {
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     // 设置页头不再放关闭按钮；导轨齿轮同时承担开/关。
                     this.settings_open = !this.settings_open;
+                    if this.settings_open {
+                        // 每次打开都让定时任务/用量页重读快照。
+                        this.automations_view = None;
+                        this.usage_totals_view = None;
+                        // 焦点交给设置页，Esc 才能在任意页立即关闭（否则被输入框吃掉）。
+                        this.settings_focus.clone().focus(_window, cx);
+                    } else {
+                        this.refocus_composer_if_clear(_window, cx);
+                    }
                     cx.notify();
                 }))
                 .child(icons::icon(
@@ -18203,6 +18272,10 @@ impl PilotApp {
                         })
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.settings_tab = index;
+                            // 定时任务页读的是快照：切页必须让它重读，否则 Bot 刚用
+                            // automation_create 建的任务在页面上仍显示「还没有定时任务」。
+                            this.automations_view = None;
+                            this.usage_totals_view = None;
                             cx.notify();
                             // 点导航不产生焦点，Esc 会因无焦点元素而丢键：把焦点留在设置页上。
                             this.settings_focus.focus(window, cx);
