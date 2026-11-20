@@ -1493,7 +1493,7 @@ fn turn_ops(
 
 /// 内嵌 pi-rust 的 IM 回合操作：每个 IM 会话一个持久 JSONL 会话。
 pub struct RpiTurnOps {
-    data_root: PathBuf,
+    _data_root: PathBuf,
     sessions: tokio::sync::Mutex<HashMap<String, Arc<RpiEntry>>>,
     open_lock: tokio::sync::Mutex<()>,
 }
@@ -1514,7 +1514,7 @@ struct RpiEntry {
 impl RpiTurnOps {
     pub fn new(data_root: PathBuf) -> Self {
         Self {
-            data_root,
+            _data_root: data_root,
             sessions: tokio::sync::Mutex::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),
         }
@@ -1723,7 +1723,7 @@ impl BotTurnOps for RpiTurnOps {
                 } else {
                     text.push_str("\n\n（回合失败：");
                     text.push_str(&error);
-                    text.push_str("）");
+                    text.push('）');
                 }
             }
             Ok(Some(text))

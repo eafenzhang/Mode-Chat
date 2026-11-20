@@ -2401,7 +2401,7 @@ async fn run_agent(
                             model.clone(),
                             None,
                             None,
-                            &events,
+                            events,
                         )
                         .await
                         {
@@ -2561,7 +2561,7 @@ async fn run_agent(
                             model.clone(),
                             Some(session_id.clone()),
                             None,
-                            &events,
+                            events,
                         )
                         .await
                         {
@@ -2845,7 +2845,7 @@ async fn run_agent(
                             member.model.clone(),
                             member.session_id.clone(),
                             Some(member.name.clone()),
-                            &events,
+                            events,
                         )
                         .await;
                         match opened {

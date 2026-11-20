@@ -236,22 +236,21 @@ pub fn approval_policy(identity: &str, workspace: &str) -> (bot_team::approval::
 
 /// 未显式传模型时的回落：队友的 modelSelection → provider_config 的默认选择。
 pub fn default_model_spec(identity: &str, workspace: &str) -> Option<ModelSpec> {
-    if let Some(record) = teammate_record(identity, workspace) {
-        if let Some(selection) = record.get("modelSelection") {
-            if let (Some(provider_id), Some(model_id)) = (
-                selection.get("providerId").and_then(|value| value.as_str()),
-                selection.get("modelId").and_then(|value| value.as_str()),
-            ) {
-                return Some(ModelSpec {
-                    provider_id: provider_id.to_string(),
-                    model_id: model_id.to_string(),
-                    reasoning_level: selection
-                        .pointer("/options/reasoningLevel")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string),
-                });
-            }
-        }
+    if let Some(record) = teammate_record(identity, workspace)
+        && let Some(selection) = record.get("modelSelection")
+        && let (Some(provider_id), Some(model_id)) = (
+            selection.get("providerId").and_then(|value| value.as_str()),
+            selection.get("modelId").and_then(|value| value.as_str()),
+        )
+    {
+        return Some(ModelSpec {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            reasoning_level: selection
+                .pointer("/options/reasoningLevel")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+        });
     }
     let bytes = std::fs::read(
         crate::data::data_root()
@@ -449,9 +448,6 @@ impl ApprovalGate {
         }
     }
 
-    pub fn pending_len(&self) -> usize {
-        self.pending.lock().expect("approval pending poisoned").len()
-    }
 }
 
 fn blocked(reason: &str) -> BeforeToolCallResult {
@@ -628,14 +624,15 @@ pub struct OpenOptions {
 }
 
 pub struct RpiSession {
-    pub harness: AgentHarness,
+    _harness: AgentHarness,
     lane: Arc<dyn AgentLane>,
-    pub session_id: String,
     pub path: String,
     pub gate: Arc<ApprovalGate>,
 }
 
 impl RpiSession {
+    // AgentHarnessOptions 字段很多且默认值有意义；逐字段赋值比巨型结构体字面量更清晰。
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn open(options: OpenOptions) -> Result<Self, String> {
         let debug = std::env::var("BOT_PILOT_DEBUG").is_ok();
         if debug {
@@ -728,15 +725,13 @@ impl RpiSession {
         let harness = AgentHarness::create(harness_options)
             .await
             .map_err(|error| format!("Agent 会话初始化失败：{error}"))?;
-        let session_id = harness.session_id();
         if debug {
-            eprintln!("[rpi] harness ok id={session_id}");
+            eprintln!("[rpi] harness ok id={}", harness.session_id());
         }
         let lane = harness.lane("main");
         Ok(Self {
-            harness,
+            _harness: harness,
             lane,
-            session_id,
             path,
             gate,
         })

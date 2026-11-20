@@ -67,6 +67,7 @@ impl AgentEmitter for Printer {
 }
 
 #[tokio::main]
+#[allow(clippy::field_reassign_with_default)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key = env::var("RPI_API_KEY")?;
     let base_url =
