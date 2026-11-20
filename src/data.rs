@@ -280,13 +280,13 @@ pub struct LocalAgentInfo {
     pub name: &'static str,
     /// 检测用的可执行名（PATH 上找 `name` / `name.exe` / `.cmd` / `.bat`）。
     pub command: &'static str,
-    /// 是否已接入回合执行（目前只有 Mode Agent）。
+    /// 是否已接入回合执行（目前只有内嵌 pi-rust）。
     pub wired: bool,
     pub path: Option<String>,
 }
 
 const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
-    ("mode", "Mode Agent", "mode-agent", true),
+    ("mode", "内置引擎（pi-rust）", "mode-agent", true),
     // 产品只支持这四个本地引擎（全部走 ACP 适配层）；不再探测 Claude/Codex/Gemini 等。
     ("pi-acp", "Pi（ACP）", "pi-acp", false),
     ("deepseek", "DeepSeek（ACP）", "deepseek-acp", false),

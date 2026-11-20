@@ -237,7 +237,7 @@ pub fn local_engine() -> Option<String> {
 pub fn active_engine_label() -> String {
     local_engine()
         .map(|command| acp_engine_label(&command))
-        .unwrap_or_else(|| "Mode Agent".to_string())
+        .unwrap_or_else(|| "内置引擎（pi-rust）".to_string())
 }
 
 fn acp_engine_label(command: &str) -> String {
@@ -274,7 +274,7 @@ pub fn resolve_engine(selected: Option<&str>) -> EngineChoice {
     }
 }
 
-/// 该 Bot 的回合是否由完整引擎执行（内嵌 rpi 或旧 Mode Agent；ACP 引擎能力受限）。
+/// 该 Bot 的回合是否由完整引擎执行（内嵌 rpi；ACP 引擎能力受限）。
 pub fn engine_is_mode(selected: Option<&str>) -> bool {
     !matches!(resolve_engine(selected), EngineChoice::Acp(_))
 }

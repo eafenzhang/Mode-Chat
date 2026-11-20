@@ -7886,7 +7886,7 @@ impl PilotApp {
             .unwrap_or("mode")
             .to_string();
         let current_label = if current == "mode" {
-            "Mode Agent".to_string()
+            "内置引擎（pi-rust）".to_string()
         } else {
             agents
                 .iter()
@@ -7895,7 +7895,7 @@ impl PilotApp {
                 .unwrap_or_else(|| current.clone())
         };
         let mut body = settings_page_body("智能体").child(settings_note(
-            i18n::t("内置 Mode Agent 走 v4，本地 Pi/DeepSeek/Hermes/ZCode 通过 ACP 接入。"),
+            i18n::t("内置引擎是进程内 pi-rust（无 Node/Mode Agent）；本地 Pi/DeepSeek/Hermes/ZCode 通过 ACP 接入。"),
         ));
         if backend::local_engine().is_some() {
             body = body.child(settings_note(tri!(
@@ -8014,7 +8014,7 @@ impl PilotApp {
                         this.backend.reset_session(&key);
                         this.chats.remove(&key);
                         this.ensure_bot(bot_index);
-                        this.toast(i18n::t("已切换到 Mode Agent"), cx);
+                        this.toast(i18n::t("已切换到内置引擎"), cx);
                         cx.notify();
                     })),
                 )
@@ -11625,7 +11625,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             .to_string();
         let mut engines = vec![(
             "mode".to_string(),
-            i18n::t("内嵌引擎（Mode）").to_string(),
+            i18n::t("内嵌引擎（pi-rust）").to_string(),
             true,
         )];
         for agent in data::local_agents() {
@@ -13624,7 +13624,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         list.child(column)
     }
 
-    /// 当前会话（Bot）是否由 Mode Agent 执行——附件只在 v4 链路上可用。
+    /// 当前会话（Bot）是否由完整引擎执行——ACP 引擎不支持附件。
     fn current_engine_is_mode(&self) -> bool {
         if self.selected_group().is_some() {
             return true;
