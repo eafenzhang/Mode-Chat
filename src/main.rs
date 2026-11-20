@@ -2596,6 +2596,22 @@ struct AutomationHistoryState {
     runs: Vec<automation_repo::AutomationRun>,
 }
 
+/// 设置页下拉框种类（语言/字号/动效/消息布局）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsSelectKind {
+    Language,
+    FontSize,
+    Motion,
+    MessageLayout,
+}
+
+/// 打开中的设置下拉框：种类 + 点击位置（窗口坐标）。
+#[derive(Clone, Copy)]
+struct SettingsDropdownState {
+    kind: SettingsSelectKind,
+    position: gpui::Point<gpui::Pixels>,
+}
+
 /// 定时任务页的快照：只在打开设置页/切换页/动作后重读，避免每帧开库。
 struct AutomationsView {
     entries: Vec<automations::Entry>,
@@ -2807,9 +2823,8 @@ struct PilotApp {
     message_layout: String,
     /// 主题：light / dark / system（prefs.json theme）。
     theme_pref: String,
-    /// 消息布局下拉菜单（点击位置锚定的小浮层）。
-    layout_menu_open: bool,
-    layout_menu_pos: Option<gpui::Point<gpui::Pixels>>,
+    /// 打开中的设置下拉框（语言/字号/动效/消息布局）。
+    settings_dropdown: Option<SettingsDropdownState>,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
@@ -3205,8 +3220,7 @@ impl PilotApp {
             chat_font_size,
             message_layout,
             theme_pref,
-            layout_menu_open: false,
-            layout_menu_pos: None,
+            settings_dropdown: None,
             memory_review_enabled: crate::memory_review::enabled(),
             memory_group: None,
             runtime_status: HashMap::new(),
@@ -5710,8 +5724,8 @@ impl PilotApp {
         if self.ime_composing(cx) {
             return;
         }
-        if self.layout_menu_open {
-            self.layout_menu_open = false;
+        if self.settings_dropdown.is_some() {
+            self.settings_dropdown = None;
             cx.notify();
             return;
         }
@@ -7738,31 +7752,168 @@ impl PilotApp {
         cx.notify();
     }
 
-    fn language_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut controls = div().flex().items_center().gap(px(4.));
-        for (lang, label) in [("zh", "简体中文"), ("en", "English")] {
-            let active = i18n::lang() == lang;
-            controls = controls.child(
-                settings_button(
-                    SharedString::from(format!("lang-{lang}")),
-                    if active {
-                        format!("{} ✓", i18n::t(label))
+    /// 设置页下拉选择框（语言/字号/动效/消息布局共用）。
+    fn settings_select_box(
+        &self,
+        id: &'static str,
+        current: impl Into<gpui::SharedString>,
+        kind: SettingsSelectKind,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let wechat = wecom_theme::active();
+        div()
+            .id(id)
+            .h(px(30.))
+            .min_w(px(112.))
+            .px(px(10.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if wechat {
+                wecom_theme::panel_divider()
+            } else {
+                theme::edge()
+            })
+            .bg(if wechat {
+                wecom_theme::chip_bg()
+            } else {
+                theme::card()
+            })
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.))
+            .cursor_pointer()
+            .hover(|style| style.opacity(0.9))
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                if let gpui::ClickEvent::Mouse(mouse) = event {
+                    this.settings_dropdown = Some(SettingsDropdownState {
+                        kind,
+                        position: mouse.up.position,
+                    });
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
                     } else {
-                        label.to_string()
-                    },
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if i18n::lang() != lang {
-                        i18n::set_lang(lang);
-                        save_ui_value("lang", serde_json::json!(lang));
-                        cx.notify();
-                        this.settings_focus.focus(_window, cx);
-                    }
-                })),
-            );
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(if wechat {
+                        wecom_theme::chat_title()
+                    } else {
+                        theme::ink()
+                    })
+                    .child(current.into()),
+            )
+            .child(icons::icon(
+                icons::Icon::ChevronDown,
+                14.,
+                if wechat {
+                    wecom_theme::panel_text()
+                } else {
+                    theme::ink_secondary()
+                },
+            ))
+    }
+
+    /// 下拉框的（值, 文案）与当前值。
+    fn settings_select_options(
+        &self,
+        kind: SettingsSelectKind,
+    ) -> (Vec<(String, String)>, String) {
+        match kind {
+            SettingsSelectKind::Language => (
+                vec![
+                    ("zh".to_string(), "简体中文".to_string()),
+                    ("en".to_string(), "English".to_string()),
+                ],
+                i18n::lang().to_string(),
+            ),
+            SettingsSelectKind::FontSize => (
+                [12u32, 13, 14, 16, 18]
+                    .into_iter()
+                    .map(|size| (size.to_string(), format!("{size} px")))
+                    .collect(),
+                self.chat_font_size.to_string(),
+            ),
+            SettingsSelectKind::Motion => (
+                vec![
+                    ("quiet".to_string(), i18n::t("安静").to_string()),
+                    ("normal".to_string(), i18n::t("标准").to_string()),
+                    ("lively".to_string(), i18n::t("活泼").to_string()),
+                ],
+                self.motion.to_string(),
+            ),
+            SettingsSelectKind::MessageLayout => (
+                vec![
+                    ("bubble".to_string(), i18n::t("气泡").to_string()),
+                    ("flat".to_string(), i18n::t("平铺").to_string()),
+                ],
+                self.message_layout.clone(),
+            ),
         }
+    }
+
+    fn apply_setting_select(
+        &mut self,
+        kind: SettingsSelectKind,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match kind {
+            SettingsSelectKind::Language => {
+                if i18n::lang() != value {
+                    i18n::set_lang(value);
+                    save_ui_value("lang", serde_json::json!(value));
+                }
+            }
+            SettingsSelectKind::FontSize => {
+                if let Ok(size) = value.parse::<u32>() {
+                    self.chat_font_size = size;
+                    save_ui_value("chat_font_size", serde_json::json!(size));
+                    self.wecom_scroller
+                        .update(cx, |state, cx| state.remeasure(cx));
+                }
+            }
+            SettingsSelectKind::Motion => {
+                self.motion = match value {
+                    "quiet" => "quiet",
+                    "lively" => "lively",
+                    _ => "normal",
+                };
+                theme::set_motion(self.motion);
+                save_ui_value("motion", serde_json::json!(value));
+            }
+            SettingsSelectKind::MessageLayout => {
+                self.message_layout = value.to_string();
+                save_ui_value("message_layout", serde_json::json!(value));
+                self.wecom_scroller
+                    .update(cx, |state, cx| state.remeasure(cx));
+            }
+        }
+        self.settings_dropdown = None;
+        self.settings_focus.clone().focus(window, cx);
+        cx.notify();
+    }
+
+    fn language_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = if i18n::lang() == "en" {
+            "English".to_string()
+        } else {
+            "简体中文".to_string()
+        };
         settings_row(i18n::t("界面语言").to_string(), None)
-            .child(controls)
+            .child(self.settings_select_box(
+                "settings-select-lang",
+                current,
+                SettingsSelectKind::Language,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -7829,125 +7980,47 @@ impl PilotApp {
     }
 
     fn font_size_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut controls = div().flex().items_center().gap(px(4.));
-        for size in [12u32, 13, 14, 16, 18] {
-            let active = self.chat_font_size == size;
-            controls = controls.child(
-                settings_button(
-                    SharedString::from(format!("chat-font-{size}")),
-                    if active {
-                        format!("{size} ✓")
-                    } else {
-                        size.to_string()
-                    },
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.chat_font_size = size;
-                    save_ui_value("chat_font_size", serde_json::json!(size));
-                    this.wecom_scroller
-                        .update(cx, |state, cx| state.remeasure(cx));
-                    cx.notify();
-                })),
-            );
-        }
         settings_row(
             i18n::t("字号大小").to_string(),
             Some(i18n::t("仅影响会话内容").to_string()),
         )
-        .child(controls)
+        .child(self.settings_select_box(
+            "settings-select-font",
+            format!("{} px", self.chat_font_size),
+            SettingsSelectKind::FontSize,
+            cx,
+        ))
         .into_any_element()
     }
 
     fn message_layout_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let wechat = wecom_theme::active();
         let current = if self.message_layout == "flat" {
             i18n::t("平铺")
         } else {
             i18n::t("气泡")
         };
-        let trigger = div()
-            .id("message-layout-select")
-            .h(px(30.))
-            .min_w(px(112.))
-            .px(px(10.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if wechat {
-                wecom_theme::panel_divider()
-            } else {
-                theme::edge()
-            })
-            .bg(if wechat {
-                wecom_theme::chip_bg()
-            } else {
-                theme::card()
-            })
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.))
-            .cursor_pointer()
-            .hover(|style| style.opacity(0.9))
-            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
-                if let gpui::ClickEvent::Mouse(mouse) = event {
-                    this.layout_menu_pos = Some(mouse.up.position);
-                }
-                this.layout_menu_open = true;
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
-                    } else {
-                        theme::FONT_FAMILY
-                    })
-                    .text_size(px(13.))
-                    .line_height(px(18.))
-                    .text_color(if wechat {
-                        wecom_theme::chat_title()
-                    } else {
-                        theme::ink()
-                    })
-                    .child(current),
-            )
-            .child(icons::icon(
-                icons::Icon::ChevronDown,
-                14.,
-                if wechat {
-                    wecom_theme::panel_text()
-                } else {
-                    theme::ink_secondary()
-                },
-            ));
         settings_row(
             i18n::t("消息布局").to_string(),
             Some(i18n::t("气泡或平铺").to_string()),
         )
-        .child(trigger)
+        .child(self.settings_select_box(
+            "message-layout-select",
+            current,
+            SettingsSelectKind::MessageLayout,
+            cx,
+        ))
         .into_any_element()
     }
 
-    /// 应用消息布局（下拉菜单选项）。
-    fn apply_message_layout(&mut self, value: &str, cx: &mut Context<Self>) {
-        self.message_layout = value.to_string();
-        save_ui_value("message_layout", serde_json::json!(value));
-        self.layout_menu_open = false;
-        self.wecom_scroller
-            .update(cx, |state, cx| state.remeasure(cx));
-        cx.notify();
-    }
-
-    /// 消息布局下拉浮层（按点击位置锚定，点外面或 Esc 关闭）。
+    /// 设置下拉浮层（按点击位置锚定，点外面或 Esc 关闭）。
     fn settings_dropdown_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        if !self.layout_menu_open {
-            return None;
-        }
-        let position = self.layout_menu_pos?;
+        let dropdown = self.settings_dropdown?;
+        let position = dropdown.position;
+        let kind = dropdown.kind;
         let wechat = wecom_theme::active();
-        let current = self.message_layout.clone();
+        let (options, current) = self.settings_select_options(kind);
         let mut menu = div()
-            .w(px(148.))
+            .w(px(160.))
             .rounded(px(8.))
             .border_1()
             .border_color(if wechat {
@@ -7971,11 +8044,12 @@ impl PilotApp {
                     cx.stop_propagation();
                 }),
             );
-        for (value, label) in [("bubble", "气泡"), ("flat", "平铺")] {
+        for (index, (value, label)) in options.into_iter().enumerate() {
             let active = current == value;
+            let option_value = value.clone();
             menu = menu.child(
                 div()
-                    .id(SharedString::from(format!("layout-option-{value}")))
+                    .id(SharedString::from(format!("settings-option-{index}")))
                     .h(px(28.))
                     .px(px(8.))
                     .rounded(px(6.))
@@ -7984,8 +8058,8 @@ impl PilotApp {
                     .gap(px(8.))
                     .cursor_pointer()
                     .hover(|style| style.bg(theme::hover()))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.apply_message_layout(value, cx);
+                    .on_click(cx.listener(move |this, _event, window, cx| {
+                        this.apply_setting_select(kind, &option_value, window, cx);
                     }))
                     .child(icons::icon(
                         icons::Icon::Check,
@@ -8014,7 +8088,7 @@ impl PilotApp {
                             } else {
                                 theme::ink()
                             })
-                            .child(i18n::t(label)),
+                            .child(SharedString::from(label)),
                     ),
             );
         }
@@ -8026,7 +8100,7 @@ impl PilotApp {
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _event, _window, cx| {
-                            this.layout_menu_open = false;
+                            this.settings_dropdown = None;
                             cx.notify();
                         }),
                     )
@@ -8042,28 +8116,18 @@ impl PilotApp {
     }
 
     fn motion_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut controls = div().flex().items_center().gap(px(4.));
-        for (level, label) in [("quiet", "安静"), ("normal", "标准"), ("lively", "活泼")] {
-            let active = self.motion == level;
-            controls = controls.child(
-                settings_button(
-                    SharedString::from(format!("motion-{level}")),
-                    if active {
-                        format!("{} ✓", i18n::t(label))
-                    } else {
-                        i18n::t(label).to_string()
-                    },
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.motion = level;
-                    theme::set_motion(level);
-                    save_ui_value("motion", serde_json::json!(level));
-                    cx.notify();
-                })),
-            );
-        }
+        let current = match self.motion {
+            "quiet" => i18n::t("安静"),
+            "lively" => i18n::t("活泼"),
+            _ => i18n::t("标准"),
+        };
         settings_row(i18n::t("动效").to_string(), None)
-            .child(controls)
+            .child(self.settings_select_box(
+                "settings-select-motion",
+                current,
+                SettingsSelectKind::Motion,
+                cx,
+            ))
             .into_any_element()
     }
 
