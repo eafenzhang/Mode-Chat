@@ -1334,9 +1334,13 @@ impl RpiTurnOps {
             workspace,
             identity,
         ));
-        extra_tools.extend(crate::browser_tools::tools());
-        extra_tools.extend(crate::computer_tools::tools());
-        extra_tools.extend(crate::cua_tree::tools());
+        if crate::tool_scope::allowed(crate::tool_scope::Family::Browser, identity) {
+            extra_tools.extend(crate::browser_tools::tools(identity));
+        }
+        if crate::tool_scope::allowed(crate::tool_scope::Family::Computer, identity) {
+            extra_tools.extend(crate::computer_tools::tools(identity));
+            extra_tools.extend(crate::cua_tree::tools(identity));
+        }
         let options = crate::rpi_engine::OpenOptions {
             workspace: PathBuf::from(workspace),
             resume_path: resume.filter(|path| Path::new(path).is_file()),

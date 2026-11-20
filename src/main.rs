@@ -41,6 +41,7 @@ mod automation_tools;
 mod browser_tools;
 mod computer_tools;
 mod cua_tree;
+mod tool_scope;
 mod update;
 // 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
 #[allow(dead_code)]
@@ -2827,6 +2828,11 @@ struct PilotApp {
     settings_dropdown: Option<SettingsDropdownState>,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
+    /// 浏览器/电脑控制的使用范围（prefs.json，设置页可改）。
+    browser_enabled: bool,
+    computer_enabled: bool,
+    browser_disabled_bots: HashSet<String>,
+    computer_disabled_bots: HashSet<String>,
     /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
     memory_group: Option<String>,
     /// 会话运行状态缓存（侧栏状态点与错误通知去重）。
@@ -3222,6 +3228,14 @@ impl PilotApp {
             theme_pref,
             settings_dropdown: None,
             memory_review_enabled: crate::memory_review::enabled(),
+            browser_enabled: crate::tool_scope::enabled(crate::tool_scope::Family::Browser),
+            computer_enabled: crate::tool_scope::enabled(crate::tool_scope::Family::Computer),
+            browser_disabled_bots: crate::tool_scope::disabled_bots(
+                crate::tool_scope::Family::Browser,
+            ),
+            computer_disabled_bots: crate::tool_scope::disabled_bots(
+                crate::tool_scope::Family::Computer,
+            ),
             memory_group: None,
             runtime_status: HashMap::new(),
             mirror_reply_sessions: HashSet::new(),
@@ -7257,6 +7271,16 @@ impl PilotApp {
         }
     }
 
+    /// 设置页改完「使用范围」后同步内存态（工具执行时另查 prefs）。
+    fn refresh_tool_scope(&mut self) {
+        self.browser_enabled = crate::tool_scope::enabled(crate::tool_scope::Family::Browser);
+        self.computer_enabled = crate::tool_scope::enabled(crate::tool_scope::Family::Computer);
+        self.browser_disabled_bots =
+            crate::tool_scope::disabled_bots(crate::tool_scope::Family::Browser);
+        self.computer_disabled_bots =
+            crate::tool_scope::disabled_bots(crate::tool_scope::Family::Computer);
+    }
+
     fn settings_page_browser(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let mut body = settings_page_body("浏览器");
         let status = crate::browser_tools::browser_path()
@@ -7326,7 +7350,25 @@ impl PilotApp {
                                 .detach();
                             })),
                     ),
-            );
+            )
+            .child(settings_section(i18n::t("使用范围")))
+            .child(settings_tool_scope_section(
+                crate::tool_scope::Family::Browser,
+                self.browser_enabled,
+                &self.browser_disabled_bots,
+                &self.roster.bots,
+                ToolScopeText {
+                    master_id: "browser-scope-master",
+                    per_bot_prefix: "browser-scope-bot",
+                    title: i18n::t("允许 Bot 使用浏览器控制"),
+                    detail: i18n::t("关闭后已打开的会话立即停用；重新开启对新会话生效"),
+                    bot_detail: i18n::t("允许这个 Bot 使用浏览器控制"),
+                },
+                cx,
+            ))
+            .child(settings_note(i18n::t(
+                "外部 ACP 引擎使用其自带工具，不受这里限制。",
+            )));
         body.into_any_element()
     }
 
@@ -7354,7 +7396,25 @@ impl PilotApp {
                             }
                         })),
                 ),
-            );
+            )
+            .child(settings_section(i18n::t("使用范围")))
+            .child(settings_tool_scope_section(
+                crate::tool_scope::Family::Computer,
+                self.computer_enabled,
+                &self.computer_disabled_bots,
+                &self.roster.bots,
+                ToolScopeText {
+                    master_id: "computer-scope-master",
+                    per_bot_prefix: "computer-scope-bot",
+                    title: i18n::t("允许 Bot 操控这台电脑"),
+                    detail: i18n::t("关闭后已打开的会话立即停用；重新开启对新会话生效"),
+                    bot_detail: i18n::t("允许这个 Bot 操控这台电脑"),
+                },
+                cx,
+            ))
+            .child(settings_note(i18n::t(
+                "包括截屏、鼠标键盘、窗口、剪贴板与 UI 自动化；外部 ACP 引擎不受这里限制。",
+            )));
         body.into_any_element()
     }
 
@@ -18201,6 +18261,87 @@ fn settings_note(text: impl Into<SharedString>) -> impl IntoElement {
             theme::ink_secondary()
         })
         .child(text.into())
+}
+
+/// 浏览器/电脑控制「使用范围」：总开关 + 每个 Bot 一行。
+struct ToolScopeText {
+    master_id: &'static str,
+    per_bot_prefix: &'static str,
+    title: &'static str,
+    detail: &'static str,
+    bot_detail: &'static str,
+}
+
+fn settings_tool_scope_section(
+    family: crate::tool_scope::Family,
+    enabled: bool,
+    disabled: &HashSet<String>,
+    bots: &[data::Bot],
+    text: ToolScopeText,
+    cx: &mut Context<PilotApp>,
+) -> gpui::AnyElement {
+    let ToolScopeText {
+        master_id,
+        per_bot_prefix,
+        title,
+        detail,
+        bot_detail,
+    } = text;
+    let row_hover = if wecom_theme::active() {
+        wecom_theme::list_hover()
+    } else {
+        theme::hover()
+    };
+    let mut rows: Vec<gpui::AnyElement> = Vec::new();
+    // 整行可点：自绘 switch 的命中区在小窗口下与绘制位置有偏差，行级点击更稳。
+    rows.push(
+        settings_row(title.to_string(), Some(detail.to_string()))
+            .id(SharedString::from(format!("{master_id}-row")))
+            .cursor_pointer()
+            .hover(move |style| style.bg(row_hover))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                let next = !crate::tool_scope::enabled(family);
+                match crate::tool_scope::set_enabled(family, next) {
+                    Ok(()) => {
+                        this.refresh_tool_scope();
+                        cx.notify();
+                    }
+                    Err(message) => this.toast(message, cx),
+                }
+            }))
+            .child(switch(master_id, enabled))
+            .into_any_element(),
+    );
+    if enabled {
+        if bots.is_empty() {
+            rows.push(settings_empty(i18n::t("还没有 Bot")).into_any_element());
+        }
+        for bot in bots {
+            let bot_id = bot.id.clone();
+            let allowed = !disabled.contains(&bot.id);
+            rows.push(
+                settings_row(bot.name.clone(), Some(bot_detail.to_string()))
+                    .id(SharedString::from(format!("{per_bot_prefix}-row-{}", bot.id)))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(row_hover))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        match crate::tool_scope::toggle_bot(family, &bot_id) {
+                            Ok(_) => {
+                                this.refresh_tool_scope();
+                                cx.notify();
+                            }
+                            Err(message) => this.toast(message, cx),
+                        }
+                    }))
+                    .child(switch(
+                        SharedString::from(format!("{per_bot_prefix}-{}", bot.id)),
+                        allowed,
+                    ))
+                    .into_any_element(),
+            );
+        }
+    }
+    settings_group(rows).into_any_element()
 }
 
 /// 设置页错误说明（12/16 危险色；写路径失败不弹死框）。

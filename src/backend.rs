@@ -284,9 +284,15 @@ async fn open_rpi_session(
         workspace,
         identity,
     ));
-    extra_tools.extend(crate::browser_tools::tools());
-    extra_tools.extend(crate::computer_tools::tools());
-    extra_tools.extend(crate::cua_tree::tools());
+    // 记忆回顾是隐藏的 JSON 任务，不给控制类工具。
+    let controls = !key.starts_with("memory-review:");
+    if controls && crate::tool_scope::allowed(crate::tool_scope::Family::Browser, identity) {
+        extra_tools.extend(crate::browser_tools::tools(identity));
+    }
+    if controls && crate::tool_scope::allowed(crate::tool_scope::Family::Computer, identity) {
+        extra_tools.extend(crate::computer_tools::tools(identity));
+        extra_tools.extend(crate::cua_tree::tools(identity));
+    }
     let options = crate::rpi_engine::OpenOptions {
         workspace: workspace.into(),
         resume_path: resume.filter(|path| std::path::Path::new(path).is_file()),
@@ -864,9 +870,19 @@ async fn run_agent(
                             &workspace,
                             &identity,
                         ));
-                        extra_tools.extend(crate::browser_tools::tools());
-                        extra_tools.extend(crate::computer_tools::tools());
-                        extra_tools.extend(crate::cua_tree::tools());
+                        if crate::tool_scope::allowed(
+                            crate::tool_scope::Family::Browser,
+                            &identity,
+                        ) {
+                            extra_tools.extend(crate::browser_tools::tools(&identity));
+                        }
+                        if crate::tool_scope::allowed(
+                            crate::tool_scope::Family::Computer,
+                            &identity,
+                        ) {
+                            extra_tools.extend(crate::computer_tools::tools(&identity));
+                            extra_tools.extend(crate::cua_tree::tools(&identity));
+                        }
                         let options = crate::rpi_engine::OpenOptions {
                             workspace: workspace.clone().into(),
                             resume_path,

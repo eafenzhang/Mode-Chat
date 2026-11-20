@@ -245,9 +245,17 @@ enum Action {
 struct UiTool {
     tool: Tool,
     action: Action,
+    /// 会话身份；随电脑操控的「使用范围」开关。
+    scope: String,
 }
 
-fn define(name: &str, description: &str, parameters: Value, action: Action) -> HarnessTool {
+fn define(
+    scope: &str,
+    name: &str,
+    description: &str,
+    parameters: Value,
+    action: Action,
+) -> HarnessTool {
     HarnessTool::new(Arc::new(UiTool {
         tool: Tool {
             name: name.to_string(),
@@ -256,19 +264,23 @@ fn define(name: &str, description: &str, parameters: Value, action: Action) -> H
             constrained_sampling: None,
         },
         action,
+        scope: scope.to_string(),
     }))
 }
 
-/// UI Automation 工具集。
-pub fn tools() -> Vec<HarnessTool> {
+/// UI Automation 工具集；`identity` 用于按 Bot 判断使用范围。
+pub fn tools(identity: &str) -> Vec<HarnessTool> {
+    let scope = identity;
     vec![
         define(
+            scope,
             "computer_ui_tree",
             "读取桌面/前台窗口的 UI Automation 元素树（名称、类型、AutomationId、位置）。",
             json!({"type": "object", "properties": {}}),
             Action::Tree,
         ),
         define(
+            scope,
             "computer_ui_click",
             "按控件名称（包含匹配）点击界面元素；优先 Invoke/SelectionItem，失败时点中心。",
             json!({
@@ -279,6 +291,7 @@ pub fn tools() -> Vec<HarnessTool> {
             Action::Click,
         ),
         define(
+            scope,
             "computer_ui_read",
             "按控件名称读取当前值（输入框/文本控件）。",
             json!({
@@ -289,6 +302,7 @@ pub fn tools() -> Vec<HarnessTool> {
             Action::Read,
         ),
         define(
+            scope,
             "computer_ui_set_value",
             "按控件名称写入值（输入框）。",
             json!({
@@ -321,6 +335,11 @@ impl AgentTool for UiTool {
         _signal: CancellationToken,
         _on_update: Arc<dyn Fn(rpi_agent::ToolResultPartial) + Send + Sync>,
     ) -> Result<AgentToolResult, rpi_agent::AgentError> {
+        if !crate::tool_scope::allowed(crate::tool_scope::Family::Computer, &self.scope) {
+            return Err(rpi_agent::AgentError::Tool(crate::tool_scope::denial(
+                crate::tool_scope::Family::Computer,
+            )));
+        }
         let text = (|| -> Result<String, String> {
             match self.action {
                 Action::Tree => tree(),
