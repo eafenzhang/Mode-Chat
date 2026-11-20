@@ -1,0 +1,15 @@
+[package]
+name = "connectors-service"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "连接器目录 + 启用状态 + MCP server 解析（壳与 GPUI 共用）"
+
+[lib]
+name = "connectors_service"
+path = "src/lib.rs"
+
+[dependencies]
+atomic-file = { path = "../atomic-file" }
+serde.workspace = true
+serde_json.workspace = true

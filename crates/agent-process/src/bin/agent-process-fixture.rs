@@ -1,0 +1,1607 @@
+//! 测试用 Agent 子进程：在 stdin/stdout 上说 Mode Protocol 的最小子集。
+//!
+//! 只由 `tests/process.rs` 通过 `CARGO_BIN_EXE_agent-process-fixture` 拉起。
+//! 模式：
+//! - 默认：逐行回 `{id, result:{method}}`，EOF 后退出；
+//! - `exit-immediately`：立即退出（用于验证启动即关闭）；
+//! - `stubborn`：EOF 后继续存活（用于验证强杀）。
+
+use std::io::{BufRead, Write};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+
+/// v4 `conversationSnapshot` 的最小合法形状。
+fn minimal_v4_snapshot() -> Value {
+    json!({
+        "protocolVersion": 1,
+        "sessionId": "sess-1",
+        "logEpoch": "epoch-1",
+        "seq": 1,
+        "revision": 0,
+        "control": {
+            "phase": "draft",
+            "sessionEnded": false,
+            "canStop": false,
+            "stopState": "idle",
+            "stopTargetKind": "unknown",
+            "activeWorks": [],
+            "lastError": null,
+            "apiRetry": null
+        },
+        "availability": {
+            "fork": { "allowed": true },
+            "compact": { "allowed": true },
+            "switchModelConfig": { "allowed": true },
+            "setFollowupMode": { "allowed": true },
+            "queueEdit": { "allowed": true },
+            "sendQueuedNow": { "allowed": true },
+            "pauseGoal": { "allowed": true },
+            "resumeGoal": { "allowed": true }
+        },
+        "inputRouting": { "mode": "startNow" },
+        "meta": { "title": "", "titleSource": "default" },
+        "config": {
+            "provider": "zai",
+            "model": "glm-4.6",
+            "thought": "low",
+            "thoughtLevels": [],
+            "followupMode": "queue",
+            "mode": "build"
+        },
+        "modelTransition": null,
+        "usage": {
+            "contextWindow": null,
+            "cumulative": {
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+            }
+        },
+        "queue": { "items": [], "autoDrain": true },
+        "pendingInteractions": [],
+        "pendingCommands": [],
+        "backgroundWorks": [],
+        "goal": null,
+        "plan": null,
+        "workspaceHookAdmission": null,
+        "rows": { "window": [], "totalCount": 0, "firstRowId": null }
+    })
+}
+
+fn append_log(text: &str) {
+    if let Ok(log_path) = std::env::var("AGENT_FIXTURE_FRAME_LOG") {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+        {
+            let _ = writeln!(file, "{text}");
+        }
+    }
+}
+
+fn write_notification(stdout: &mut std::io::Stdout, params: Value) {
+    let message = json!({ "method": "startup/storageState", "params": params });
+    let _ = writeln!(stdout, "{message}");
+    let _ = stdout.flush();
+}
+
+fn write_reverse_preferences(stdout: &mut std::io::Stdout, invalid_scope: bool) {
+    let scope = if invalid_scope {
+        "bogus"
+    } else {
+        "user-execution"
+    };
+    let request = json!({
+        "id": "server-1",
+        "method": "session/requestRuntimePreferences",
+        "params": { "sessionId": "sess-1", "scope": scope }
+    });
+    let _ = writeln!(stdout, "{request}");
+    let _ = stdout.flush();
+}
+
+fn write_official_mcp_auth_headers(stdout: &mut std::io::Stdout) {
+    let request = json!({
+        "id": "server-1",
+        "method": "interaction/requestOfficialMcpAuthHeaders",
+        "params": {
+            "requestId": "req-1",
+            "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+            "pluginId": "official-zai",
+            "mcpKey": "mcp-key-1",
+            "targetOrigin": "https://zcode.z.ai"
+        }
+    });
+    let _ = writeln!(stdout, "{request}");
+    let _ = stdout.flush();
+}
+
+fn write_provider_runtime_headers(stdout: &mut std::io::Stdout, invalid: bool) {
+    let model_selection = if invalid {
+        json!({ "providerId": "p", "bogusField": true })
+    } else {
+        json!({ "providerId": "zai", "modelId": "GLM-5.3" })
+    };
+    let request = json!({
+        "id": "server-1",
+        "method": "interaction/requestProviderRuntimeHeaders",
+        "params": {
+            "requestId": "req-1",
+            "sessionId": "sess-1",
+            "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+            "modelSelection": model_selection,
+            "providerId": "zai",
+            "accountAccess": {
+                "type": "zhipu-account",
+                "accountType": "zai",
+                "mode": "start-plan",
+                "entitled": true
+            },
+            "reason": "model-request"
+        }
+    });
+    let _ = writeln!(stdout, "{request}");
+    let _ = stdout.flush();
+}
+
+/// `session/read` 与三个 setter 共用的最小合法快照。
+fn minimal_snapshot() -> Value {
+    json!({
+        "protocol": { "name": "Mode Protocol", "version": 1 },
+        "session": {
+            "sessionId": "sess-1",
+            "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+            "sessionKind": "interactive",
+            "title": "fixture",
+            "mode": "build",
+            "status": "idle",
+            "createdAt": 1,
+            "updatedAt": 2
+        },
+        "settings": {
+            "model": { "available": [] },
+            "thoughtLevel": { "enabled": false, "available": [] },
+            "mode": { "current": "build" }
+        },
+        "projection": {
+            "sessionId": "sess-1",
+            "status": "idle",
+            "mode": "build",
+            "turnCount": 0,
+            "totalTokenCount": 0,
+            "contextUsed": 0,
+            "contextWindow": 128000,
+            "pendingPermissions": [],
+            "activeToolCalls": [],
+            "backgroundJobs": []
+        },
+        "runtime": { "eventSeq": 0, "stateRevision": 0, "pendingRequestIds": [] },
+        "messages": []
+    })
+}
+
+fn unrecognized_params_error(id: Value, keys: &[&str]) -> Value {
+    let keys: Vec<&str> = keys.to_vec();
+    let issues = json!([{ "code": "unrecognized_keys", "keys": keys }]).to_string();
+    json!({
+        "id": id,
+        "error": {
+            "code": -32602,
+            "message": "Invalid params",
+            "data": { "message": issues }
+        }
+    })
+}
+
+fn main() {
+    let mode = std::env::args().nth(1).unwrap_or_default();
+    if mode == "exit-immediately" {
+        return;
+    }
+
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    // MCP 兼容重试夹具：首次请求按旧 Agent 语义拒绝新增字段。
+    let mut mcp_rejected = false;
+    let mut session_create_rejected = false;
+    let mut session_send_rejected = false;
+    if mode == "storage-ready" {
+        write_notification(
+            &mut stdout,
+            json!({
+                "schemaVersion": 1, "attemptId": "attempt-1", "sequence": 1,
+                "databaseId": "db-1", "databaseKind": "session",
+                "phase": "checking", "elapsedMs": 1.0
+            }),
+        );
+        write_notification(
+            &mut stdout,
+            json!({
+                "schemaVersion": 1, "attemptId": "attempt-1", "sequence": 2,
+                "databaseId": "db-1", "databaseKind": "session",
+                "phase": "ready", "elapsedMs": 2.0
+            }),
+        );
+    }
+    if mode == "storage-failed" {
+        write_notification(
+            &mut stdout,
+            json!({
+                "schemaVersion": 1, "attemptId": "attempt-1", "sequence": 1,
+                "databaseId": "db-1", "databaseKind": "session",
+                "phase": "failed", "elapsedMs": 1.0, "errorCode": "sql_failed"
+            }),
+        );
+    }
+    if mode == "reverse-runtime-preferences" || mode == "reverse-runtime-preferences-invalid" {
+        write_reverse_preferences(&mut stdout, mode.ends_with("invalid"));
+    }
+    if mode == "reverse-provider-runtime-headers"
+        || mode == "reverse-provider-runtime-headers-invalid"
+    {
+        write_provider_runtime_headers(&mut stdout, mode.ends_with("invalid"));
+    }
+    if mode == "reverse-official-mcp-headers" {
+        write_official_mcp_auth_headers(&mut stdout);
+    }
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(request) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let request_params = request.get("params");
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        // 反向请求的应答：记下来给测试断言，然后继续等后续请求。
+        if method.is_empty()
+            && request.get("id").and_then(Value::as_str) == Some("server-1")
+            && (request.get("result").is_some() || request.get("error").is_some())
+        {
+            append_log(&format!("reply\t{request}"));
+            continue;
+        }
+        if mode == "reverse-on-trigger" && method == "test/trigger" {
+            write_reverse_preferences(&mut stdout, false);
+        }
+        eprintln!("handled:{method}");
+        let frame_line = format!(
+            "frame\t{method}\t{}",
+            request.get("params").cloned().unwrap_or(Value::Null)
+        );
+        eprintln!("{frame_line}");
+        append_log(&frame_line);
+        if mode == "session-events-stream" && method == "session/subscribe" {
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            let event = |event_id: &str, session_id: &str| {
+                json!({
+                    "eventId": event_id,
+                    "sessionId": session_id,
+                    "seq": 0,
+                    "timestamp": 1,
+                    "type": "session.updated",
+                    "payload": {}
+                })
+            };
+            let reply = json!({
+                "id": id,
+                "result": {
+                    "sessionId": "sess-1",
+                    "eventSeq": 0,
+                    "events": [event("ev-1", "sess-1"), event("ev-2", "sess-1")]
+                }
+            });
+            let _ = writeln!(stdout, "{reply}");
+            let _ = stdout.flush();
+            std::thread::sleep(Duration::from_millis(50));
+            // 重复 id（应被丢弃）、新事件（应补 seq）、其它会话（应被过滤）。
+            for live in [
+                event("ev-2", "sess-1"),
+                event("ev-3", "sess-1"),
+                event("ev-other", "sess-2"),
+            ] {
+                let notification = json!({ "method": "session/event", "params": live });
+                let _ = writeln!(stdout, "{notification}");
+            }
+            let _ = stdout.flush();
+            continue;
+        }
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let reply = if method == "workspace/hooks/trustGrant" {
+            match mode.as_str() {
+                "error-grant" => json!({
+                    "id": id,
+                    "error": { "code": -32000, "message": "boom" }
+                }),
+                "bad-grant" => json!({ "id": id, "result": { "accepted": "yes" } }),
+                _ => json!({ "id": id, "result": { "accepted": true } }),
+            }
+        } else if method == "provider/updateAccountConfig" {
+            let params = request.get("params").cloned().unwrap_or(Value::Null);
+            let revision = params
+                .get("revision")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let provider_count = params
+                .get("providers")
+                .and_then(Value::as_object)
+                .map(|providers| providers.len())
+                .unwrap_or(0);
+            let received = if mode == "bad-provider-revision" {
+                "different-revision".to_string()
+            } else {
+                revision
+            };
+            json!({
+                "id": id,
+                "result": {
+                    "receivedRevision": received,
+                    "providerCount": provider_count,
+                    "status": "received"
+                }
+            })
+        } else if method == "session/list" {
+            let mut session = json!({
+                "sessionId": "sess-1",
+                "workspace": {
+                    "workspacePath": "/ws/fixture",
+                    "workspaceKey": "/ws/fixture"
+                },
+                "sessionKind": "interactive",
+                "title": "fixture",
+                "mode": "build",
+                "status": "idle",
+                "createdAt": 1,
+                "updatedAt": 2
+            });
+            if mode == "bad-session-list" {
+                session["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": { "sessions": [session] } })
+        } else if method == "session/events" {
+            let mut event = json!({
+                "eventId": "evt-1",
+                "sessionId": "sess-1",
+                "seq": 11,
+                "timestamp": 1,
+                "type": "session.updated",
+                "payload": {}
+            });
+            if mode == "bad-session-events" {
+                event["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": { "events": [event] } })
+        } else if method == "session/subagents" {
+            let mut result = json!({
+                "revision": 3,
+                "childSessionIds": ["sess-2"],
+                "running": [{
+                    "childSessionId": "sess-2",
+                    "subagentType": "explore",
+                    "title": "运行中",
+                    "status": "running"
+                }],
+                "ended": { "total": 0, "items": [] }
+            });
+            if mode == "bad-session-subagents" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "session/messages" {
+            let mut message = json!({
+                "info": {
+                    "messageId": "msg-1",
+                    "sessionId": "sess-1",
+                    "role": "user",
+                    "time": { "created": 1 },
+                    "agent": "mode"
+                },
+                "parts": [{
+                    "partId": "part-1",
+                    "sessionId": "sess-1",
+                    "messageId": "msg-1",
+                    "type": "text",
+                    "text": "hi"
+                }]
+            });
+            if mode == "bad-session-messages" {
+                message["info"]["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": { "messages": [message] } })
+        } else if method == "v4/conversation/subscribe" {
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            let topic = request
+                .get("params")
+                .and_then(|params| params.get("topic"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if topic.starts_with("sessions-index/") {
+                // sessions-index ack 与 conversation 同形（不带 openTiming）。
+                let reply = json!({
+                    "id": id,
+                    "result": {
+                        "ack": {
+                            "subscriptionId": "sub-1",
+                            "mode": "snapshot",
+                            "logEpoch": "epoch-1"
+                        }
+                    }
+                });
+                let _ = writeln!(stdout, "{reply}");
+                let _ = stdout.flush();
+                std::thread::sleep(Duration::from_millis(50));
+                let frame = json!({
+                    "wireVersion": 3,
+                    "kind": "complete",
+                    "deliveryKind": "initial",
+                    "logicalFrameId": "si-1",
+                    "logicalFrameOrdinal": 1,
+                    "topic": topic,
+                    "subscriptionId": "sub-1",
+                    "frame": {
+                        "topic": topic,
+                        "subscriptionId": "sub-1",
+                        "fromSeq": 0,
+                        "toSeq": 1,
+                        "sentAt": 1,
+                        "payload": {
+                            "kind": "snapshot",
+                            "snapshot": {
+                                "protocolVersion": 1,
+                                "workspaceId": "ws-1",
+                                "logEpoch": "epoch-1",
+                                "sessions": []
+                            }
+                        }
+                    }
+                });
+                let notification = json!({ "method": "v4/conversation/frame", "params": frame });
+                let _ = writeln!(stdout, "{notification}");
+                let _ = stdout.flush();
+                continue;
+            }
+            if topic.starts_with("workspace-config/") {
+                let reply = json!({
+                    "id": id,
+                    "result": {
+                        "ack": {
+                            "subscriptionId": "sub-1",
+                            "mode": "snapshot",
+                            "logEpoch": "epoch-1"
+                        }
+                    }
+                });
+                let _ = writeln!(stdout, "{reply}");
+                let _ = stdout.flush();
+                std::thread::sleep(Duration::from_millis(50));
+                let frame = json!({
+                    "wireVersion": 3,
+                    "kind": "complete",
+                    "deliveryKind": "initial",
+                    "logicalFrameId": "wc-1",
+                    "logicalFrameOrdinal": 1,
+                    "topic": topic,
+                    "subscriptionId": "sub-1",
+                    "frame": {
+                        "topic": topic,
+                        "subscriptionId": "sub-1",
+                        "fromSeq": 0,
+                        "toSeq": 1,
+                        "sentAt": 1,
+                        "payload": {
+                            "kind": "snapshot",
+                            "snapshot": {
+                                "protocolVersion": 1,
+                                "workspaceId": "ws-1",
+                                "logEpoch": "epoch-1",
+                                "config": { "configOptions": [], "slashCommands": [] }
+                            }
+                        }
+                    }
+                });
+                let notification = json!({ "method": "v4/conversation/frame", "params": frame });
+                let _ = writeln!(stdout, "{notification}");
+                let _ = stdout.flush();
+                continue;
+            }
+            let reply = json!({
+                "id": id,
+                "result": {
+                    "ack": {
+                        "subscriptionId": "sub-1",
+                        "mode": "snapshot",
+                        "logEpoch": "epoch-1",
+                        "openTiming": { "version": 1 }
+                    }
+                }
+            });
+            let _ = writeln!(stdout, "{reply}");
+            let _ = stdout.flush();
+            std::thread::sleep(Duration::from_millis(50));
+            let complete = |subscription_id: &str, frame_id: &str| {
+                json!({
+                    "wireVersion": 3,
+                    "kind": "complete",
+                    "deliveryKind": "initial",
+                    "logicalFrameId": frame_id,
+                    "logicalFrameOrdinal": 1,
+                    "topic": "conversation/sess-1",
+                    "subscriptionId": subscription_id,
+                    "frame": {
+                        "topic": "conversation/sess-1",
+                        "subscriptionId": subscription_id,
+                        "fromSeq": 0,
+                        "toSeq": 1,
+                        "sentAt": 1,
+                        "payload": { "kind": "snapshot", "snapshot": minimal_v4_snapshot() }
+                    }
+                })
+            };
+            let deltas = json!({
+                "wireVersion": 3,
+                "kind": "complete",
+                "deliveryKind": "online",
+                "logicalFrameId": "f3",
+                "logicalFrameOrdinal": 3,
+                "topic": "conversation/sess-1",
+                "subscriptionId": "sub-1",
+                "frame": {
+                    "topic": "conversation/sess-1",
+                    "subscriptionId": "sub-1",
+                    "fromSeq": 1,
+                    "toSeq": 2,
+                    "sentAt": 2,
+                    "payload": {
+                        "kind": "deltas",
+                        "deltas": [{ "op": "row.delta", "rowId": 1, "path": "text", "append": "x" }]
+                    }
+                }
+            });
+            let fragment = json!({
+                "wireVersion": 3,
+                "kind": "fragment",
+                "deliveryKind": "online",
+                "logicalFrameId": "f2",
+                "logicalFrameOrdinal": 2,
+                "topic": "conversation/sess-1",
+                "subscriptionId": "sub-1",
+                "fragmentIndex": 0,
+                "fragmentCount": 1,
+                "logicalBytes": 10,
+                "checksum": { "algorithm": "crc32", "value": "00000000" },
+                "dataBase64": "e30="
+            });
+            for params in [
+                complete("sub-1", "f1"),
+                complete("sub-other", "f9"),
+                deltas,
+                fragment,
+            ] {
+                let notification = json!({ "method": "v4/conversation/frame", "params": params });
+                let _ = writeln!(stdout, "{notification}");
+            }
+            let _ = stdout.flush();
+            continue;
+        } else if method == "runtime/capabilities" {
+            json!({
+                "id": id,
+                "result": {
+                    "independentPlanState": mode != "runtime-capabilities-unsupported"
+                }
+            })
+        } else if method == "v4/command" {
+            let command_id = request
+                .get("params")
+                .and_then(|params| params.get("commandId"))
+                .and_then(Value::as_str)
+                .unwrap_or("cmd-1")
+                .to_string();
+            let rejected = mode == "v4-command-rejected";
+            json!({
+                "id": id,
+                "result": if rejected {
+                    json!({
+                        "commandId": command_id,
+                        "status": "rejected",
+                        "reasonCode": "fault.command.rejected",
+                        "message": "denied",
+                        "revisionAtDecision": 5
+                    })
+                } else {
+                    json!({
+                        "commandId": command_id,
+                        "status": "accepted",
+                        "revisionAtDecision": 5
+                    })
+                }
+            })
+        } else if method == "v4/commands/query" {
+            let mut result = json!({
+                "results": [{
+                    "key": { "sessionId": "sess-1", "commandId": "cmd-1" },
+                    "result": "unknown"
+                }]
+            });
+            if mode == "v4-commands-query-clock" {
+                result["clock"] = json!({
+                    "instanceId": "cli-instance-1",
+                    "receivedAt": 10.5,
+                    "sentAt": 20.5
+                });
+            }
+            if mode == "bad-v4-commands-query" {
+                // results 必须 1..=64；空数组在客户端 validate 时拒绝。
+                result["results"] = json!([]);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/rowsRange" {
+            let mut result = json!({
+                "rows": [{
+                    "rowId": 1,
+                    "turnId": "turn-1",
+                    "createdAt": 1,
+                    "createdAtSeq": 1,
+                    "kind": "turnHeader",
+                    "origin": "userInput",
+                    "state": "running",
+                    "startedAt": 1
+                }],
+                "atSeq": 3,
+                "atRevision": 2,
+                "atLogEpoch": "epoch-1",
+                "hasMore": true
+            });
+            if mode == "bad-v4-rows-range" {
+                // 结果 schema 非严格：未知键被 strip，只有类型不符才会被拒绝。
+                result["hasMore"] = json!("yes");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/plans" {
+            let mut result = json!({
+                "plans": [{
+                    "rowId": 6,
+                    "turnId": "turn-1",
+                    "createdAt": 1,
+                    "createdAtSeq": 6,
+                    "kind": "toolCall",
+                    "toolCallId": "call-1",
+                    "toolName": "ExitPlanMode",
+                    "status": "success",
+                    "inputText": "{}"
+                }],
+                "atSeq": 3,
+                "atLogEpoch": "epoch-1"
+            });
+            if mode == "bad-v4-plans" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRunEvents" {
+            let mut result = json!({
+                "events": [{
+                    "sequence": 7,
+                    "type": "phase.started",
+                    "payload": { "phase": "build" }
+                }],
+                "hasMore": true
+            });
+            if mode == "bad-v4-workflow-run-events" {
+                result["hasMore"] = json!("yes");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRuns" {
+            let mut result = json!({
+                "runs": [{
+                    "runId": "run-1",
+                    "toolCallId": "call-1",
+                    "label": "发布",
+                    "updatedAt": 1700000000000u64,
+                    "status": "stopped",
+                    "stopReason": "superseded",
+                    "supersededBy": "run-2",
+                    "failureCode": "Interrupted",
+                    "failureMessage": "用户中止",
+                    "resumable": true
+                }]
+            });
+            if mode == "bad-v4-workflow-runs" {
+                result["runs"][0]["status"] = json!("archived");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRunArtifacts" {
+            let mut result = json!({
+                "artifacts": [{
+                    "id": "report",
+                    "kind": "markdown",
+                    "title": "报告",
+                    "contentType": "text/markdown",
+                    "version": 2,
+                    "versions": [{
+                        "version": 2,
+                        "title": "报告",
+                        "bytes": 12,
+                        "uri": "mode-artifact://run-1/report",
+                        "publishedAt": 1700000000000u64,
+                        "primary": true
+                    }],
+                    "itemCount": 0,
+                    "primary": true
+                }]
+            });
+            if mode == "bad-v4-artifacts" {
+                result["artifacts"][0]["kind"] = json!("spreadsheet");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRunArtifactData" {
+            let mut result = json!({
+                "items": [{
+                    "sequence": 9,
+                    "siteId": "report#1",
+                    "ordinal": 0,
+                    "item": { "timing": { "after": 12 } }
+                }],
+                "hasMore": false
+            });
+            if mode == "bad-v4-artifact-data" {
+                result["items"][0]["sequence"] = json!(-1);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRunArtifactRead" {
+            let mut result = json!({
+                "dataBase64": "aGVsbG8=",
+                "mediaType": "text/markdown",
+                "totalBytes": 5,
+                "nextOffset": null
+            });
+            if mode == "bad-v4-artifact-read" {
+                // superRefine（nextOffset ≤ totalBytes）暂不在 Rust 侧镜像，这里用类型错误。
+                result["nextOffset"] = json!("end");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRunWorkspace" {
+            let mut result = json!({
+                "nodes": [{
+                    "siteId": "files.write#1",
+                    "ordinal": 0,
+                    "kind": "world-run",
+                    "op": "files.write",
+                    "args": ["a.txt", "hi"],
+                    "status": "completed",
+                    "summary": { "resultBytes": 12, "exitCode": 0, "stdoutBytes": 4, "stderrBytes": 0 },
+                    "createdAt": 1700000000000u64,
+                    "updatedAt": 1700000000001u64
+                }],
+                "truncated": true
+            });
+            if mode == "bad-v4-run-workspace" {
+                result["nodes"][0]["kind"] = json!("world-skip");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/workflowRunNodeResult" {
+            let mut result = json!({
+                "status": "completed",
+                "result": { "lines": ["a", "b"] },
+                "truncated": false,
+                "totalBytes": 24
+            });
+            if mode == "bad-v4-node-result" {
+                result["truncated"] = json!("no");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/fileChanges" {
+            let mut result = json!({
+                "files": 1,
+                "additions": 2,
+                "deletions": 1,
+                "state": "active",
+                "items": [{
+                    "path": "a.txt",
+                    "additions": 2,
+                    "deletions": 1,
+                    "writeCount": 1,
+                    "toolNames": ["Edit"],
+                    "patches": [{
+                        "oldStart": 1,
+                        "oldLines": 1,
+                        "newStart": 1,
+                        "newLines": 2,
+                        "lines": ["-a", "+b", "+c"]
+                    }]
+                }]
+            });
+            if mode == "bad-v4-file-changes" {
+                result["files"] = json!(-1);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/fileRewindPreview" {
+            let mut result = json!({
+                "canApply": false,
+                "ignoredFiles": [{
+                    "operationCount": 1,
+                    "path": "b.txt",
+                    "reason": "bash_ignored",
+                    "toolNames": ["Bash"]
+                }],
+                "safeFiles": [{
+                    "action": "restore",
+                    "operationCount": 1,
+                    "path": "a.txt",
+                    "toolNames": ["Edit"]
+                }],
+                "unsafeFiles": [{
+                    "operationCount": 1,
+                    "path": "c.txt",
+                    "reason": "external_modified",
+                    "toolNames": ["Edit"]
+                }]
+            });
+            if mode == "bad-v4-rewind-preview" {
+                result["canApply"] = json!("no");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/backgroundBashOutput" {
+            match mode.as_str() {
+                "v4-bash-output-unsupported" => json!({
+                    "id": id,
+                    "error": { "code": -32601, "message": "Method not found" }
+                }),
+                "bad-v4-bash-output" => json!({
+                    "id": id,
+                    "result": { "kind": "unavailable", "workId": "work-1", "code": 7 }
+                }),
+                _ => json!({
+                    "id": id,
+                    "result": {
+                        "kind": "output",
+                        "workId": "work-1",
+                        "status": "completed",
+                        "output": "hello\n",
+                        "truncated": false,
+                        "outputPath": "/tmp/work-1.log"
+                    }
+                }),
+            }
+        } else if method == "v4/conversation/usage" {
+            let mut result = json!({
+                "sessionId": "sess-1",
+                "totalTokens": 30,
+                "inputTokens": 10,
+                "outputTokens": 12,
+                "reasoningTokens": 4,
+                "cacheCreationTokens": 2,
+                "cacheReadTokens": 2,
+                "modelRequestCount": 3,
+                "modelErrorCount": 1,
+                "inputBaselineBySource": { "user": 10 }
+            });
+            if mode == "bad-v4-conversation-usage" {
+                result["totalTokens"] = json!(-1);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/attachment/begin" {
+            let mut result = if mode == "v4-attachment-begin-committed" {
+                json!({ "uploadId": "up-1", "state": "committed", "nextChunkIndex": 1, "ref": "att-1" })
+            } else {
+                json!({ "uploadId": "up-1", "state": "staging", "nextChunkIndex": 0 })
+            };
+            if mode == "bad-v4-attachment-begin" {
+                result["state"] = json!("paused");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/attachment/chunk" {
+            let mut result = json!({ "uploadId": "up-1", "nextChunkIndex": 1 });
+            if mode == "bad-v4-attachment-chunk" {
+                result["nextChunkIndex"] = json!(-1);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/attachment/commit" {
+            let mut result = json!({ "ref": "att-1" });
+            if mode == "bad-v4-attachment-commit" {
+                result = json!({});
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/attachment/abort" {
+            json!({ "id": id, "result": {} })
+        } else if method == "v4/attachment/read" {
+            let mut result = json!({
+                "dataBase64": "aGVsbG8=",
+                "mediaType": "text/plain",
+                "totalBytes": 5,
+                "nextOffset": null
+            });
+            if mode == "bad-v4-attachment-read" {
+                // `.positive()` 的上界/下界校验未在 Rust 侧镜像，类型错误才会被拒绝。
+                result["nextOffset"] = json!("end");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/attachment/previewSource" {
+            let result = if mode == "v4-attachment-preview-chunked" {
+                json!({ "kind": "chunked" })
+            } else {
+                json!({ "kind": "local_path", "path": "/ws/demo/a.mp4", "mediaType": "video/mp4" })
+            };
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/attachmentRead" {
+            let mut result = json!({
+                "dataBase64": "aGVsbG8=",
+                "mediaType": "text/plain",
+                "totalBytes": 5,
+                "nextOffset": null
+            });
+            if mode == "bad-v4-conversation-attachment-read" {
+                result["mediaType"] = json!(1);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/conversation/attachmentStat" {
+            let mut result = json!({
+                "mediaType": "text/plain",
+                "totalBytes": 104857600,
+                "mtimeMs": 1700000000000u64
+            });
+            if mode == "bad-v4-conversation-attachment-stat" {
+                result["totalBytes"] = json!(-5);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/usage/stats" {
+            let mut result = json!({
+                "range": "7d",
+                "generatedAt": 1700000000000u64,
+                "timeZone": "Asia/Shanghai",
+                "source": "agent-db",
+                "summary": {
+                    "totalTokens": 100,
+                    "inputTokens": 40,
+                    "outputTokens": 50,
+                    "reasoningTokens": 10,
+                    "cacheCreationTokens": 5,
+                    "cacheReadTokens": 5,
+                    "cacheHitRate": 0.25,
+                    "totalSessions": 2,
+                    "totalTurns": 6,
+                    "toolCallCount": 9,
+                    "toolErrorRate": 0.1,
+                    "modelErrorRate": 0.0,
+                    "avgTimeToFirstTokenMs": null,
+                    "avgTurnDurationMs": 1200.5,
+                    "activeDays": 3,
+                    "currentStreakDays": 2,
+                    "longestSessionMs": 60000,
+                    "longestStreakDays": 3,
+                    "peakDayTokens": 70,
+                    "favoriteModel": { "modelId": null, "totalTokens": 60, "share": 0.6 }
+                },
+                "heatmap": {
+                    "startDate": null,
+                    "endDate": "2026-10-30",
+                    "maxTokens": 70,
+                    "weeks": [{
+                        "weekIndex": 0,
+                        "days": [
+                            { "date": "2026-10-29", "level": 2, "totalTokens": 30, "turnCount": 2, "toolCallCount": 3 },
+                            null
+                        ]
+                    }]
+                },
+                "dailyModelUsage": [{
+                    "date": "2026-10-29",
+                    "models": [{ "modelId": null, "totalTokens": 30 }]
+                }],
+                "models": [{
+                    "modelId": "glm-5",
+                    "totalTokens": 60,
+                    "inputTokens": 20,
+                    "outputTokens": 40,
+                    "requestCount": 4,
+                    "share": 0.6
+                }],
+                "tools": [{
+                    "toolName": "Bash",
+                    "callCount": 9,
+                    "errorCount": 1,
+                    "errorRate": 0.11,
+                    "avgDurationMs": null
+                }]
+            });
+            if mode == "bad-v4-usage-stats" {
+                result["source"] = json!("cache");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "v4/connection/flow" {
+            if mode == "bad-v4-connection-flow" {
+                json!({ "id": id, "result": { "unexpected": true } })
+            } else {
+                json!({ "id": id, "result": {} })
+            }
+        } else if method == "v4/conversation/resync" {
+            if mode == "bad-v4-resync" {
+                json!({ "id": id, "result": { "ack": {} } })
+            } else {
+                json!({
+                    "id": id,
+                    "result": {
+                        "ack": {
+                            "subscriptionId": "sub-1",
+                            "mode": "resume",
+                            "logEpoch": "epoch-1"
+                        }
+                    }
+                })
+            }
+        } else if method == "v4/conversation/unsubscribe" {
+            if mode == "bad-v4-unsubscribe" {
+                json!({ "id": id, "result": { "pending": 1 } })
+            } else {
+                json!({ "id": id, "result": {} })
+            }
+        } else if method == "plugins/overview" {
+            let mut result = json!({
+                "marketplaces": [{
+                    "id": "official",
+                    "name": "官方",
+                    "source": {},
+                    "pluginCount": 1,
+                    "isOfficial": true,
+                    "featured": ["demo"]
+                }],
+                "availablePlugins": [{
+                    "id": "demo-plugin",
+                    "name": "demo",
+                    "marketplace": "official",
+                    "installed": false,
+                    "componentTypes": ["skill"],
+                    "listing": { "displayName": "Demo", "requiresPaidPlan": false }
+                }],
+                "installedPlugins": [{
+                    "id": "demo-plugin",
+                    "name": "demo",
+                    "marketplace": "official",
+                    "enabled": true,
+                    "scope": "workspace",
+                    "updateStatus": "none"
+                }],
+                "restorableBuiltins": [],
+                "diagnostics": [],
+                "officialMarketplaceEnabled": true,
+                "capability": { "supported": true }
+            });
+            if mode == "bad-plugins-overview" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/list" {
+            let mut result = json!({
+                "plugins": [{
+                    "id": "demo-plugin",
+                    "name": "demo",
+                    "enabled": true,
+                    "source": "marketplace",
+                    "marketplace": "official",
+                    "skillRootCount": 1,
+                    "commandRootCount": 0,
+                    "mcpServerNames": [],
+                    "rootPath": "/home/u/.mode/plugins/demo",
+                    "components": [{ "kind": "skill", "items": [{ "name": "run" }] }],
+                    "hookDetails": [{
+                        "event": "PreToolUse",
+                        "type": "command",
+                        "command": "node",
+                        "shell": true,
+                        "sourcePath": "/home/u/.mode/plugins/demo/hooks.json",
+                        "runnable": true
+                    }]
+                }],
+                "diagnostics": [{ "code": "warn", "message": "演示诊断", "severity": "warning" }]
+            });
+            if mode == "bad-plugins-list" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/describe" {
+            let mut result = json!({
+                "components": [{
+                    "kind": "skill",
+                    "items": [{ "name": "run", "description": "运行" }]
+                }],
+                "metadata": { "author": "demo", "version": "1.0.0" }
+            });
+            if mode == "bad-plugins-describe" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workflows/updateMeta" {
+            let mut result = json!({ "ok": true, "path": "/ws/demo/.mode/workflows/demo.md" });
+            if mode == "bad-workflow-update-meta" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workflows/delete" {
+            let mut result = json!({ "ok": true, "path": "/ws/demo/.mode/workflows/demo.md" });
+            if mode == "bad-workflow-delete" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workflows/move" {
+            let mut result = json!({
+                "ok": true,
+                "from": "/home/u/.mode/workflows/demo.md",
+                "to": "/ws/demo/.mode/workflows/demo.md"
+            });
+            if mode == "bad-workflow-move" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workflows/list" {
+            let mut result = json!({
+                "workflows": [{
+                    "name": "demo",
+                    "description": "演示工作流",
+                    "scope": "project",
+                    "path": "/ws/demo/.mode/workflows/demo.md"
+                }],
+                "invalid": [],
+                "dir": "/ws/demo/.mode/workflows"
+            });
+            if mode == "bad-workflows-list" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workflows/get" {
+            let mut result = if mode == "workflow-get-failure" {
+                json!({ "ok": false, "reason": "not_found" })
+            } else {
+                json!({
+                    "ok": true,
+                    "name": "demo",
+                    "path": "/ws/demo/.mode/workflows/demo.md",
+                    "scope": "project",
+                    "meta": { "description": "演示工作流" },
+                    "script": "print(1)"
+                })
+            };
+            if mode == "bad-workflow-get" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workflows/runs" {
+            let mut result = json!({
+                "runs": [{
+                    "runId": "run-1",
+                    "name": "demo",
+                    "status": "completed",
+                    "createdAt": 1,
+                    "updatedAt": 2,
+                    "spentTokens": 10,
+                    "cwd": "/ws/demo",
+                    "artifacts": [{
+                        "id": "art-1",
+                        "kind": "markdown",
+                        "title": "报告",
+                        "version": 1,
+                        "contentType": "text/markdown"
+                    }]
+                }],
+                "truncated": true
+            });
+            if mode == "bad-workflow-runs" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "mcp/list" {
+            let reject_mode = request_params.and_then(|params| params.get("mode")).is_some()
+                && (mode == "mcp-reject-mode" || mode == "mcp-reject-mode-once")
+                && (mode == "mcp-reject-mode" || !mcp_rejected);
+            let reject_servers = request_params
+                .and_then(|params| params.get("mcpServers"))
+                .is_some()
+                && (mode == "mcp-reject-servers" || mode == "mcp-reject-servers-once")
+                && (mode == "mcp-reject-servers" || !mcp_rejected);
+            if reject_mode || reject_servers {
+                mcp_rejected = true;
+                let keys = if reject_mode && reject_servers {
+                    json!(["mode", "mcpServers"])
+                } else if reject_mode {
+                    json!(["mode"])
+                } else {
+                    json!(["mcpServers"])
+                };
+                let issues = json!([{ "code": "unrecognized_keys", "keys": keys }]).to_string();
+                json!({
+                    "id": id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params",
+                        "data": { "message": issues }
+                    }
+                })
+            } else {
+                let mut result = json!({
+                    "statuses": {
+                        "mcp-1": {
+                            "status": "connected",
+                            "transport": "stdio",
+                            "toolCount": 3,
+                            "updatedAt": "t1"
+                        }
+                    }
+                });
+                if mode == "bad-mcp-list" {
+                    result["unexpected"] = json!(true);
+                }
+                json!({ "id": id, "result": result })
+            }
+        } else if method == "workspace/readPresentation" {
+            let mut result = json!({
+                "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+                "mode": "build",
+                "slashCommands": [{ "name": "/help", "description": "帮助", "source": "builtin" }]
+            });
+            if mode == "bad-workspace-presentation" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "process/childProcesses" {
+            let mut result = json!({
+                "processes": [{
+                    "pid": 1234,
+                    "serverName": "mcp-1",
+                    "mcpSource": "custom"
+                }]
+            });
+            if mode == "bad-child-processes" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "session/send" {
+            let has_automation = request_params
+                .and_then(|params| params.get("automationId"))
+                .is_some();
+            if mode == "session-send-reject-once" && !session_send_rejected && has_automation {
+                session_send_rejected = true;
+                unrecognized_params_error(id, &["automationId"])
+            } else {
+                let accepted = mode != "rejected-session-send";
+                json!({
+                    "id": id,
+                    "result": {
+                        "accepted": accepted,
+                        "sessionId": "sess-1",
+                        "stateRevision": 3
+                    }
+                })
+            }
+        } else if method == "session/create" {
+            let has_persistence = request_params
+                .and_then(|params| params.get("persistence"))
+                .is_some();
+            if mode == "session-create-reject-once" && !session_create_rejected && has_persistence {
+                session_create_rejected = true;
+                unrecognized_params_error(id, &["persistence"])
+            } else {
+                let mut snapshot = minimal_snapshot();
+                if mode == "bad-session-create" {
+                    snapshot["unexpected"] = json!(true);
+                }
+                json!({ "id": id, "result": snapshot })
+            }
+        } else if method == "session/read" {
+            let mut snapshot = minimal_snapshot();
+            if mode == "bad-session-read" {
+                snapshot["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": snapshot })
+        } else if method == "plugins/marketplace/add"
+            || method == "plugins/marketplace/remove"
+            || method == "plugins/marketplace/update"
+        {
+            let mut result = json!({
+                "marketplace": {
+                    "id": "market",
+                    "name": "Market",
+                    "source": { "type": "git" },
+                    "pluginCount": 1
+                },
+                "diagnostics": []
+            });
+            if mode == "bad-plugin-install" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/cancelOperation" {
+            let mut result = json!({ "operationId": "op-1", "cancelled": true });
+            if mode == "bad-plugin-install" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/install" || method == "plugins/update" {
+            let mut result = json!({
+                "installedPlugins": [{
+                    "id": "demo@market",
+                    "name": "demo",
+                    "marketplace": "market",
+                    "enabled": true,
+                    "scope": "user"
+                }],
+                "dependencyClosure": ["dep@market"],
+                "diagnostics": []
+            });
+            if mode == "bad-plugin-install" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/uninstall" {
+            let mut result = json!({
+                "removedPlugin": {
+                    "id": "demo@market",
+                    "name": "demo",
+                    "marketplace": "market",
+                    "enabled": true,
+                    "scope": "user"
+                },
+                "diagnostics": []
+            });
+            if mode == "bad-plugin-install" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "skills/referenceCatalog" {
+            let mut result = json!({
+                "authority": "workspace",
+                "skills": [{
+                    "id": "demo",
+                    "name": "demo",
+                    "description": "Demo skill",
+                    "path": "/ws/demo/.mode/skills/demo/SKILL.md",
+                    "scope": "workspace",
+                    "enabled": true
+                }]
+            });
+            if mode == "disabled-skill-catalog" {
+                result["skills"][0]["enabled"] = json!(false);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/referenceCatalogWithCategory"
+            || method == "plugins/referenceCatalog"
+        {
+            if mode == "old-plugin-agent" && method == "plugins/referenceCatalogWithCategory" {
+                json!({
+                    "id": id,
+                    "error": { "code": -32601, "message": "Method not found" }
+                })
+            } else {
+                let entry = |with_category: bool| {
+                    let mut entry = json!({
+                        "pluginId": "demo@market",
+                        "name": "demo",
+                        "marketplace": "market",
+                        "enabled": true,
+                        "conflictingPluginIds": [],
+                        "skillQualifiedNames": ["demo:skill"],
+                        "mcpServerNames": [],
+                        "subagentNames": []
+                    });
+                    if with_category {
+                        entry["category"] = json!("productivity");
+                    }
+                    entry
+                };
+                let mut result = json!({
+                    "authority": "workspace",
+                    "plugins": [entry(method == "plugins/referenceCatalogWithCategory")]
+                });
+                if mode == "bad-plugin-catalog" {
+                    result["unexpected"] = json!(true);
+                }
+                json!({ "id": id, "result": result })
+            }
+        } else if method == "plugins/resolveSuggestedReference" {
+            let mut result = json!({
+                "stableId": "suggested-1",
+                "status": "ready",
+                "marketplace": "market",
+                "pluginName": "demo",
+                "sourceTrust": "official",
+                "diagnostics": []
+            });
+            if mode == "suggested-reference-untrusted" {
+                result.as_object_mut().unwrap().remove("sourceTrust");
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/setEnabled" {
+            let mut result = json!({
+                "plugin": {
+                    "id": "demo@market",
+                    "name": "demo",
+                    "enabled": true,
+                    "source": "market",
+                    "marketplace": "market",
+                    "skillRootCount": 0,
+                    "commandRootCount": 0,
+                    "mcpServerNames": [],
+                    "rootPath": "/ws/demo/.mode/plugins/demo"
+                },
+                "enabled": true
+            });
+            if mode == "bad-plugin-write" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/restoreBuiltin"
+            || method == "plugins/configure"
+            || method == "plugins/resetConfig"
+        {
+            let mut result = json!({ "pluginId": "demo@market", "diagnostics": [] });
+            if mode == "bad-plugin-write" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "plugins/validate" {
+            let mut result = json!({
+                "ok": true,
+                "diagnostics": [],
+                "compatibility": {
+                    "runnable": ["agent"],
+                    "diagnosticOnly": [],
+                    "unsupported": []
+                }
+            });
+            if mode == "bad-plugin-write" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workspace/updateInteractionPreferences" {
+            let mut result = json!({
+                "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+                "askUserQuestionAutoResolutionEnabled": true,
+                "snoozedInteractionCount": 2
+            });
+            if mode == "bad-workspace-policy" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "workspace/updateModelIoPreferences" {
+            if mode == "old-model-io" {
+                json!({
+                    "id": id,
+                    "error": { "code": -32601, "message": "Method not found" }
+                })
+            } else if mode == "bad-model-io" {
+                json!({
+                    "id": id,
+                    "error": { "code": -32600, "message": "Internal error" }
+                })
+            } else {
+                let mut result = json!({
+                    "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+                    "fullRetentionEnabled": false,
+                    "updatedSessionCount": 3
+                });
+                if mode == "bad-workspace-policy" {
+                    result["unexpected"] = json!(true);
+                }
+                json!({ "id": id, "result": result })
+            }
+        } else if method == "workspace/updateOffPeakToolPolicy"
+            || method == "workspace/updateDynamicWorkflowPolicy"
+        {
+            let mut result = json!({
+                "workspace": { "workspacePath": "/ws/demo", "workspaceKey": "/ws/demo" },
+                "enabled": true
+            });
+            if mode == "bad-workspace-policy" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "session/resume" {
+            let has_tool_allowlist = request
+                .get("params")
+                .and_then(|params| params.get("toolAllowlist"))
+                .is_some();
+            if mode == "old-session-resume" && has_tool_allowlist {
+                let issues = json!([{
+                    "code": "unrecognized_keys",
+                    "path": [],
+                    "keys": ["toolAllowlist", "offPeakToolEnabled"]
+                }]);
+                json!({
+                    "id": id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params",
+                        "data": { "message": issues.to_string() }
+                    }
+                })
+            } else if mode == "bad-session-resume" {
+                let issues = json!([{
+                    "code": "unrecognized_keys",
+                    "path": [],
+                    "keys": ["workspace"]
+                }]);
+                json!({
+                    "id": id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params",
+                        "data": { "message": issues.to_string() }
+                    }
+                })
+            } else {
+                json!({ "id": id, "result": minimal_snapshot() })
+            }
+        } else if method == "session/compact" {
+            let mut result = json!({
+                "response": "compacted",
+                "snapshot": minimal_snapshot(),
+                "compact": { "state": "accepted", "operationId": "op-1" }
+            });
+            if mode == "bad-session-compact" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "session/goal" {
+            let mut result = json!({
+                "response": "goal",
+                "snapshot": minimal_snapshot(),
+                "startedTurn": true
+            });
+            if mode == "bad-session-goal" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "session/setModel"
+            || method == "session/setThoughtLevel"
+            || method == "session/setMode"
+        {
+            let mut snapshot = minimal_snapshot();
+            if mode == "bad-session-setter" {
+                snapshot["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": snapshot })
+        } else if method == "session/close" {
+            let mut result = json!({ "closed": true });
+            if mode == "bad-session-close" {
+                result["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": result })
+        } else if method == "session/debug" {
+            let mut snapshot = json!({
+                "sessionId": "sess-1",
+                "rounds": [],
+                "networkEntries": [],
+                "cache": null
+            });
+            if mode == "bad-session-debug" {
+                snapshot["unexpected"] = json!(true);
+            }
+            json!({ "id": id, "result": snapshot })
+        } else {
+            json!({ "id": id, "result": { "method": method } })
+        };
+        if mode == "slow-reply" {
+            // 让请求保持「在飞」，用于空闲回收不得中途回收的用例。
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        if writeln!(stdout, "{reply}").is_err() {
+            break;
+        }
+        if stdout.flush().is_err() {
+            break;
+        }
+    }
+
+    if mode == "stubborn" {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+}

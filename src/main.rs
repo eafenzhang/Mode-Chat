@@ -1,0 +1,20256 @@
+//! Bot GPUI 外壳（Rust + GPUI 最终形态的第一步）。
+//!
+//! 当前已接真实数据：
+//! - 左栏：`teammates.json` 的 Bot 名册 + `groups.json` 的频道；
+//! - 中栏：按 Bot 隔离的 Agent 会话（`workspaceIdentity = mode-bot:teammate:<id>`）；
+//! - 右栏：所选 Bot 的模型 / 最近会话 / 工作目录 / 说明；频道显示成员与资料。
+//!
+//! 频道消息流（v4 群聊编排）尚未接入，中栏先显示频道资料占位。
+
+macro_rules! im_log {
+    ($($arg:tt)*) => {
+        crate::im_service::log_line(format!($($arg)*))
+    };
+}
+
+mod acp;
+mod avatar;
+mod autostart;
+mod backend;
+mod capabilities;
+mod connectors;
+mod data;
+#[cfg(windows)]
+mod file_dialog;
+mod group_goal;
+mod group_tasks;
+mod i18n;
+mod icons;
+mod im;
+mod im_heartbeat;
+mod im_runtime;
+mod im_service;
+mod instance;
+mod memory_review;
+mod automations;
+mod automation_bridge;
+mod automation_scheduler;
+mod automation_scope;
+mod update;
+// 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
+#[allow(dead_code)]
+mod wecom_theme;
+mod window_state;
+mod window_style;
+mod secrets;
+mod simple_input;
+mod shell_open;
+mod session_db;
+mod state;
+mod composer_input;
+// 设计系统 token 是完整词表（阴影 2 档、warning、inset/control 等留给后续页面）；
+// 当前界面未全部消费，允许保留未用项。
+#[allow(dead_code)]
+mod theme;
+mod time;
+
+/// 动态文案：中文/英文模板二选一，格式参数两边共用（含 inline capture）。
+macro_rules! tri {
+    ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
+        if i18n::is_en() {
+            format!($en $(, $arg)*)
+        } else {
+            format!($zh $(, $arg)*)
+        }
+    };
+}
+#[cfg(windows)]
+mod tray;
+
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use gpui::AnimationExt as _;
+use gpui::component::WindowExt as _;
+use gpui::prelude::*;
+use gpui::size;
+use gpui::{
+    div, img, point, px, rgba, App, Bounds, ClipboardItem, Context, Entity, HighlightStyle, Hsla, IntoElement, KeyBinding, MouseButton, Point, Render, Rgba, ScrollHandle,
+    SharedString, StyledText, TitlebarOptions, Window, WindowBounds, WindowControlArea,
+    WindowOptions,
+};
+
+use backend::{
+    BackendEvent, BackendHandle, ElicitationCard, ElicitationContent, ElicitationFieldKind,
+    ElicitationValue, GroupInfo, GroupMember, GroupSpec, PermissionPrompt, QuestionCard,
+    SessionEvent, ToolCard,
+};
+use bot_team::approval::{decide, parse_level, ApprovalDecision};
+use bot_team::goal::{GoalAction, GoalStatus, GroupGoal, StageStatus};
+use bot_team::group::group_member_workspace_identity;
+use data::{Bot, Group, ModelSpec, Roster};
+use simple_input::SimpleInput;
+use composer_input::{ComposerInput, Send};
+
+/// kit AlertDialog 关闭回调（统一恢复焦点用）。
+type DialogFocusRestore = std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
+
+gpui::actions!(
+    pilot,
+    [
+        /// Esc：从最上层浮层开始逐层关闭（搜索 → ⋯菜单 → 删除确认 → 新建/编辑 → 设置）。
+        CloseOverlay,
+        /// Ctrl+N：给当前选中的 Bot 开新会话（等同右栏「新会话」）。
+        NewSessionShortcut,
+        /// Ctrl+K：展开左栏搜索并聚焦输入框。
+        SearchShortcut,
+        /// Ctrl+,：打开设置信息面板。
+        SettingsShortcut,
+        /// Alt+↓：选中名册里的下一个条目（Bot 与频道按左栏顺序连成一个环）。
+        SelectNextItem,
+        /// Alt+↑：上一个条目。
+        SelectPrevItem,
+        /// Alt+A：批准当前审批卡（优先 allowOnce/allowAlways，其次首个 allow）。
+        ApproveAllow,
+        /// Alt+D：拒绝当前审批卡。
+        ApproveDeny,
+        /// Ctrl+B：新建 Bot（与左栏「+」同一对话框）。
+        NewBotShortcut,
+        /// Ctrl+E：编辑当前选中的 Bot。
+        EditBotShortcut,
+        /// ⋯ 菜单：键盘上移高亮项。
+        DetailMenuPrev,
+        /// ⋯ 菜单：键盘下移高亮项。
+        DetailMenuNext,
+        /// ⋯ 菜单：执行高亮项。
+        DetailMenuConfirm,
+        /// 搜索历史：高亮下一条命中。
+        FindNext,
+        /// 搜索历史：高亮上一条命中。
+        FindPrev,
+        /// 搜索历史：跳到高亮命中。
+        FindOpen,
+        /// @ 提及候选：下一条。
+        MentionNext,
+        /// @ 提及候选：上一条。
+        MentionPrev,
+        /// Tab：焦点移到下一个可聚焦控件。
+        FocusNext,
+        /// Shift+Tab：上一个。
+        FocusPrev,
+        /// 焦点在按钮上时 Enter 激活它。
+        ActivateTabStop,
+        /// Ctrl+G：新建频道。
+        NewChannelShortcut,
+        /// Enter（Dialog 上下文）：提交当前对话框。
+        SubmitDialog,
+        /// Ctrl+F：会话全文搜索。
+        FindShortcut,
+        /// Ctrl+P：命令面板。
+        PaletteShortcut,
+        /// 命令面板里上移选中项。
+        PalettePrev,
+        /// 命令面板里下移选中项。
+        PaletteNext,
+        /// 命令面板里执行选中项。
+        PaletteSubmit,
+    ]
+);
+
+const SIDEBAR_WIDTH: f32 = 280.0;
+const PANEL_WIDTH: f32 = 320.0;
+const TITLEBAR_HEIGHT: f32 = 28.0;
+/// 气泡最大宽度（DS：Bot 气泡 ≈80% 列宽；中栏 1100 窗口下约 560px）。
+const BUBBLE_MAX_WIDTH: f32 = 672.0;
+/// transcript 每次渲染的消息窗口（「显示更早」按同样步长增大）。
+const TRANSCRIPT_WINDOW: usize = 120;
+
+/// 本地 UI 偏好文件（与主题共用 prefs.json，保留既有键）。
+fn ui_prefs_path() -> std::path::PathBuf {
+    crate::instance::state_dir().join("prefs.json")
+}
+
+/// 侧栏最多固定几个设置页（再多会挤压底部齿轮和导航）。
+const MAX_PINNED_SETTINGS: usize = 5;
+
+fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
+    let Ok(bytes) = std::fs::read(ui_prefs_path()) else {
+        return (HashSet::new(), false, Vec::new());
+    };
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| serde_json::json!({}));
+    let muted = value
+        .get("muted")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let topmost = value
+        .get("topmost")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let pinned: Vec<usize> = value
+        .get("pinned_settings")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_u64().map(|n| n as usize))
+                .collect()
+        })
+        .unwrap_or_default();
+    // 设置页扩容时旧下标整体后移：
+    // v1→v2：团队记忆插在「频道」之后（>=6 +1）；
+    // v2→v3：浏览器/电脑操控插在「更多」之前（>=15 +2）。
+    let layout = value
+        .get("settings_layout")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1);
+    let pinned = migrate_pinned_settings(&pinned, layout);
+    if layout < 3 {
+        let mut migrated = value.clone();
+        migrated["pinned_settings"] = serde_json::json!(pinned);
+        migrated["settings_layout"] = serde_json::json!(3);
+        let _ = atomic_file::write_json_atomic(
+            &ui_prefs_path(),
+            &migrated,
+            &atomic_file::WriteOptions::default(),
+        );
+    }
+    (muted, topmost, normalize_pinned_settings(&pinned))
+}
+
+/// 设置页布局版本迁移：v1→v2 团队记忆 +1；v2→v3 浏览器/电脑操控 +2。
+fn migrate_pinned_settings(items: &[usize], layout: u64) -> Vec<usize> {
+    let mut out = items.to_vec();
+    if layout < 2 {
+        out = out
+            .iter()
+            .map(|&item| if item >= 6 { item + 1 } else { item })
+            .collect();
+    }
+    if layout < 3 {
+        out = out
+            .iter()
+            .map(|&item| if item >= 15 { item + 2 } else { item })
+            .collect();
+    }
+    out
+}
+
+/// 去重、去掉越界页、截断到上限；保持用户添加顺序。
+fn normalize_pinned_settings(items: &[usize]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for &item in items {
+        if item < SETTINGS_PAGES.len() && !out.contains(&item) {
+            out.push(item);
+            if out.len() == MAX_PINNED_SETTINGS {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn load_ui_bool(key: &str, default: bool) -> bool {
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get(key).and_then(serde_json::Value::as_bool))
+        .unwrap_or(default)
+}
+
+/// 只改一个布尔偏好，保留 prefs.json 其它键。
+fn save_ui_bool(key: &str, enabled: bool) {
+    let path = ui_prefs_path();
+    let mut value = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    value[key] = serde_json::json!(enabled);
+    let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
+}
+
+fn save_ui_value(key: &str, value: serde_json::Value) {
+    let path = ui_prefs_path();
+    let mut root = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    root[key] = value;
+    let _ = atomic_file::write_json_atomic(&path, &root, &atomic_file::WriteOptions::default());
+}
+
+fn parse_hex_color(value: &str) -> Option<gpui::Rgba> {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    let channel = |start: usize| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+    Some(gpui::Rgba {
+        r: channel(0)? as f32 / 255.0,
+        g: channel(2)? as f32 / 255.0,
+        b: channel(4)? as f32 / 255.0,
+        a: 1.0,
+    })
+}
+
+fn color_hex(color: gpui::Rgba) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (color.r * 255.0).round() as u8,
+        (color.g * 255.0).round() as u8,
+        (color.b * 255.0).round() as u8
+    )
+}
+
+fn load_accent_pref() -> Option<gpui::Rgba> {
+    let value = std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())?;
+    parse_hex_color(value.get("accent")?.as_str()?)
+}
+
+fn load_motion_pref() -> &'static str {
+    let value = std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    match value
+        .as_ref()
+        .and_then(|value| value.get("motion"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("quiet") => "quiet",
+        Some("lively") => "lively",
+        _ => "normal",
+    }
+}
+
+fn load_lang_pref() -> &'static str {
+    let value = std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    if value
+        .as_ref()
+        .and_then(|value| value.get("lang"))
+        .and_then(serde_json::Value::as_str)
+        == Some("en")
+    {
+        "en"
+    } else {
+        "zh"
+    }
+}
+
+fn load_message_width() -> u32 {
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("message_width").and_then(serde_json::Value::as_u64))
+        .map(|value| value.clamp(50, 100) as u32)
+        .unwrap_or(80)
+}
+
+/// 新建 Bot 的默认模型（prefs.json `new_bot_model`；缺省 = 沿用第一个 Bot）。
+fn load_new_bot_model() -> Option<data::ModelSpec> {
+    let value = std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())?;
+    let model = value.get("new_bot_model")?;
+    Some(data::ModelSpec {
+        provider_id: model.get("providerId")?.as_str()?.to_string(),
+        model_id: model.get("modelId")?.as_str()?.to_string(),
+        reasoning_level: model
+            .get("reasoningLevel")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+/// 剪贴板图片（Windows 为 BMP）转 PNG；失败时回退原始字节。
+fn transcode_image_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let image = image::load_from_memory(bytes).ok()?;
+    let mut output = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, image::ImageFormat::Png)
+        .ok()?;
+    Some(output.into_inner())
+}
+
+/// 浏览器最近打开的 URL（prefs.json，按 Bot 隔离，最多 5 条）。
+fn load_browser_recents(bot_id: &str) -> Vec<String> {
+    let key = format!("browser_recents:{bot_id}");
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get(&key).cloned())
+        .and_then(|value| value.as_array().cloned())
+        .map(|items| {
+            items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .take(5)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn save_browser_recents(bot_id: &str, recents: &[String]) {
+    let path = ui_prefs_path();
+    let mut value = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    value[format!("browser_recents:{bot_id}")] = serde_json::json!(recents);
+    let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
+}
+
+fn save_new_bot_model(model: Option<&data::ModelSpec>) {    let path = ui_prefs_path();
+    let mut value = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    match model {
+        Some(model) => {
+            let mut spec = serde_json::Map::new();
+            spec.insert(
+                "providerId".to_string(),
+                serde_json::Value::String(model.provider_id.clone()),
+            );
+            spec.insert(
+                "modelId".to_string(),
+                serde_json::Value::String(model.model_id.clone()),
+            );
+            if let Some(level) = &model.reasoning_level {
+                spec.insert(
+                    "reasoningLevel".to_string(),
+                    serde_json::Value::String(level.clone()),
+                );
+            }
+            object.insert(
+                "new_bot_model".to_string(),
+                serde_json::Value::Object(spec),
+            );
+        }
+        None => {
+            object.remove("new_bot_model");
+        }
+    }
+    let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct SidebarSection {
+    id: String,
+    name: String,
+    #[serde(default)]
+    collapsed: bool,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct SidebarSections {
+    #[serde(default)]
+    sections: Vec<SidebarSection>,
+    #[serde(default)]
+    membership: HashMap<String, String>,
+}
+
+#[derive(Clone)]
+enum SectionDialogRequest {
+    New,
+    Rename(String),
+}
+
+struct SectionFormState {
+    editing_id: Option<String>,
+    input: Entity<SimpleInput>,
+    error: Option<String>,
+}
+
+impl Render for SectionFormState {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(settings_note(
+                i18n::t("分组只影响本机侧栏排列，不改团队数据；成员可在会话 ⋯ 菜单里移入/移出。"),
+            ))
+            .child(dialog_field("section-name", i18n::t("分组名称"), &self.input));
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+const SIDEBAR_SECTION_COLORS: [(&str, &str); 5] = [
+    ("blue", "蓝"),
+    ("orange", "橙"),
+    ("green", "绿"),
+    ("violet", "紫"),
+    ("rose", "玫"),
+];
+
+fn load_sidebar_sections() -> SidebarSections {
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("sidebar_sections").cloned())
+        .and_then(|value| serde_json::from_value::<SidebarSections>(value).ok())
+        .unwrap_or_default()
+}
+
+fn save_sidebar_sections(sections: &SidebarSections) {
+    let path = ui_prefs_path();
+    let mut value = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    value["sidebar_sections"] = serde_json::to_value(sections).unwrap_or(serde_json::json!({}));
+    let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
+}
+
+fn sidebar_section_dot(color: Option<&str>) -> Rgba {
+    match color {
+        Some("blue") => rgba(0x2563ebff),
+        Some("orange") => rgba(0xff6b1aff),
+        Some("green") => rgba(0x10b981ff),
+        Some("violet") => rgba(0x8b5cf6ff),
+        Some("rose") => rgba(0xec2f6bff),
+        _ => wecom_theme::list_preview(),
+    }
+}
+
+fn save_ui_prefs(muted: &HashSet<String>, topmost: bool, pinned_settings: &[usize]) {
+    let path = ui_prefs_path();
+    let mut value = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    let mut keys: Vec<&String> = muted.iter().collect();
+    keys.sort();
+    value["muted"] = serde_json::json!(keys);
+    value["topmost"] = serde_json::json!(topmost);
+    value["pinned_settings"] = serde_json::json!(pinned_settings);
+    value["settings_layout"] = serde_json::json!(3);
+    let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
+}
+
+fn bot_key(id: &str) -> String {
+    format!("bot:{id}")
+}
+
+fn group_key(id: &str) -> String {
+    format!("group:{id}")
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    User,
+    Assistant,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MsgKind {
+    Text,
+    Reasoning,
+    Tool,
+}
+
+#[derive(Clone)]
+struct Message {
+    role: Role,
+    kind: MsgKind,
+    text: String,
+    streaming: bool,
+    /// 消息时间（本地毫秒时间戳；历史来自会话库，实时消息取当前时间）。0 = 未知。
+    at: u64,
+    /// 频道成员名（群聊助手消息；私聊 None）。
+    member: Option<String>,
+    /// 用户消息附带的附件文件名。
+    attachments: Vec<String>,
+    /// 历史回放的附件读取句柄（本端发送的附件为空）。
+    attachment_meta: Vec<backend::HistoryAttachment>,
+    /// 工具卡字段（kind == Tool 时有效）。
+    tool_call_id: String,
+    tool_name: String,
+    tool_state: String,
+    tool_title: String,
+    tool_detail: String,
+}
+
+impl Message {
+    fn text(role: Role, text: impl Into<String>, streaming: bool) -> Self {
+        Self::text_member(role, text, streaming, None)
+    }
+
+    fn text_member(
+        role: Role,
+        text: impl Into<String>,
+        streaming: bool,
+        member: Option<String>,
+    ) -> Self {
+        Self {
+            role,
+            kind: MsgKind::Text,
+            text: text.into(),
+            streaming,
+            at: time::now_ms(),
+            member,
+            attachments: Vec::new(),
+            attachment_meta: Vec::new(),
+            tool_call_id: String::new(),
+            tool_name: String::new(),
+            tool_state: String::new(),
+            tool_title: String::new(),
+            tool_detail: String::new(),
+        }
+    }
+
+    fn reasoning(member: Option<String>, text: impl Into<String>, streaming: bool) -> Self {
+        let mut message = Self::text_member(Role::Assistant, text, streaming, member);
+        message.kind = MsgKind::Reasoning;
+        message
+    }
+
+    fn tool(card: ToolCard) -> Self {
+        Self {
+            role: Role::Assistant,
+            kind: MsgKind::Tool,
+            text: String::new(),
+            streaming: false,
+            at: time::now_ms(),
+            member: None,
+            attachments: Vec::new(),
+            attachment_meta: Vec::new(),
+            tool_call_id: card.call_id,
+            tool_name: card.name,
+            tool_state: card.state,
+            tool_title: card.title,
+            tool_detail: card.detail,
+        }
+    }
+}
+
+struct ChatState {
+    messages: Vec<Message>,
+    /// 当前流式助手消息在 messages 里的下标（工具卡插入不影响增量落点）。
+    streaming_index: Option<usize>,
+    /// call_id → messages 下标（工具卡原地更新）。
+    tool_index: HashMap<String, usize>,
+    /// 频道成员名 → 该成员流式消息下标。
+    member_stream: HashMap<String, usize>,
+    /// 本轮思考过程下标：成员名（私聊为空串）→ messages 下标。
+    reasoning_index: HashMap<String, usize>,
+    streaming: bool,
+    ready: bool,
+    status: String,
+    error: bool,
+    session_id: Option<String>,
+    /// 浏览器/电脑操控分页的只读状态（会话建立时读取 workspace 插件开关）。
+    control: Option<ControlStatus>,
+    /// 待处理审批卡（按到达顺序；每张卡独立 sent 态，支持成员并发出卡）。
+    permissions: Vec<PendingApproval>,
+    /// 待处理问题卡（同上）。
+    questions: Vec<PendingQuestion>,
+    /// 待处理 ACP elicitation 表单（本地智能体）。
+    elicitations: Vec<PendingElicitation>,
+    /// 引用回复：待发送的引用（作者标签 + 原文片段）；发送后清空。
+    quote: Option<(String, String)>,
+    /// 只渲染最近多少条消息（长会话的渲染窗口；「显示更早」按批增大）。
+    transcript_limit: usize,
+    /// 未读回合计数（非当前会话收到助手回复时累加；切换过去即清零）。
+    unread: usize,
+    /// 会话待办（只读自会话库；Ready/History/Done 时刷新）。
+    todos: Vec<session_db::TodoItem>,
+    /// 会话累计用量（同上）。
+    usage: Option<session_db::UsageSummary>,
+    /// 最近一次发送的原文（失败重试用）。
+    last_sent: Option<String>,
+    /// 待发送附件（已读入内存；发送后清空）。
+    pending_attachments: Vec<backend::AttachmentUpload>,
+    /// 与 `pending_attachments` 对齐的本地预览路径（图片才有）。
+    pending_attachment_previews: Vec<Option<std::path::PathBuf>>,
+}
+
+/// 浏览器/电脑操控分页的只读状态（workspace 目录 + 官方插件开关）。
+struct ControlStatus {
+    directory: String,
+    /// (browser-use, computer-use)；None = workspace 没有可读的 .mode/config.json。
+    switches: Option<(bool, bool)>,
+}
+
+/// 会话运行状态（侧栏状态点；与 WebView TeammateStatus 同语义的简化集）。
+fn chat_runtime_status(chat: Option<&ChatState>) -> &'static str {
+    let Some(chat) = chat else {
+        return "idle";
+    };
+    if chat.error {
+        "error"
+    } else if !chat.permissions.is_empty()
+        || !chat.questions.is_empty()
+        || !chat.elicitations.is_empty()
+    {
+        "waiting"
+    } else if chat.streaming {
+        "working"
+    } else {
+        "idle"
+    }
+}
+
+fn status_dot_color(status: &str) -> Option<gpui::Rgba> {
+    match status {
+        "working" | "waiting" => Some(theme::warning()),
+        "error" => Some(theme::danger()),
+        "waiting_on_bot" => Some(theme::ink_secondary()),
+        _ => None,
+    }
+}
+
+/// 侧栏头像右下状态点（working/waiting 黄、error 红）。
+fn sidebar_status_badge(status: &str) -> Option<gpui::AnyElement> {
+    let color = status_dot_color(status)?;
+    Some(
+        div()
+            .absolute()
+            .right(px(-1.))
+            .bottom(px(-1.))
+            .size(px(8.))
+            .rounded_full()
+            .bg(color)
+            .border_2()
+            .border_color(theme::panel())
+            .into_any_element(),
+    )
+}
+
+/// 插件市场视图状态（host RPC 拉取）。
+struct PluginsView {
+    bot_id: String,
+    loading: bool,
+    busy: Option<String>,
+    overview: Option<agent_protocol::plugin::PluginsOverviewResult>,
+    error: Option<String>,
+}
+
+/// 插件配置表单的一行（schema 来自 host `plugins/list` 的 userConfig）。
+struct PluginConfigField {
+    key: String,
+    title: String,
+    description: Option<String>,
+    required: bool,
+    kind: Option<agent_protocol::plugin::PluginUserConfigOptionType>,
+    input: Entity<SimpleInput>,
+    boolean: bool,
+    configured: bool,
+}
+
+struct PluginConfigState {
+    fields: Vec<PluginConfigField>,
+    error: Option<String>,
+}
+
+impl Render for PluginConfigState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(settings_note(
+                i18n::t("保存后写回插件用户配置；敏感字段留空表示保持原值。"),
+            ));
+        if self.fields.is_empty() {
+            body = body.child(hint_row(i18n::t("该插件没有可配置项")));
+        }
+        for (index, field) in self.fields.iter().enumerate() {
+            let label = if field.required {
+                format!("{} *", field.title)
+            } else {
+                field.title.clone()
+            };
+            if field.kind
+                == Some(agent_protocol::plugin::PluginUserConfigOptionType::Boolean)
+            {
+                let enabled = field.boolean;
+                body = body.child(
+                    settings_row(
+                        label,
+                        field.description.clone(),
+                    )
+                    .child(
+                        switch(
+                            SharedString::from(format!("plugin-config-bool-{}", field.key)),
+                            enabled,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if let Some(field) = this.fields.get_mut(index) {
+                                field.boolean = !field.boolean;
+                            }
+                            cx.notify();
+                        })),
+                    ),
+                );
+            } else {
+                body = body
+                    .children(field.description.clone().map(settings_note))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(SharedString::from(label)),
+                            )
+                            .child(field.input.clone()),
+                    );
+            }
+        }
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 插件开关确认：确认后才写 workspace 的 `.mode/config.json`。
+#[derive(Clone)]
+struct PluginSwitchConfirm {
+    directory: String,
+    plugin: &'static str,
+    label: &'static str,
+    /// 确认后写入的值（当前状态的取反）。
+    next_on: bool,
+}
+
+/// 一张待处理审批卡及其提交态。
+struct PendingApproval {
+    prompt: PermissionPrompt,
+    sent: bool,
+}
+
+/// 命令面板里可执行的动作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PaletteCmd {
+    NewBot,
+    EditBot,
+    NewChannel,
+    NewSession,
+    FindMessages,
+    OpenSettings,
+    PickModel,
+    EditAllowlist,
+    SelectBot(usize),
+    SelectGroup(usize),
+}
+
+/// 命令面板状态（输入 + 选中下标）。
+struct PaletteState {
+    input: Entity<SimpleInput>,
+    selected: usize,
+}
+
+/// 会话全文搜索对话框（只读会话库）。
+struct FindState {
+    input: Entity<SimpleInput>,
+    results: Vec<session_db::SearchHit>,
+}
+
+/// 「审批白名单」对话框状态（写回 approvalPolicy.allowlist）。
+struct AllowlistFormState {
+    bot_id: String,
+    entries: Vec<String>,
+    input: Entity<SimpleInput>,
+    error: Option<String>,
+}
+
+impl Render for AllowlistFormState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div().flex().flex_col().gap(px(8.)).child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .line_height(px(16.))
+                .text_color(theme::ink_tertiary())
+                .child(i18n::t("白名单里的工具名在任意审批档位下都直接放行（Bash/MCP 不适用）。")),
+        );
+        if self.entries.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有条目")));
+        } else {
+            for entry in self.entries.clone() {
+                let value = entry.clone();
+                body = body.child(
+                    div()
+                        .h(px(30.))
+                        .rounded(px(6.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .text_color(theme::ink())
+                                .child(SharedString::from(entry)),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("allowlist-remove-{}", value)))
+                                .size(px(20.))
+                                .rounded(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_color(theme::danger())
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.entries.retain(|item| item != &value);
+                                    cx.notify();
+                                }))
+                                .child(icons::icon(
+                                    icons::Icon::X,
+                                    12.,
+                                    theme::ink_secondary(),
+                                )),
+                        ),
+                );
+            }
+        }
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(div().flex_1().h(px(36.)).child(self.input.clone()))
+                .child(
+                    div()
+                        .id("allowlist-add-btn")
+                        .h(px(28.))
+                        .rounded(px(4.))
+                        .bg(theme::accent())
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.opacity(0.9))
+                        .on_click(cx.listener(|this, _event, window, cx| {
+                            let value = this.input.read(cx).content().trim().to_string();
+                            if value.is_empty() {
+                                this.error = Some(i18n::t("请输入工具名").to_string());
+                            } else if this.entries.iter().any(|item| item == &value) {
+                                this.error = Some(i18n::t("条目已存在").to_string());
+                            } else {
+                                this.entries.push(value);
+                                this.error = None;
+                                let input = this.input.clone();
+                                input.update(cx, |input, cx| input.clear(window, cx));
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(theme::accent_ink())
+                                .child(i18n::t("添加")),
+                        ),
+                ),
+        );
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 群目标编辑对话框状态（写回 `{data_root}/v2/groups/<gid>/goal.json`）。
+struct GroupGoalState {
+    group_id: String,
+    goal: Option<GroupGoal>,
+    title: Entity<SimpleInput>,
+    description: Entity<SimpleInput>,
+    stage: Entity<SimpleInput>,
+    /// 新建目标时尚未落盘的阶段标题。
+    new_stages: Vec<String>,
+    error: Option<String>,
+}
+
+impl GroupGoalState {
+    fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
+        match group_goal::apply(&data::data_root(), &self.group_id, action) {
+            Ok(goal) => {
+                self.goal = goal;
+                self.error = None;
+            }
+            Err(message) => self.error = Some(message),
+        }
+        cx.notify();
+    }
+
+    fn add_new_stage(&mut self, cx: &mut Context<Self>) {
+        let value = self.stage.read(cx).content().trim().to_string();
+        if value.is_empty() {
+            self.error = Some(i18n::t("阶段标题不能为空").to_string());
+        } else {
+            self.new_stages.push(value);
+            self.error = None;
+            let stage = self.stage.clone();
+            stage.update(cx, |input, cx| input.set_content("", cx));
+        }
+        cx.notify();
+    }
+
+    fn create(&mut self, cx: &mut Context<Self>) {
+        let title = self.title.read(cx).content().trim().to_string();
+        let description = self.description.read(cx).content().to_string();
+        let stages = self.new_stages.clone();
+        self.apply(
+            GoalAction::Create {
+                title,
+                description,
+                stages,
+            },
+            cx,
+        );
+    }
+}
+
+impl Render for GroupGoalState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(settings_note(
+                i18n::t("目标会随每轮群 prompt 注入；已完成/已停止的终态不再注入。"),
+            ));
+
+        let goal = self.goal.clone();
+        if let Some(goal) = &goal {
+            let status = match goal.status {
+                GoalStatus::Active => i18n::t("进行中"),
+                GoalStatus::Paused => i18n::t("已暂停"),
+                GoalStatus::Completed => i18n::t("已完成"),
+                GoalStatus::Stopped => i18n::t("已停止"),
+            };
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .h(px(20.))
+                            .rounded_full()
+                            .bg(theme::accent_soft())
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::accent_text())
+                                    .child(status),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_tertiary())
+                            .child(SharedString::from(tri!(
+                                "阶段 {}/{}",
+                                "Stage {}/{}",
+                                goal.stages
+                                    .iter()
+                                    .filter(|stage| stage.status == StageStatus::Done)
+                                    .count(),
+                                goal.stages.len()
+                            ))),
+                    ),
+            );
+            body = body
+                .child(dialog_field("goal-title-edit", i18n::t("标题"), &self.title))
+                .child(dialog_field(
+                    "goal-desc-edit",
+                    i18n::t("说明"),
+                    &self.description,
+                ))
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("goal-save-title")
+                            .h(px(26.))
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::card())
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                let title = this.title.read(cx).content().trim().to_string();
+                                let description =
+                                    this.description.read(cx).content().to_string();
+                                this.apply(
+                                    GoalAction::Update { title, description },
+                                    cx,
+                                );
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("保存标题/说明")),
+                            ),
+                    ),
+                )
+                .child(section_label(i18n::t("阶段")));
+            for (index, stage) in goal.stages.iter().enumerate() {
+                let stage_id = stage.id.clone();
+                let done = stage.status == StageStatus::Done;
+                let status_text = match stage.status {
+                    StageStatus::Pending => i18n::t("待开始"),
+                    StageStatus::Active => i18n::t("进行中"),
+                    StageStatus::Done => i18n::t("已完成"),
+                };
+                let status_color = match stage.status {
+                    StageStatus::Done => theme::success(),
+                    StageStatus::Active => theme::accent_text(),
+                    StageStatus::Pending => theme::ink_tertiary(),
+                };
+                body = body.child(
+                    div()
+                        .h(px(30.))
+                        .rounded(px(6.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .hover(|style| style.bg(theme::hover()))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(status_color)
+                                .child(status_text),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .text_color(theme::ink())
+                                .child(SharedString::from(stage.title.clone())),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("goal-stage-toggle-{index}")))
+                                .h(px(22.))
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .px(px(8.))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(cx.listener({
+                                    let stage_id = stage_id.clone();
+                                    move |this, _event, _window, cx| {
+                                        let next = if done {
+                                            StageStatus::Pending
+                                        } else {
+                                            StageStatus::Done
+                                        };
+                                        this.apply(
+                                            GoalAction::SetStageStatus {
+                                                stage_id: stage_id.clone(),
+                                                status: next,
+                                            },
+                                            cx,
+                                        );
+                                    }
+                                }))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(10.))
+                                        .text_color(theme::ink_secondary())
+                                        .child(if done { i18n::t("重开") } else { i18n::t("完成") }),
+                                ),
+                        )
+                        .children((goal.stages.len() > 1).then(|| {
+                            div()
+                                .id(SharedString::from(format!("goal-stage-remove-{index}")))
+                                .size(px(20.))
+                                .rounded(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(cx.listener({
+                                    let stage_id = stage_id.clone();
+                                    move |this, _event, _window, cx| {
+                                        this.apply(
+                                            GoalAction::RemoveStage {
+                                                stage_id: stage_id.clone(),
+                                            },
+                                            cx,
+                                        );
+                                    }
+                                }))
+                                .child(icons::icon(
+                                    icons::Icon::X,
+                                    11.,
+                                    theme::ink_secondary(),
+                                ))
+                        })),
+                );
+            }
+            body = body
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(div().flex_1().h(px(34.)).child(self.stage.clone()))
+                        .child(
+                            div()
+                                .id("goal-add-stage")
+                                .h(px(26.))
+                                .rounded(px(4.))
+                                .bg(theme::accent())
+                                .px(px(10.))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .hover(|style| style.opacity(0.9))
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    let value =
+                                        this.stage.read(cx).content().trim().to_string();
+                                    if value.is_empty() {
+                                        this.error = Some(i18n::t("阶段标题不能为空").to_string());
+                                        cx.notify();
+                                    } else {
+                                        let stage = this.stage.clone();
+                                        stage.update(cx, |input, cx| input.set_content("", cx));
+                                        this.apply(GoalAction::AddStage { title: value }, cx);
+                                    }
+                                }))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(11.))
+                                        .text_color(theme::accent_ink())
+                                        .child(i18n::t("添加阶段")),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .child(goal_action_button(
+                            "goal-pause",
+                            if goal.status == GoalStatus::Paused {
+                                i18n::t("继续")
+                            } else {
+                                i18n::t("暂停")
+                            },
+                            false,
+                            cx.listener({
+                                let paused = goal.status == GoalStatus::Paused;
+                                move |this, _event, _window, cx| {
+                                    this.apply(
+                                        if paused {
+                                            GoalAction::Resume
+                                        } else {
+                                            GoalAction::Pause
+                                        },
+                                        cx,
+                                    );
+                                }
+                            }),
+                        ))
+                        .child(goal_action_button(
+                            "goal-complete",
+                            i18n::t("完成目标"),
+                            false,
+                            cx.listener(|this, _event, _window, cx| {
+                                this.apply(GoalAction::Complete, cx);
+                            }),
+                        ))
+                        .child(goal_action_button(
+                            "goal-stop",
+                            "停止",
+                            true,
+                            cx.listener(|this, _event, _window, cx| {
+                                this.apply(GoalAction::Stop, cx);
+                            }),
+                        ))
+                        .child(goal_action_button(
+                            "goal-clear",
+                            i18n::t("清除"),
+                            true,
+                            cx.listener(|this, _event, _window, cx| {
+                                this.apply(GoalAction::Clear, cx);
+                                this.new_stages.clear();
+                                let title = this.title.clone();
+                                let description = this.description.clone();
+                                title.update(cx, |input, cx| input.set_content("", cx));
+                                description.update(cx, |input, cx| input.set_content("", cx));
+                                cx.notify();
+                            }),
+                        )),
+                );
+        } else {
+            body = body
+                .child(dialog_field("goal-title-new", i18n::t("标题"), &self.title))
+                .child(dialog_field("goal-desc-new", i18n::t("说明"), &self.description))
+                .child(section_label(i18n::t("阶段（至少一个）")));
+            if self.new_stages.is_empty() {
+                body = body.child(hint_row(i18n::t("还没有阶段")));
+            }
+            for (index, stage) in self.new_stages.clone().iter().enumerate() {
+                let value = stage.clone();
+                body = body.child(
+                    div()
+                        .h(px(30.))
+                        .rounded(px(6.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .text_color(theme::ink())
+                                .child(SharedString::from(value.clone())),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("goal-new-remove-{index}")))
+                                .size(px(20.))
+                                .rounded(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.new_stages.retain(|item| item != &value);
+                                    cx.notify();
+                                }))
+                                .child(icons::icon(
+                                    icons::Icon::X,
+                                    11.,
+                                    theme::ink_secondary(),
+                                )),
+                        ),
+                );
+            }
+            body = body
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(div().flex_1().h(px(34.)).child(self.stage.clone()))
+                        .child(
+                            div()
+                                .id("goal-new-add-stage")
+                                .h(px(26.))
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::card())
+                                .px(px(10.))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.add_new_stage(cx);
+                                }))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(11.))
+                                        .text_color(theme::ink_secondary())
+                                        .child(i18n::t("添加阶段")),
+                                ),
+                        ),
+                )
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("goal-create")
+                            .h(px(28.))
+                            .rounded(px(4.))
+                            .bg(theme::accent())
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|style| style.opacity(0.9))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.create(cx);
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::accent_ink())
+                                    .child(i18n::t("创建目标")),
+                            ),
+                    ),
+                );
+        }
+
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 群目标对话框里的小按钮（统一 26px 高、可重复 id）。
+fn goal_action_button(
+    id: &'static str,
+    label: &'static str,
+    danger: bool,
+    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .h(px(26.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(if danger {
+            theme::danger()
+        } else {
+            theme::edge()
+        })
+        .bg(theme::card())
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::hover()))
+        .on_click(handler)
+        .child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .text_color(if danger {
+                    theme::danger()
+                } else {
+                    theme::ink_secondary()
+                })
+                .child(i18n::t(label)),
+        )
+}
+
+/// 群任务台账对话框状态（只读列表 + 停止/取消）。
+struct GroupTasksState {
+    group_id: String,
+    group_key: String,
+    tasks: Vec<bot_team::tasks::GroupTask>,
+    member_names: HashMap<String, String>,
+    /// 正在选新负责人的任务 id（改派二次选择）。
+    reassign_task: Option<String>,
+    error: Option<String>,
+    weak: gpui::WeakEntity<PilotApp>,
+}
+
+impl GroupTasksState {
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        match group_tasks::list(&data::data_root(), &self.group_id) {
+            Ok(tasks) => {
+                self.tasks = tasks;
+                self.error = None;
+            }
+            Err(message) => self.error = Some(message),
+        }
+        let group_id = self.group_id.clone();
+        let _ = self
+            .weak
+            .update(cx, |app, _| app.refresh_group_task_bar(&group_id));
+        cx.notify();
+    }
+
+    fn stop_task(&mut self, task_id: String, owner_id: String, cx: &mut Context<Self>) {
+        if let Err(message) =
+            group_tasks::stop_task(&data::data_root(), &self.group_id, &task_id)
+        {
+            self.error = Some(message);
+        } else if owner_id != bot_team::tasks::GROUP_ROOT_OWNER {
+            let key = self.group_key.clone();
+            let _ = self.weak.update(cx, |app, _| {
+                app.backend.stop_member(&key, &owner_id);
+            });
+        }
+        self.reload(cx);
+    }
+
+    fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
+        let running_owners: Vec<String> = self
+            .tasks
+            .iter()
+            .filter(|task| task.state.is_open() && task.owner_member_id != bot_team::tasks::GROUP_ROOT_OWNER)
+            .map(|task| task.owner_member_id.clone())
+            .collect();
+        match group_tasks::cancel_subtree(&data::data_root(), &self.group_id, &task_id) {
+            Ok(cancelled) => {
+                let key = self.group_key.clone();
+                for owner in running_owners {
+                    if self
+                        .tasks
+                        .iter()
+                        .any(|task| task.owner_member_id == owner && cancelled.contains(&task.id))
+                    {
+                        let _ = self.weak.update(cx, |app, _| {
+                            app.backend.stop_member(&key, &owner);
+                        });
+                    }
+                }
+            }
+            Err(message) => self.error = Some(message),
+        }
+        self.reload(cx);
+    }
+
+    /// 任务根 id：沿 parent_task_id 向上找；找不到就用自身。
+    fn root_of(&self, task: &bot_team::tasks::GroupTask) -> String {
+        let mut current = task.clone();
+        let mut guard = 0;
+        while let Some(parent) = current.parent_task_id.clone() {
+            guard += 1;
+            if guard > 8 {
+                break;
+            }
+            match self.tasks.iter().find(|candidate| candidate.id == parent) {
+                Some(found) => current = found.clone(),
+                None => return parent,
+            }
+        }
+        current.id
+    }
+
+    /// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
+    fn retry_or_reassign(
+        &mut self,
+        task: bot_team::tasks::GroupTask,
+        new_owner: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let root_id = self.root_of(&task);
+        match group_tasks::retry_task(
+            &data::data_root(),
+            &self.group_id,
+            &task.id,
+            new_owner.as_deref(),
+        ) {
+            Ok(updated) => {
+                let owner_name = self
+                    .member_names
+                    .get(&updated.owner_member_id)
+                    .cloned()
+                    .unwrap_or_else(|| short_id(&updated.owner_member_id));
+                let key = self.group_key.clone();
+                let expected = updated.expected_result.clone();
+                let task_id = updated.id.clone();
+                let owner_id = updated.owner_member_id.clone();
+                let _ = self.weak.update(cx, |app, app_cx| {
+                    app.dispatch_group_task_turn(
+                        &key,
+                        &root_id,
+                        &task_id,
+                        &owner_id,
+                        &owner_name,
+                        &expected,
+                        app_cx,
+                    );
+                });
+                self.reassign_task = None;
+                self.error = None;
+            }
+            Err(message) => self.error = Some(message),
+        }
+        self.reload(cx);
+    }
+}
+
+impl Render for GroupTasksState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(settings_note(
+                i18n::t("与 WebView 同一份 tasks.jsonl：每轮群发言一个根容器，被 @ 的成员各一条子任务。"),
+            ));
+        if self.tasks.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有任务记录")));
+        }
+        let tasks = self.tasks.iter().rev().take(24).cloned().collect::<Vec<_>>();
+        for task in tasks {
+            let state_text = match task.state {
+                bot_team::tasks::TaskState::Queued => i18n::t("排队"),
+                bot_team::tasks::TaskState::Running => i18n::t("运行中"),
+                bot_team::tasks::TaskState::Waiting => i18n::t("等待"),
+                bot_team::tasks::TaskState::Stopped => i18n::t("已停止"),
+                bot_team::tasks::TaskState::Done => i18n::t("已完成"),
+                bot_team::tasks::TaskState::Failed => i18n::t("失败"),
+                bot_team::tasks::TaskState::Cancelled => i18n::t("已取消"),
+            };
+            let state_color = match task.state {
+                bot_team::tasks::TaskState::Done => theme::success(),
+                bot_team::tasks::TaskState::Failed => theme::danger(),
+                bot_team::tasks::TaskState::Cancelled
+                | bot_team::tasks::TaskState::Stopped => theme::ink_tertiary(),
+                _ => theme::accent_text(),
+            };
+            let owner = if task.owner_member_id == bot_team::tasks::GROUP_ROOT_OWNER {
+                i18n::t("整个频道").to_string()
+            } else {
+                self.member_names
+                    .get(&task.owner_member_id)
+                    .cloned()
+                    .unwrap_or_else(|| short_id(&task.owner_member_id))
+            };
+            let open = task.state.is_open();
+            let terminal = task.state.is_terminal();
+            let retryable = matches!(
+                task.state,
+                bot_team::tasks::TaskState::Stopped | bot_team::tasks::TaskState::Failed
+            ) && task.owner_member_id != bot_team::tasks::GROUP_ROOT_OWNER;
+            let task_id_stop = task.id.clone();
+            let owner_stop = task.owner_member_id.clone();
+            let task_id_cancel = task.id.clone();
+            let task_retry = task.clone();
+            let task_reassign = task.clone();
+            let picker_open = self.reassign_task.as_deref() == Some(task.id.as_str());
+            let task_picker = task.clone();
+            body = body.child(
+                div()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(theme::edge())
+                    .bg(theme::card())
+                    .px(px(8.))
+                    .py(px(7.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .when(task.parent_task_id.is_some(), |el| el.ml(px(14.)))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .h(px(18.))
+                                    .rounded_full()
+                                    .bg(theme::raised())
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(10.))
+                                            .text_color(state_color)
+                                            .child(state_text),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .min_w(px(0.))
+                                    .flex_1()
+                                    .truncate()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink())
+                                    .child(SharedString::from(if task
+                                        .expected_result
+                                        .trim()
+                                        .is_empty()
+                                    {
+                                        task.id.clone()
+                                    } else {
+                                        task.expected_result.clone()
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .truncate()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .text_color(theme::ink_tertiary())
+                                    .child(SharedString::from(format!(
+                                        "{owner} · rev {}",
+                                        task.revision
+                                    ))),
+                            )
+                            .children(open.then(|| {
+                                div()
+                                    .id(SharedString::from(format!("task-stop-{}", task_id_stop)))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener({
+                                        let task_id = task_id_stop.clone();
+                                        let owner_id = owner_stop.clone();
+                                        move |this, _event, _window, cx| {
+                                            this.stop_task(task_id.clone(), owner_id.clone(), cx);
+                                        }
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(10.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(i18n::t("停止")),
+                                    )
+                            }))
+                            .children((!terminal).then(|| {
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "task-cancel-{}",
+                                        task_id_cancel
+                                    )))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener({
+                                        let task_id = task_id_cancel.clone();
+                                        move |this, _event, _window, cx| {
+                                            this.cancel_subtree(task_id.clone(), cx);
+                                        }
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(10.))
+                                            .text_color(theme::danger())
+                                            .child(i18n::t("取消")),
+                                    )
+                            }))
+                            .children(retryable.then(|| {
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "task-retry-{}",
+                                        task_retry.id
+                                    )))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener({
+                                        let task = task_retry.clone();
+                                        move |this, _event, _window, cx| {
+                                            this.retry_or_reassign(task.clone(), None, cx);
+                                        }
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(10.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(i18n::t("重试")),
+                                    )
+                            }))
+                            .children(retryable.then(|| {
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "task-reassign-{}",
+                                        task_reassign.id
+                                    )))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener({
+                                        let task_id = task_reassign.id.clone();
+                                        move |this, _event, _window, cx| {
+                                            this.reassign_task = if this.reassign_task.as_deref()
+                                                == Some(task_id.as_str())
+                                            {
+                                                None
+                                            } else {
+                                                Some(task_id.clone())
+                                            };
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(10.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(i18n::t("改派")),
+                                    )
+                            }))
+                            .children(picker_open.then(|| {
+                        let mut pills = div().flex().flex_wrap().gap(px(4.));
+                        for (member_id, member_name) in &self.member_names {
+                            if *member_id == task_picker.owner_member_id {
+                                continue;
+                            }
+                            let member_id = member_id.clone();
+                            let member_name = member_name.clone();
+                            let task = task_picker.clone();
+                            pills = pills.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "task-reassign-{}-{}",
+                                        task_picker.id, member_id
+                                    )))
+                                    .h(px(20.))
+                                    .rounded(px(4.))
+                                    .border_1()
+                                    .border_color(theme::edge())
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.retry_or_reassign(
+                                            task.clone(),
+                                            Some(member_id.clone()),
+                                            cx,
+                                        );
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(10.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(SharedString::from(member_name)),
+                                    ),
+                            );
+                        }
+                        pills
+                            })),
+                    ),
+            );
+        }
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// Provider API Key 编辑对话框（只写不读，保存后不回显值）。
+struct ProviderKeyState {
+    input: Entity<SimpleInput>,
+    error: Option<String>,
+}
+
+impl Render for ProviderKeyState {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(settings_note(
+                i18n::t("只更新 provider_config.json 的 access.apiKey；已有值不回显。"),
+            ))
+            .child(dialog_field(
+                "provider-key-input",
+                i18n::t("新的 API Key"),
+                &self.input,
+            ));
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// Provider API 地址编辑（只改 config.api.baseUrl）。
+struct ProviderUrlState {
+    input: Entity<SimpleInput>,
+    error: Option<String>,
+}
+
+impl Render for ProviderUrlState {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(settings_note(i18n::t("只改 config.api.baseUrl；模板默认地址会预填。")))
+            .child(dialog_field("provider-url-input", i18n::t("API 地址"), &self.input));
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 从内置模板新增 provider。
+struct ProviderAddState {
+    templates: Vec<data::ProviderTemplate>,
+    selected: usize,
+    provider_id: Entity<SimpleInput>,
+    provider_name: Entity<SimpleInput>,
+    api_key: Entity<SimpleInput>,
+    error: Option<String>,
+}
+
+impl Render for ProviderAddState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(settings_note(
+                i18n::t("从内置模板创建 personal provider；模型列表取模板的 builtinModelIds。"),
+            ))
+            .child(section_label(i18n::t("模板")));
+        let mut pills = div().flex().flex_wrap().gap(px(5.));
+        for (index, template) in self.templates.iter().enumerate() {
+            let active = self.selected == index;
+            let template_id = template.template_id.clone();
+            let template_name = template.name.clone();
+            let provider_id_input = self.provider_id.clone();
+            let name_input = self.provider_name.clone();
+            pills = pills.child(
+                div()
+                    .id(SharedString::from(format!("provider-template-{index}")))
+                    .h(px(24.))
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(if active { theme::accent() } else { theme::edge() })
+                    .bg(if active { theme::raised() } else { theme::card() })
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.selected = index;
+                        provider_id_input.update(cx, |input, cx| {
+                            input.set_content(template_id.clone(), cx);
+                        });
+                        name_input.update(cx, |input, cx| {
+                            input.set_content(template_name.clone(), cx);
+                        });
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(if active {
+                                theme::ink()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(SharedString::from(template.name.clone())),
+                    ),
+            );
+        }
+        body = body.child(pills);
+        if self.templates.is_empty() {
+            body = body.child(hint_row(i18n::t("没有读到 mode-builtin.json 的模板")));
+        }
+        body = body
+            .child(dialog_field("provider-add-id", "Provider ID", &self.provider_id))
+            .child(dialog_field(
+                "provider-add-name",
+                i18n::t("显示名称"),
+                &self.provider_name,
+            ))
+            .child(dialog_field("provider-add-key", "API Key", &self.api_key));
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 「新建/编辑频道」对话框状态（写回 groups.json）。
+#[derive(Clone)]
+enum GroupFormRequest {
+    New,
+    Edit(String),
+}
+
+struct GroupFormState {
+    editing_id: Option<String>,
+    name: Entity<SimpleInput>,
+    instructions: Entity<SimpleInput>,
+    memory: Entity<SimpleInput>,
+    member_ids: Vec<String>,
+    admin_id: String,
+    policy: String,
+    bots: Vec<(String, String, String)>,
+    error: Option<String>,
+}
+
+impl Render for GroupFormState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(dialog_field("group-name", i18n::t("名称"), &self.name))
+            .child(section_label(i18n::t("成员（点选加入）")));
+        if self.bots.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有可加入的 Bot")));
+        }
+        for (id, bot_name, role) in &self.bots {
+            let checked = self.member_ids.iter().any(|member| member == id);
+            let bot_id = id.clone();
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("group-member-{}", id)))
+                    .h(px(30.))
+                    .rounded(px(6.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        if let Some(index) =
+                            this.member_ids.iter().position(|member| member == &bot_id)
+                        {
+                            this.member_ids.remove(index);
+                            if this.admin_id == bot_id {
+                                this.admin_id =
+                                    this.member_ids.first().cloned().unwrap_or_default();
+                            }
+                        } else {
+                            this.member_ids.push(bot_id.clone());
+                            if this.admin_id.is_empty() {
+                                this.admin_id = bot_id.clone();
+                            }
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .size(px(14.))
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(if checked { theme::accent() } else { theme::edge() })
+                            .bg(if checked { theme::accent() } else { theme::bg() })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .children(checked.then(|| {
+                                icons::icon(icons::Icon::Check, 10., theme::accent_ink())
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink())
+                                    .child(SharedString::from(bot_name.clone())),
+                            )
+                            .children((!role.trim().is_empty()).then(|| {
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::ink_tertiary())
+                                    .child(SharedString::from(role.clone()))
+                            })),
+                    ),
+            );
+        }
+        if !self.member_ids.is_empty() {
+            body = body.child(section_label(i18n::t("管理员")));
+            let mut pills = div().flex().flex_wrap().gap(px(5.));
+            for id in &self.member_ids {
+                let name = self
+                    .bots
+                    .iter()
+                    .find(|(bot_id, _, _)| bot_id == id)
+                    .map(|(_, name, _)| name.clone())
+                    .unwrap_or_else(|| short_id(id));
+                let active = self.admin_id == *id;
+                let bot_id = id.clone();
+                pills = pills.child(
+                    div()
+                        .id(SharedString::from(format!("group-admin-{}", id)))
+                        .h(px(24.))
+                        .rounded(px(theme::RADIUS_SEGMENT))
+                        .border_1()
+                        .border_color(if active { theme::accent() } else { theme::edge() })
+                        .bg(if active { theme::raised() } else { theme::card() })
+                        .px(px(9.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme::hover()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.admin_id = bot_id.clone();
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(if active {
+                                    theme::ink()
+                                } else {
+                                    theme::ink_secondary()
+                                })
+                                .child(SharedString::from(name)),
+                        ),
+                );
+            }
+            body = body.child(pills).child(section_label(i18n::t("回应策略")));
+            let mut policies = div().flex().gap(px(5.));
+            for (value, label) in [("mentions-first", i18n::t("先 @ 后回应")), ("admin-only", i18n::t("仅管理员"))] {
+                let active = self.policy == value;
+                let next = value.to_string();
+                policies = policies.child(
+                    div()
+                        .id(SharedString::from(format!("group-policy-{}", value)))
+                        .h(px(24.))
+                        .rounded(px(theme::RADIUS_SEGMENT))
+                        .border_1()
+                        .border_color(if active { theme::accent() } else { theme::edge() })
+                        .bg(if active { theme::raised() } else { theme::card() })
+                        .px(px(9.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme::hover()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.policy = next.clone();
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(if active {
+                                    theme::ink()
+                                } else {
+                                    theme::ink_secondary()
+                                })
+                                .child(i18n::t(label)),
+                        ),
+                );
+            }
+            body = body.child(policies);
+        }
+        body = body
+            .child(dialog_field("group-instructions", i18n::t("频道规则"), &self.instructions))
+            .child(dialog_field("group-memory", i18n::t("团队记忆"), &self.memory));
+        if let Some(error) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(error.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 一张待处理问题卡及其提交态。
+struct PendingQuestion {
+    card: QuestionCard,
+    sent: bool,
+}
+
+/// 一张待填写的 ACP elicitation 表单。
+struct PendingElicitation {
+    card: ElicitationCard,
+    sent: bool,
+    /// 单选题 key → 选中值。
+    single: HashMap<String, String>,
+    /// 多选题 key → 选中值列表。
+    multi: HashMap<String, Vec<String>>,
+    /// 文本题 key → 输入框实体。
+    texts: HashMap<String, Entity<SimpleInput>>,
+}
+
+impl ChatState {
+    fn push_user(&mut self, text: String) {
+        self.reasoning_index.clear();
+        self.messages.push(Message::text(Role::User, text, false));
+        self.messages
+            .push(Message::text(Role::Assistant, String::new(), true));
+        self.streaming_index = Some(self.messages.len() - 1);
+        self.streaming = true;
+    }
+
+    fn push_delta(&mut self, delta: &str) {
+        if let Some(index) = self.streaming_index
+            && let Some(message) = self.messages.get_mut(index)
+        {
+            message.text.push_str(delta);
+        }
+    }
+
+    /// 思考过程流：按成员归并成一段（同一回合内原地增长/覆盖）。
+    fn push_reasoning(&mut self, member: Option<&str>, text: &str, done: bool, reset: bool) {
+        let key = member.unwrap_or_default().to_string();
+        if let Some(index) = self.reasoning_index.get(&key).copied()
+            && let Some(message) = self.messages.get_mut(index)
+        {
+            if reset {
+                message.text = text.to_string();
+            } else {
+                message.text.push_str(text);
+            }
+            if done {
+                message.streaming = false;
+                self.reasoning_index.remove(&key);
+            }
+            return;
+        }
+        if text.is_empty() && done {
+            return;
+        }
+        // 私聊占位气泡在末尾：思考段要插在它前面，否则最终顺序会变成「回复→思考」。
+        let insert_at = match self.streaming_index {
+            Some(index)
+                if self
+                    .messages
+                    .get(index)
+                    .is_some_and(|message| {
+                        message.kind == MsgKind::Text && message.text.is_empty()
+                    }) =>
+            {
+                self.streaming_index = Some(index + 1);
+                index
+            }
+            _ => self.messages.len(),
+        };
+        self.messages.insert(
+            insert_at,
+            Message::reasoning(member.map(str::to_string), text, !done),
+        );
+        let index = insert_at;
+        if done {
+            // 只有一个空段：直接结束，不留索引。
+            if let Some(message) = self.messages.get_mut(index) {
+                message.streaming = false;
+            }
+        } else {
+            self.reasoning_index.insert(key, index);
+        }
+    }
+
+    fn finish_reasoning(&mut self, member: Option<&str>) {
+        let key = member.unwrap_or_default().to_string();
+        if let Some(index) = self.reasoning_index.remove(&key)
+            && let Some(message) = self.messages.get_mut(index)
+        {
+            message.streaming = false;
+        }
+    }
+
+    fn apply_tool(&mut self, card: ToolCard) {
+        if let Some(index) = self.tool_index.get(&card.call_id)
+            && let Some(message) = self.messages.get_mut(*index)
+        {
+            message.tool_state = card.state;
+            message.tool_title = card.title;
+            return;
+        }
+        self.tool_index
+            .insert(card.call_id.clone(), self.messages.len());
+        self.messages.push(Message::tool(card));
+    }
+
+    /// 从会话库刷新待办与用量（只读、失败即空；在 Ready/History/Done 时调用）。
+    fn refresh_meta(&mut self) {
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
+        self.todos = session_db::todos(&session_id);
+        self.usage = session_db::usage(&session_id);
+    }
+
+    fn rebuild_tool_index(&mut self) {
+        self.tool_index.clear();
+        for (index, message) in self.messages.iter().enumerate() {
+            if !message.tool_call_id.is_empty() {
+                self.tool_index
+                    .insert(message.tool_call_id.clone(), index);
+            }
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Some(index) = self.streaming_index
+            && let Some(message) = self.messages.get_mut(index)
+        {
+            message.streaming = false;
+        }
+        self.streaming_index = None;
+        self.streaming = false;
+    }
+
+    /// 群聊：用户消息只上屏一次，成员气泡按成员名各自开流。
+    fn push_user_group(&mut self, text: String, attachments: Vec<String>) {
+        self.reasoning_index.clear();
+        let mut message = Message::text(Role::User, text, false);
+        message.attachments = attachments;
+        self.messages.push(message);
+        self.streaming = true;
+    }
+
+    fn push_member_delta(&mut self, member: &str, delta: &str) {
+        if let Some(index) = self.member_stream.get(member)
+            && let Some(message) = self.messages.get_mut(*index)
+            && message.streaming
+        {
+            message.text.push_str(delta);
+            return;
+        }
+        self.messages.push(Message::text_member(
+            Role::Assistant,
+            delta,
+            true,
+            Some(member.to_string()),
+        ));
+        self.member_stream
+            .insert(member.to_string(), self.messages.len() - 1);
+    }
+
+    fn finish_member(&mut self, member: &str) {
+        if let Some(index) = self.member_stream.remove(member)
+            && let Some(message) = self.messages.get_mut(index)
+        {
+            message.streaming = false;
+        }
+        if !self
+            .messages
+            .iter()
+            .any(|message| message.streaming)
+        {
+            self.streaming = false;
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Selection {
+    Bot(usize),
+    Group(usize),
+}
+
+/// 「新建/编辑 Bot」对话框状态（Overlay 形式，写回 teammates.json）。
+/// `editing_id` 非空 = 编辑已有 Bot（标题与按钮文案随之切换）。
+#[derive(Clone)]
+enum BotFormRequest {
+    New,
+    Edit(String),
+}
+
+struct BotFormState {
+    editing_id: Option<String>,
+    name: Entity<SimpleInput>,
+    role: Entity<SimpleInput>,
+    directory: Entity<SimpleInput>,
+    identity_on: bool,
+    error: Option<String>,
+}
+
+impl Render for BotFormState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(dialog_field("bot-name", i18n::t("名字"), &self.name))
+            .child(dialog_field("bot-role", i18n::t("角色"), &self.role))
+            .child(dialog_field("bot-dir", i18n::t("工作目录"), &self.directory));
+        if self.editing_id.is_some() {
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        switch("dialog-identity", self.identity_on).on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.identity_on = !this.identity_on;
+                                this.error = None;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .text_color(theme::ink_secondary())
+                            .child(i18n::t("身份同步（写 AGENTS.md 受管块与 persona.json）")),
+                    ),
+            );
+        }
+        if let Some(message) = &self.error {
+            body = body.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::danger())
+                    .child(SharedString::from(message.clone())),
+            );
+        }
+        body
+    }
+}
+
+/// 删除定时任务的确认目标（只删定义，不动会话库）。
+#[derive(Clone)]
+struct AutomationDeleteTarget {
+    automation_id: String,
+    workspace_key: String,
+    title: String,
+}
+
+/// 定时任务运行历史弹层状态。
+struct AutomationHistoryState {
+    title: String,
+    runs: Vec<automation_repo::AutomationRun>,
+}
+
+/// 定时任务页的快照：只在打开设置页/切换页/动作后重读，避免每帧开库。
+struct AutomationsView {
+    entries: Vec<automations::Entry>,
+    error: Option<String>,
+}
+
+struct PilotApp {
+    input: Entity<ComposerInput>,
+    search_input: Entity<SimpleInput>,
+    browser_url_input: Entity<SimpleInput>,
+    /// 浏览器最近 URL（按 Bot，懒加载 prefs.json）。
+    browser_recents: HashMap<String, Vec<String>>,
+    search_open: bool,
+    pending_bot_dialog: Option<BotFormRequest>,
+    settings_open: bool,
+    /// 设置窗口当前页（`SETTINGS_PAGES` 下标）。
+    settings_tab: usize,
+    /// 设置窗口的焦点句柄：打开时拿走焦点，别让按键落到后面的输入框。
+    settings_focus: gpui::FocusHandle,
+    /// 每个会话（Bot/频道 key）的未发送草稿：切走再回来不丢。
+    drafts: HashMap<String, String>,
+    /// 会话重命名对话框。
+    /// Tab 焦点链的句柄（固定集合：顶部胶囊、composer 按钮、右栏工具栏/分页）。
+    tab_focus: HashMap<&'static str, gpui::FocusHandle>,
+    /// @ 提及候选的键盘高亮项。
+    mention_selected: usize,
+    /// 本轮 @ 候选被 Esc 收起（输入变化后重置）。
+    mention_dismissed: bool,
+    /// 删除确认 Overlay：待删 Bot id。
+    /// 插件开关二次确认（确认后才写 workspace 的 `.mode/config.json`）。
+    /// 团队记忆编辑对话框。
+    /// 删除团队记忆确认：待删文件名与标题。
+    /// 右栏「⋯」菜单是否展开（置顶/隐藏/编辑/删除入口）。
+    detail_menu_open: bool,
+    /// 侧栏底栏齿轮菜单是否展开。
+    footer_menu_open: bool,
+    /// 左导轨「我」的资料卡是否展开。
+    me_card_open: bool,
+    /// ⋯ 菜单的键盘高亮项（↑/↓ 移动，Enter 执行）。
+    menu_selected: usize,
+    /// ⋯ 菜单展开时持有焦点：落在 TextInput 上的话 ↑/↓ 会被输入框吃掉。
+    menu_focus: gpui::FocusHandle,
+    /// 新建/编辑频道对话框。
+    pending_group_dialog: Option<GroupFormRequest>,
+    /// 删除频道确认：待删 group id。
+    /// 删除定时任务确认：任务 id + workspace_key + 标题。
+    /// 定时任务运行历史弹层。
+
+    /// 定时任务页快照（None = 下次渲染时重读）。
+    automations_view: Option<AutomationsView>,
+    /// 设置 → 密钥：新增密钥的两个输入框。
+    secret_name_input: Entity<SimpleInput>,
+    secret_value_input: Entity<SimpleInput>,
+    /// 待二次确认移除的密钥名。
+    confirm_remove_secret: Option<String>,
+    /// 设置 → IM：当前选中的机器人（None = 只看列表）。
+    im_selected: Option<String>,
+    /// 设置 → IM：待二次确认删除的机器人 id。
+    im_delete: Option<String>,
+    /// 设置 → IM 的状态轮询任务是否已启动（只启动一次）。
+    im_tick_started: bool,
+    /// 设置 → IM：机器人心跳间隔（分钟，0 关闭）。
+    im_heartbeat_input: Entity<SimpleInput>,
+    /// 连接器密钥输入框（按密钥名预建，目录里的 `secrets` 固定）。
+    connector_secret_inputs: HashMap<&'static str, Entity<SimpleInput>>,
+    /// 频道对话框打开后要不要把焦点交给名称输入框（只请求一次）。
+    /// 模型选择对话框。
+    pending_model_dialog: Option<String>,
+    /// 审批白名单编辑对话框。
+    pending_allowlist_dialog: Option<String>,
+    /// 群目标编辑对话框（group id）。
+    pending_group_goal_dialog: Option<String>,
+    /// 群任务台账对话框（group id）。
+    pending_group_tasks_dialog: Option<String>,
+    /// Provider API Key 编辑对话框（provider id, name）。
+    pending_provider_key_dialog: Option<(String, String)>,
+    /// Provider API 地址编辑对话框（provider id, name, base_url）。
+    pending_provider_url_dialog: Option<(String, String, String)>,
+    /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
+    group_task_turns: HashMap<String, GroupTaskTurn>,
+    /// 频道 composer 上方的任务条缓存。
+    group_task_bar: Option<GroupTaskBarState>,
+    /// 打开中的群任务对话框（结算后刷新列表）。
+    group_tasks_view: Option<gpui::WeakEntity<GroupTasksState>>,
+    /// 插件市场视图（按 Bot 缓存；切换 Bot 重拉）。
+    plugins_view: Option<PluginsView>,
+    plugin_config_pending: Option<String>,
+    pending_plugin_config: Option<agent_protocol::plugin::PluginInfo>,
+    /// 全屏图片预览（待发附件缩略图点击）。
+    image_preview: Option<std::path::PathBuf>,
+    /// 历史附件图片缓存（attachment ref → 本地临时文件）。
+    history_images: HashMap<String, std::path::PathBuf>,
+    /// 正在读取的历史图片 ref。
+    history_images_pending: HashSet<String>,
+    /// 开机自启当前状态（启动时读一次，设置页切换后更新）。
+    autostart_enabled: bool,
+    /// 会话全文搜索对话框。
+    find_dialog: Option<FindState>,
+    /// 搜索结果键盘高亮项（Tab/Shift+Tab 移动、Enter 跳转）。
+    find_selected: usize,
+    /// 搜索请求序号：异步结果回来时只有最新的那一份能落到 UI（防抖 + 丢弃过期）。
+    find_seq: u64,
+    /// 命令面板。
+    palette: Option<PaletteState>,
+    /// 轻提示（底部居中，2.5 秒自动消失）：字符串 + 该条的唯一序号用于过期判断。
+    pending_notifications: Vec<String>,
+    /// 需要在下一次渲染（有 window）时打开搜索对话框。
+    pending_find: bool,
+    /// 首帧是否已把焦点交给输入框（无障碍底线：启动即可直接打字/用快捷键）。
+    focus_bootstrapped: bool,
+    /// 首帧耗时是否已打点（性能基线，只打一次）。
+    first_frame_logged: bool,
+    /// 企微四栏皮肤（2026-11-15 试验）；`BOT_PILOT_CLASSIC_UI=1` 回退经典三栏。
+    wecom_mode: bool,
+    /// 企微左导航当前筛选。
+    wecom_nav: WecomNav,
+    /// 免打扰的会话键（本地 UI 偏好，不写名册）。
+    muted: HashSet<String>,
+    /// 窗口是否置顶（标题栏图钉）。
+    topmost: bool,
+    /// 固定到左导轨的设置页下标（`SETTINGS_PAGES`，按添加顺序）。
+    pinned_settings: Vec<usize>,
+    /// 微信 transcript 的虚拟列表状态（gpui-kit `MessageScroller`）。
+    wecom_scroller: Entity<gpui::component::message_scroller::MessageScrollerState>,
+    /// 上次写入 scroller 的行数/会话键；变化时 reset，避免每帧重建。
+    wecom_row_count: usize,
+    wecom_rows_fingerprint: u64,
+    /// 已展开的思考过程/工具详情（键见 WecomRow）。
+    reasoning_expanded: std::collections::HashSet<String>,
+    /// 回合跳转游标（turn_rows 下标；切会话时落到最后一回合）。
+    wecom_turn_cursor: usize,
+    /// 是否展示思考过程 / 后台是否弹托盘通知（prefs.json）。
+    show_thinking: bool,
+    background_notifications: bool,
+    /// 回车发送（false = Enter 换行、Ctrl+Enter 发送，prefs.json）。
+    enter_to_send: bool,
+    /// 新建 Bot 的默认模型（prefs.json `new_bot_model`）。
+    new_bot_model: Option<data::ModelSpec>,
+    /// 外观偏好：强调色 / 动效档 / 消息宽度。
+    accent: Option<gpui::Rgba>,
+    motion: &'static str,
+    message_width: u32,
+    /// 群记忆自动回顾开关（`v2/memory-review.json`）。
+    memory_review_enabled: bool,
+    /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
+    memory_group: Option<String>,
+    /// 会话运行状态缓存（侧栏状态点与错误通知去重）。
+    runtime_status: HashMap<String, String>,
+    /// 已向 IM 回显过用户消息的桌面 session；Done 时把回复也镜像过去。
+    mirror_reply_sessions: HashSet<String>,
+    /// 微信侧栏分组（本机 UI 偏好，存 prefs.json）。
+    sidebar_sections: SidebarSections,
+    /// 新建/重命名分组对话框。
+    pending_section_dialog: Option<SectionDialogRequest>,
+    tool_expanded: std::collections::HashSet<String>,
+    wecom_last_row_fingerprint: u64,
+    wecom_scroller_chat: Option<String>,
+    /// 会话列表虚拟列表（gpui-kit ListState）。
+    wecom_list_state: gpui::ListState,
+    wecom_list_fingerprint: u64,
+    /// 窗口尺寸/最大化变化观察者（native 窗控后靠它刷新图标与几何）。
+    bounds_observer: Option<gpui::Subscription>,
+    /// 更新探测结果（None = 还没查过）。
+    update_check: Option<update::Check>,
+    /// 是否正在检查（按钮态用）。
+    update_checking: bool,
+    /// 下载/校验/解压中（按钮态用）。
+    update_busy: bool,
+    /// 自更新二次确认（应用会退出并重启）。
+    confirm_update: bool,
+    /// 新建/编辑对话框的「身份同步」开关（Overlay 渲染与提交共用）。
+    roster: Roster,
+    selection: Option<Selection>,
+    chats: HashMap<String, ChatState>,
+    sessions: state::SessionStore,
+    backend_status: String,
+    backend: BackendHandle,
+    scroll: ScrollHandle,
+    active_tab: usize,
+    /// 右侧详情栏是否展开（DS §10.10：顶部胶囊点击开合）。
+    right_panel_open: bool,
+}
+
+/// ⋯ 菜单动作（鼠标与键盘 Enter 共用；参数在构建条目时取快照，执行时不再查名册）。
+#[derive(Clone)]
+enum DetailMenuAction {
+    TogglePinBot(String, bool),
+    HideBot(String),
+    DuplicateBot(String),
+    EditBot(String),
+    DeleteBot(String),
+    TogglePinGroup(String, bool),
+    HideGroup(String),
+    EditGroup(String),
+    ToggleArchiveGroup(String, bool),
+    DeleteGroup(String),
+    GroupGoal(String),
+    GroupTasks(String),
+    AssignSection(String, String),
+    UnassignSection(String),
+    ToggleMute(String, bool),
+    ShareConversation(String),
+    CopySessionId(String),
+}
+
+/// 记忆面板作用域：团队共享 / 某个频道的文件记忆。
+#[derive(Clone)]
+enum MemoryScope {
+    Team,
+    Group(String),
+}
+
+impl MemoryScope {
+    fn read(&self, file: &str) -> Option<bots_service::memory_store::MemoryReadResponse> {
+        match self {
+            Self::Team => data::read_team_memory(file),
+            Self::Group(id) => data::read_group_memory(id, file),
+        }
+    }
+
+    fn save(
+        &self,
+        file: Option<&str>,
+        title: &str,
+        description: &str,
+        body: &str,
+    ) -> Result<(), String> {
+        match self {
+            Self::Team => data::save_team_memory(file, title, description, body),
+            Self::Group(id) => {
+                data::save_group_memory(id, file, title, description, body)
+            }
+        }
+    }
+
+    fn delete(&self, file: &str) -> Result<(), String> {
+        match self {
+            Self::Team => data::delete_team_memory(file),
+            Self::Group(id) => data::delete_group_memory(id, file),
+        }
+    }
+
+    fn undo(&self) -> Result<String, String> {
+        match self {
+            Self::Team => data::undo_team_memory(),
+            Self::Group(id) => data::undo_group_memory(id),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Team => i18n::t("团队记忆"),
+            Self::Group(_) => i18n::t("频道记忆"),
+        }
+    }
+}
+
+/// 频道 composer 上方的群任务条（摘要 + 可展开最近任务）。
+struct GroupTaskBarState {
+    group_id: String,
+    tasks: Vec<bot_team::tasks::GroupTask>,
+    expanded: bool,
+}
+
+/// 本轮群发言的台账映射（成员名 → 子任务 id；根容器任务单独记）。
+struct GroupTaskTurn {    root_id: String,
+    members: HashMap<String, String>,
+}
+
+/// 企微四栏皮肤的左导航筛选（消息=全部，频道/机器人只看对应类型）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WecomNav {
+    All,
+    Channels,
+    Bots,
+}
+
+/// 企微会话列表的一行（Bot 或频道）。
+#[derive(Clone)]
+struct WecomEntry {
+    is_group: bool,
+    index: usize,
+    id: String,
+    name: String,
+    preview: String,
+    at: u64,
+    pinned: bool,
+    unread: usize,
+    active: bool,
+    muted: bool,
+    member_ids: Vec<String>,
+    /// idle / working / waiting / error（侧栏状态点）。
+    status: &'static str,
+}
+
+/// 微信列表的一行：分组标题或会话。
+enum WecomListRow {
+    Section {
+        id: String,
+        name: String,
+        color: Option<String>,
+        collapsed: bool,
+        count: usize,
+    },
+    Entry(WecomEntry),
+}
+
+fn wecom_entry_key(entry: &WecomEntry) -> String {
+    if entry.is_group {
+        group_key(&entry.id)
+    } else {
+        bot_key(&entry.id)
+    }
+}
+
+/// `MessageScroller` 的一行：日期分隔、用户气泡、助手 Markdown、工具卡或「加载更早」。
+enum WecomRow {
+    LoadEarlier { key: String, hidden: usize },
+    Date(String),
+    User {
+        text: String,
+        attachments: Vec<String>,
+        attachment_meta: Vec<backend::HistoryAttachment>,
+    },
+    Assistant {
+        text: String,
+        author: String,
+        author_id: String,
+    },
+    Reasoning {
+        /// 展开态键（消息时间 + 成员，跨窗口稳定）。
+        key: String,
+        text: String,
+        member: Option<String>,
+        streaming: bool,
+        expanded: bool,
+    },
+    Tool(Message),
+}
+
+/// 侧栏底栏齿轮菜单动作（原版 `BotSidebar` 的 7 项）。
+#[derive(Clone, Copy)]
+enum FooterMenuAction {
+    InstallUpdate,
+    Settings(usize),
+    CheckUpdates,
+}
+
+impl PilotApp {
+    fn new(cx: &mut Context<Self>) -> Self {
+        i18n::set_lang(load_lang_pref());
+        let accent = load_accent_pref();
+        theme::set_accent(accent);
+        let motion = load_motion_pref();
+        theme::set_motion(motion);
+        let message_width = load_message_width();
+        let enter_to_send = load_ui_bool("enter_to_send", true);
+        let input = cx.new(|cx| {
+            ComposerInput::new(
+                i18n::t("问点什么…"),
+                theme::ink_placeholder,
+                enter_to_send,
+                cx,
+            )
+        });
+        let search_input = cx.new(|cx| {
+            SimpleInput::new(i18n::t("搜索"), theme::ink_tertiary, cx)
+        });
+        let browser_url_input = cx.new(|cx| {
+            SimpleInput::new("https://…", theme::ink_tertiary, cx)
+        });
+        let secret_name_input = cx.new(|cx| {
+            SimpleInput::new(i18n::t("例如 OPENAI_API_KEY"), theme::ink_tertiary, cx)
+        });
+        let secret_value_input = cx.new(|cx| {
+            SimpleInput::new(i18n::t("值只写不读，保存后清空"), theme::ink_tertiary, cx)
+        });
+        let connector_secret_inputs: HashMap<&'static str, Entity<SimpleInput>> =
+            connectors_service::CATALOG
+                .iter()
+                .flat_map(|spec| spec.secrets.iter())
+                .map(|secret| {
+                    (
+                        secret.name,
+                        cx.new(|cx| {
+                            SimpleInput::new(i18n::t("输入后保存"), theme::ink_tertiary, cx)
+                        }),
+                    )
+                })
+                .collect();
+        // 输入框内容变化要驱动外层重渲（过滤列表实时刷新 / 发送按钮态）。
+        input.read(cx).focus_handle(cx).tab_stop(true);
+        cx.observe(&input, |this: &mut Self, _, cx| {
+            // 草稿变了：@ 候选重新从第一条开始，之前的 Esc 收起也失效。
+            this.mention_selected = 0;
+            this.mention_dismissed = false;
+            cx.notify();
+        })
+        .detach();
+        cx.observe(&search_input, |_, _, cx| cx.notify()).detach();
+        if std::env::var("BOT_PILOT_PREFILL").ok().as_deref() == Some("1") {
+            let prefill = input.clone();
+            prefill.update(cx, |input, cx| {
+                input.set_content("第一行：换行测试\n第二行：Shift+Enter\n第三行：↑/↓ 移动", cx);
+            });
+        }
+        let roster = Roster::load();
+        let selection = if !roster.bots.is_empty() {
+            Some(Selection::Bot(0))
+        } else if !roster.groups.is_empty() {
+            Some(Selection::Group(0))
+        } else {
+            None
+        };
+        let sessions = state::SessionStore::load();
+        if let Some(error) = sessions.error() {
+            eprintln!("[state] {error}");
+        }
+        let (backend, mut events) = backend::spawn();
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = events.recv().await {
+                let _ = this.update(cx, |this, cx| {
+                    this.apply_event(event, cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+
+        let (muted, topmost, pinned_settings) = load_ui_prefs();
+        let wecom_scroller = cx.new(|cx| {
+            gpui::component::message_scroller::MessageScrollerState::new(0, cx)
+        });
+        let mut app = Self {
+            input,
+            search_input,
+            browser_url_input,
+            browser_recents: HashMap::new(),
+            secret_name_input,
+            secret_value_input,
+            confirm_remove_secret: None,
+            im_selected: None,
+            im_delete: None,
+            im_tick_started: false,
+            im_heartbeat_input: cx.new(|cx| {
+                SimpleInput::new(i18n::t("分钟，0 关闭"), theme::ink_tertiary, cx)
+            }),
+            connector_secret_inputs,
+            search_open: false,
+            pending_bot_dialog: None,
+            settings_open: false,
+            settings_tab: 0,
+            settings_focus: cx.focus_handle(),
+            tab_focus: {
+                let names = [
+                    "side-new",
+                    "header-capsule",
+                    "composer-plus",
+                    "composer-attach",
+                    "composer-send",
+                    "panel-gear",
+                    "panel-more",
+                    "panel-tab-0",
+                    "panel-tab-1",
+                    "panel-tab-2",
+                ];
+                names
+                    .into_iter()
+                    .map(|name| (name, cx.focus_handle().tab_stop(true)))
+                    .collect()
+            },
+            drafts: HashMap::new(),
+            mention_selected: 0,
+            mention_dismissed: false,
+            detail_menu_open: false,
+            footer_menu_open: false,
+            me_card_open: false,
+            menu_selected: 0,
+            menu_focus: cx.focus_handle(),
+            pending_group_dialog: None,
+            automations_view: None,
+            pending_model_dialog: None,
+            pending_allowlist_dialog: None,
+            pending_group_goal_dialog: None,
+            pending_group_tasks_dialog: None,
+            pending_provider_key_dialog: None,
+            pending_provider_url_dialog: None,
+            group_task_turns: HashMap::new(),
+            group_task_bar: None,
+            group_tasks_view: None,
+            plugins_view: None,
+            plugin_config_pending: None,
+            pending_plugin_config: None,
+            image_preview: None,
+            history_images: HashMap::new(),
+            history_images_pending: HashSet::new(),
+            autostart_enabled: autostart::is_enabled(),
+            find_dialog: None,
+            find_selected: 0,
+            find_seq: 0,
+            palette: None,
+            pending_notifications: Vec::new(),
+            pending_find: false,
+            focus_bootstrapped: false,
+            first_frame_logged: false,
+            wecom_mode: std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1"),
+            wecom_nav: WecomNav::All,
+            muted,
+            topmost,
+            pinned_settings,
+            wecom_scroller,
+            wecom_row_count: 0,
+            wecom_rows_fingerprint: 0,
+            reasoning_expanded: std::collections::HashSet::new(),
+            wecom_turn_cursor: 0,
+            show_thinking: load_ui_bool("show_thinking", true),
+            background_notifications: load_ui_bool("notify_background", true),
+            enter_to_send,
+            new_bot_model: load_new_bot_model(),
+            accent,
+            motion,
+            message_width,
+            memory_review_enabled: crate::memory_review::enabled(),
+            memory_group: None,
+            runtime_status: HashMap::new(),
+            mirror_reply_sessions: HashSet::new(),
+            sidebar_sections: load_sidebar_sections(),
+            pending_section_dialog: None,
+            tool_expanded: std::collections::HashSet::new(),
+            wecom_last_row_fingerprint: 0,
+            wecom_scroller_chat: None,
+            wecom_list_state: gpui::ListState::new(
+                0,
+                gpui::ListAlignment::Top,
+                px(400.),
+            ),
+            wecom_list_fingerprint: 0,
+            bounds_observer: None,
+            update_check: None,
+            update_checking: false,
+            update_busy: false,
+            confirm_update: false,
+            roster,
+            selection,
+            chats: HashMap::new(),
+            sessions,
+            backend_status: i18n::t("连接 Agent…").to_string(),
+            backend,
+            scroll: ScrollHandle::new(),
+            active_tab: 0,
+            right_panel_open: true,
+        };
+        if let Some(Selection::Bot(index)) = app.selection {
+            app.ensure_bot(index);
+        }
+        app
+    }
+
+    /// 选中某个 Bot（左栏点击）并懒建会话。
+    fn select_bot(&mut self, index: usize, cx: &mut Context<Self>) {
+        if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+            eprintln!("[ui] select_bot {index}");
+        }
+        self.stash_draft(cx);
+        self.selection = Some(Selection::Bot(index));
+        self.active_tab = 0;
+        if let Some(bot) = self.roster.bots.get(index) {
+            let key = bot_key(&bot.id);
+            if let Some(chat) = self.chats.get_mut(&key) {
+                chat.unread = 0;
+            }
+            if !self.browser_recents.contains_key(&bot.id) {
+                let recents = load_browser_recents(&bot.id);
+                self.browser_recents.insert(bot.id.clone(), recents);
+            }
+            self.restore_draft(&key, cx);
+        }
+        self.ensure_bot(index);
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 重读频道任务条（发送/结算/任务面板动作后调用）。
+    fn refresh_group_task_bar(&mut self, group_id: &str) {
+        let tasks = group_tasks::list(&data::data_root(), group_id).unwrap_or_default();
+        let expanded = self
+            .group_task_bar
+            .as_ref()
+            .filter(|bar| bar.group_id == group_id)
+            .is_some_and(|bar| bar.expanded);
+        self.group_task_bar = Some(GroupTaskBarState {
+            group_id: group_id.to_string(),
+            tasks,
+            expanded,
+        });
+    }
+
+    /// 频道 composer 上方的任务条：摘要常驻，展开看最近 6 条任务。
+    fn group_task_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let Some(Selection::Group(index)) = self.selection else {
+            return None;
+        };
+        let group = self.roster.groups.get(index)?;
+        let bar = self
+            .group_task_bar
+            .as_ref()
+            .filter(|bar| bar.group_id == group.id)?;
+        if bar.tasks.is_empty() {
+            return None;
+        }
+        let wechat = wecom_theme::active();
+        let active = bar.tasks.iter().filter(|task| task.state.is_open()).count();
+        let total = bar.tasks.len();
+        let expanded = bar.expanded;
+        let group_id = group.id.clone();
+        let open_id = group_id.clone();
+        let (border, bg, title_color, secondary, hover) = if wechat {
+            (
+                wecom_theme::composer_border(),
+                wecom_theme::composer_bg(),
+                wecom_theme::chat_title(),
+                wecom_theme::list_preview(),
+                wecom_theme::nav_item_hover_bg(),
+            )
+        } else {
+            (
+                theme::edge(),
+                theme::card(),
+                theme::ink(),
+                theme::ink_secondary(),
+                theme::hover(),
+            )
+        };
+        let summary = if active > 0 {
+            tri!("群任务 · {active} 进行中", "Group tasks · {active} active")
+        } else {
+            tri!("群任务 · 共 {total}", "Group tasks · {total} total")
+        };
+        let header = div()
+            .id("group-task-bar")
+            .h(px(32.))
+            .w_full()
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover))
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if let Some(bar) = this.group_task_bar.as_mut() {
+                    bar.expanded = !bar.expanded;
+                }
+                cx.notify();
+            }))
+            .child(icons::icon(icons::Icon::ListChecks, 14., secondary))
+            .child(
+                div()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
+                    } else {
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(title_color)
+                    .child(SharedString::from(summary)),
+            )
+            .child(div().flex_1())
+            .child(icons::icon(
+                if expanded {
+                    icons::Icon::ChevronLeft
+                } else {
+                    icons::Icon::ChevronRight
+                },
+                12.,
+                secondary,
+            ));
+        let pad = if wechat { 16. } else { 12. };
+        let mut card = div()
+            .w_full()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(header);
+        if expanded {
+            let mut list = div()
+                .w_full()
+                .border_t_1()
+                .border_color(border)
+                .flex()
+                .flex_col();
+            for task in bar.tasks.iter().rev().take(6) {
+                let owner = if task.owner_member_id == bot_team::tasks::GROUP_ROOT_OWNER {
+                    i18n::t("群").to_string()
+                } else {
+                    self.roster
+                        .bot_by_id(&task.owner_member_id)
+                        .map(|bot| bot.name.clone())
+                        .unwrap_or_else(|| short_id(&task.owner_member_id))
+                };
+                let open = group_id.clone();
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("group-task-{}", task.id)))
+                        .h(px(28.))
+                        .w_full()
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(hover))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.pending_group_tasks_dialog = Some(open.clone());
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .w(px(64.))
+                                .truncate()
+                                .font_family(if wechat {
+                                    wecom_theme::FONT_FAMILY
+                                } else {
+                                    theme::FONT_FAMILY
+                                })
+                                .text_size(px(11.))
+                                .text_color(secondary)
+                                .child(SharedString::from(owner)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .font_family(if wechat {
+                                    wecom_theme::FONT_FAMILY
+                                } else {
+                                    theme::FONT_FAMILY
+                                })
+                                .text_size(px(12.))
+                                .text_color(title_color)
+                                .child(SharedString::from(truncate_chars(
+                                    task.expected_result.trim(),
+                                    36,
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .font_family(if wechat {
+                                    wecom_theme::FONT_FAMILY
+                                } else {
+                                    theme::FONT_FAMILY
+                                })
+                                .text_size(px(11.))
+                                .text_color(group_task_state_color(task.state))
+                                .child(group_task_state_label(task.state)),
+                        ),
+                );
+            }
+            list = list.child(
+                div()
+                    .id("group-task-open")
+                    .h(px(28.))
+                    .w_full()
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.pending_group_tasks_dialog = Some(open_id.clone());
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(11.))
+                            .text_color(if wechat {
+                                wecom_theme::send_enabled()
+                            } else {
+                                theme::accent_text()
+                            })
+                            .child(i18n::t("打开任务面板")),
+                    ),
+            );
+            card = card.child(list);
+        }
+        Some(
+            div()
+                .w_full()
+                .px(px(pad))
+                .pb(px(6.))
+                .child(card)
+                .into_any_element(),
+        )
+    }
+
+    fn select_group(&mut self, index: usize, cx: &mut Context<Self>) {
+        if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+            eprintln!("[ui] select_group {index}");
+        }
+        self.stash_draft(cx);
+        self.selection = Some(Selection::Group(index));
+        self.active_tab = 0;
+        if let Some(group) = self.roster.groups.get(index) {
+            let key = group_key(&group.id);
+            let group_id = group.id.clone();
+            if let Some(chat) = self.chats.get_mut(&key) {
+                chat.unread = 0;
+            }
+            self.restore_draft(&key, cx);
+            self.refresh_group_task_bar(&group_id);
+        }
+        self.ensure_group(index);
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 名册重载后按 id 恢复选中（置顶会改顺序、隐藏/删除会让条目消失）。
+    /// 全都找不到时回落到第一个可用条目；空名册清空选中。
+    fn reselect_after_roster_change(&mut self, keep_bot: Option<&str>, keep_group: Option<&str>) {
+        if let Some(id) = keep_bot
+            && let Some(index) = self.roster.bots.iter().position(|bot| bot.id == id)
+        {
+            self.selection = Some(Selection::Bot(index));
+            return;
+        }
+        if let Some(id) = keep_group
+            && let Some(index) = self.roster.groups.iter().position(|group| group.id == id)
+        {
+            self.selection = Some(Selection::Group(index));
+            return;
+        }
+        if !self.roster.bots.is_empty() {
+            self.selection = Some(Selection::Bot(0));
+            self.ensure_bot(0);
+        } else if !self.roster.groups.is_empty() {
+            self.selection = Some(Selection::Group(0));
+            self.ensure_group(0);
+        } else {
+            self.selection = None;
+        }
+    }
+
+    /// 新建/编辑频道：只置 pending，下一帧由 render 打开 kit AlertDialog。
+    fn open_new_group_dialog(&mut self, cx: &mut Context<Self>) {
+        self.detail_menu_open = false;
+        self.pending_bot_dialog = None;
+        self.pending_group_dialog = Some(GroupFormRequest::New);
+        cx.notify();
+    }
+
+    fn open_edit_group_dialog(&mut self, group_id: String, cx: &mut Context<Self>) {
+        self.detail_menu_open = false;
+        self.pending_group_dialog = Some(GroupFormRequest::Edit(group_id));
+        cx.notify();
+    }
+
+    fn open_group_form_dialog(
+        &mut self,
+        request: GroupFormRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let bots: Vec<(String, String, String)> = self
+            .roster
+            .bots
+            .iter()
+            .map(|bot| (bot.id.clone(), bot.name.clone(), bot.role.clone()))
+            .collect();
+        let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id, policy, title, ok_text) =
+            match request {
+                GroupFormRequest::New => {
+                    let member_ids: Vec<String> =
+                        self.roster.bots.iter().map(|bot| bot.id.clone()).collect();
+                    let admin_id = self
+                        .roster
+                        .bots
+                        .iter()
+                        .find(|bot| bot.is_chief)
+                        .or_else(|| self.roster.bots.first())
+                        .map(|bot| bot.id.clone())
+                        .unwrap_or_default();
+                    (
+                        None,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        member_ids,
+                        admin_id,
+                        "mentions-first".to_string(),
+                        i18n::t("新建频道"),
+                        i18n::t("创建"),
+                    )
+                }
+                GroupFormRequest::Edit(id) => {
+                    let Some(group) = self.roster.groups.iter().find(|group| group.id == id) else {
+                        return;
+                    };
+                    let member_ids = group.member_ids.clone();
+                    let admin_id = group
+                        .admin_id
+                        .clone()
+                        .or_else(|| member_ids.first().cloned())
+                        .unwrap_or_default();
+                    (
+                        Some(group.id.clone()),
+                        group.name.clone(),
+                        group.instructions.clone(),
+                        group.memory.clone(),
+                        member_ids,
+                        admin_id,
+                        if group.responder_policy.trim().is_empty() {
+                            "mentions-first".to_string()
+                        } else {
+                            group.responder_policy.clone()
+                        },
+                        i18n::t("编辑频道"),
+                        i18n::t("保存"),
+                    )
+                }
+            };
+        let name = cx.new(|cx| SimpleInput::new(i18n::t("频道名（必填）"), theme::ink_tertiary, cx));
+        let instructions = cx.new(|cx| {
+            SimpleInput::new(i18n::t("频道规则（可选，注入每个成员）"), theme::ink_tertiary, cx)
+        });
+        let memory =
+            cx.new(|cx| SimpleInput::new(i18n::t("团队记忆（可选，长期事实）"), theme::ink_tertiary, cx));
+        name.update(cx, |input, cx| input.set_content(name_text, cx));
+        instructions.update(cx, |input, cx| input.set_content(instructions_text, cx));
+        memory.update(cx, |input, cx| input.set_content(memory_text, cx));
+        let form = cx.new(|_| GroupFormState {
+            editing_id,
+            name,
+            instructions,
+            memory,
+            member_ids,
+            admin_id,
+            policy,
+            bots,
+            error: None,
+        });
+        let handle = form.read(cx).name.read(cx).focus_handle(cx);
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(title)
+                .width(px(500.))
+                .centered()
+                .ok_text(ok_text)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let (name, instructions, memory, member_ids, admin_id, policy, editing_id) = {
+                        let form = form_ok.read(cx);
+                        (
+                            form.name.read(cx).content().trim().to_string(),
+                            form.instructions.read(cx).content().to_string(),
+                            form.memory.read(cx).content().to_string(),
+                            form.member_ids.clone(),
+                            form.admin_id.clone(),
+                            form.policy.clone(),
+                            form.editing_id.clone(),
+                        )
+                    };
+                    let draft = data::GroupDraft {
+                        name,
+                        admin_id,
+                        member_ids,
+                        instructions,
+                        memory,
+                        responder_policy: policy,
+                    };
+                    let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
+                        let result = match &editing_id {
+                            Some(id) => data::update_group(id, draft),
+                            None => data::create_group(draft),
+                        };
+                        match result {
+                            Ok(group) => {
+                                let group_id = group.id.clone();
+                                this.roster = Roster::load();
+                                if let Some(index) =
+                                    this.roster.groups.iter().position(|item| item.id == group_id)
+                                {
+                                    this.selection = Some(Selection::Group(index));
+                                    this.active_tab = 0;
+                                    this.ensure_group(index);
+                                }
+                                cx.notify();
+                                Ok(())
+                            }
+                            Err(message) => Err(message),
+                        }
+                    });
+                    match outcome {
+                        Ok(Ok(())) => true,
+                        Ok(Err(message)) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                        Err(_) => false,
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 群目标：kit AlertDialog + 实体表单（阶段推进/暂停/完成/清除）。
+    fn open_group_goal_dialog(
+        &mut self,
+        group_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let group_name = self
+            .roster
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| group.name.clone())
+            .unwrap_or_else(|| short_id(&group_id));
+        let goal = group_goal::read(&data::data_root(), &group_id);
+        let (title_text, description_text) = goal
+            .as_ref()
+            .map(|goal| (goal.title.clone(), goal.description.clone()))
+            .unwrap_or_default();
+        let title = cx.new(|cx| SimpleInput::new(i18n::t("目标标题（必填）"), theme::ink_tertiary, cx));
+        let description =
+            cx.new(|cx| SimpleInput::new(i18n::t("目标说明（可选）"), theme::ink_tertiary, cx));
+        let stage = cx.new(|cx| SimpleInput::new(i18n::t("阶段标题"), theme::ink_tertiary, cx));
+        title.update(cx, |input, cx| input.set_content(title_text, cx));
+        description.update(cx, |input, cx| input.set_content(description_text, cx));
+        let handle = title.read(cx).focus_handle(cx);
+        let form = cx.new(|_| GroupGoalState {
+            group_id,
+            goal,
+            title,
+            description,
+            stage,
+            new_stages: Vec::new(),
+            error: None,
+        });
+        let viewport_height = f32::from(window.viewport_size().height);
+        let form_content = form.clone();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let restore = restore.clone();
+            alert
+                .title(tri!("群目标 · {group_name}", "Group goal · {group_name}"))
+                .width(px(560.))
+                .centered()
+                .ok_text(i18n::t("关闭"))
+                .show_cancel(false)
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .id("group-goal-body")
+                            .max_h(px((viewport_height - 200.).max(240.)))
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(6.))
+                            .child(form_content.clone()),
+                    )
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 群任务台账：kit AlertDialog + 只读列表（停止/取消直接写 JSONL）。
+    fn open_group_tasks_dialog(
+        &mut self,
+        group_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let group_name = self
+            .roster
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| group.name.clone())
+            .unwrap_or_else(|| short_id(&group_id));
+        let member_names: HashMap<String, String> = self
+            .roster
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| {
+                group
+                    .member_ids
+                    .iter()
+                    .filter_map(|member_id| self.roster.bot_by_id(member_id))
+                    .map(|bot| (bot.id.clone(), bot.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let (tasks, error) = match group_tasks::list(&data::data_root(), &group_id) {
+            Ok(tasks) => (tasks, None),
+            Err(message) => (Vec::new(), Some(message)),
+        };
+        let group_key_value = group_key(&group_id);
+        let weak = cx.weak_entity();
+        let state = cx.new(|_| GroupTasksState {
+            group_id,
+            group_key: group_key_value,
+            tasks,
+            member_names,
+            reassign_task: None,
+            error,
+            weak,
+        });
+        let viewport_height = f32::from(window.viewport_size().height);
+        self.group_tasks_view = Some(state.downgrade());
+        let content = state.clone();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let content = content.clone();
+            let restore = restore.clone();
+            alert
+                .title(tri!("群任务 · {group_name}", "Group tasks · {group_name}"))
+                .width(px(560.))
+                .centered()
+                .ok_text(i18n::t("关闭"))
+                .show_cancel(false)
+                .content(move |content_box, _, _| {
+                    content_box.child(
+                        div()
+                            .id("group-tasks-body")
+                            .max_h(px((viewport_height - 200.).max(240.)))
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(6.))
+                            .child(content.clone()),
+                    )
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    fn open_new_dialog(&mut self, cx: &mut Context<Self>) {
+        self.settings_open = false;
+        self.pending_bot_dialog = Some(BotFormRequest::New);
+        cx.notify();
+    }
+
+    /// 编辑已有 Bot：下一帧由 render 打开 kit AlertDialog。
+    fn open_edit_dialog(&mut self, bot_id: String, cx: &mut Context<Self>) {
+        self.settings_open = false;
+        self.pending_bot_dialog = Some(BotFormRequest::Edit(bot_id));
+        cx.notify();
+    }
+
+    fn open_bot_form_dialog(
+        &mut self,
+        request: BotFormRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (editing_id, name_text, role_text, directory_text, identity_on, title, ok_text) =
+            match request {
+                BotFormRequest::New => {
+                    let directory = self
+                        .roster
+                        .bots
+                        .first()
+                        .map(|bot| bot.directory.clone())
+                        .filter(|directory| !directory.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            backend::fallback_workspace().to_string_lossy().into_owned()
+                        });
+                    (None, String::new(), String::new(), directory, false, i18n::t("新建 Bot"), i18n::t("创建"))
+                }
+                BotFormRequest::Edit(id) => {
+                    let Some(bot) = self.roster.bot_by_id(&id) else {
+                        return;
+                    };
+                    let directory = if bot.directory.trim().is_empty() {
+                        backend::fallback_workspace().to_string_lossy().into_owned()
+                    } else {
+                        bot.directory.clone()
+                    };
+                    (
+                        Some(id),
+                        bot.name.clone(),
+                        bot.role.clone(),
+                        directory,
+                        bot.identity_sync,
+                        i18n::t("编辑 Bot"),
+                        i18n::t("保存"),
+                    )
+                }
+            };
+        let name = cx.new(|cx| SimpleInput::new(i18n::t("名字（必填）"), theme::ink_tertiary, cx));
+        let role = cx.new(|cx| SimpleInput::new(i18n::t("角色（可选）"), theme::ink_tertiary, cx));
+        let directory = cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx));
+        name.update(cx, |input, cx| input.set_content(name_text, cx));
+        role.update(cx, |input, cx| input.set_content(role_text, cx));
+        directory.update(cx, |input, cx| input.set_content(directory_text, cx));
+        let form = cx.new(|_| BotFormState {
+            editing_id,
+            name,
+            role,
+            directory,
+            identity_on,
+            error: None,
+        });
+        let handle = form.read(cx).name.read(cx).focus_handle(cx);
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(title)
+                .width(px(460.))
+                .centered()
+                .ok_text(ok_text)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let (name, role, directory, identity_on, editing_id) = {
+                        let form = form_ok.read(cx);
+                        (
+                            form.name.read(cx).content().trim().to_string(),
+                            form.role.read(cx).content().trim().to_string(),
+                            form.directory.read(cx).content().trim().to_string(),
+                            form.identity_on,
+                            form.editing_id.clone(),
+                        )
+                    };
+                    let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
+                        let model_template = this.new_bot_model.clone().or_else(|| {
+                            this.roster.bots.first().and_then(|bot| bot.model.clone())
+                        });
+                        let result = match &editing_id {
+                            Some(id) => data::update_bot(
+                                id,
+                                &name,
+                                &role,
+                                &directory,
+                                identity_on,
+                            ),
+                            None => data::create_bot(
+                                &name,
+                                &role,
+                                &directory,
+                                model_template.as_ref(),
+                            ),
+                        };
+                        match result {
+                            Ok(bot) => {
+                                this.roster = Roster::load();
+                                let index = this
+                                    .roster
+                                    .bots
+                                    .iter()
+                                    .position(|item| item.id == bot.id)
+                                    .unwrap_or(0);
+                                this.selection = Some(Selection::Bot(index));
+                                this.ensure_bot(index);
+                                cx.notify();
+                                Ok(())
+                            }
+                            Err(message) => Err(message),
+                        }
+                    });
+                    match outcome {
+                        Ok(Ok(())) => true,
+                        Ok(Err(message)) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                        Err(_) => false,
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 频道成员会话懒建：身份 `mode-bot:group:<gid>:member:<tid>`，
+    /// 目录 = 频道共享目录优先，回落成员目录。
+    fn ensure_group(&mut self, index: usize) {
+        let Some(group) = self.roster.groups.get(index) else {
+            return;
+        };
+        let key = group_key(&group.id);
+        if self.chats.contains_key(&key) {
+            return;
+        };
+        let members: Vec<GroupMember> = group
+            .member_ids
+            .iter()
+            .filter_map(|member_id| self.roster.bot_by_id(member_id))
+            .map(|bot| {
+                let workspace = match &group.directory {
+                    Some(directory) => directory.clone(),
+                    None if !bot.directory.trim().is_empty() => bot.directory.clone(),
+                    None => backend::fallback_workspace()
+                        .to_string_lossy()
+                        .into_owned(),
+                };
+                let slot = backend::member_session_key(&group_key(&group.id), &bot.id);
+                GroupMember {
+                    member_id: bot.id.clone(),
+                    name: bot.name.clone(),
+                    role: bot.role.clone(),
+                    is_admin: group.admin_id.as_deref() == Some(bot.id.as_str()),
+                    is_chief: bot.is_chief,
+                    identity: group_member_workspace_identity(&group.id, &bot.id),
+                    workspace,
+                    model: bot.model.clone(),
+                    session_id: self.sessions.get(&slot),
+                }
+            })
+            .collect();
+        let member_names = members.iter().map(|member| member.name.clone()).collect();
+        let chat = self.chats.entry(key.clone()).or_default();
+        chat.status = i18n::t("建立成员会话…").to_string();
+        // 操控分页的只读状态：频道目录优先，回落管理员/首个成员的工作目录。
+        chat.control = Some(ControlStatus {
+            directory: group
+                .directory
+                .clone()
+                .or_else(|| {
+                    members
+                        .iter()
+                        .find(|member| member.is_admin)
+                        .map(|member| member.workspace.clone())
+                })
+                .or_else(|| members.first().map(|member| member.workspace.clone()))
+                .unwrap_or_default(),
+            switches: None,
+        });
+        if let Some(control) = chat.control.as_mut() {
+            control.switches = data::read_plugin_switches(&control.directory);
+        }
+        self.backend.ensure_group(GroupSpec {
+            group_key: key,
+            info: GroupInfo {
+                group_id: group.id.clone(),
+                group_name: group.name.clone(),
+                instructions: group.instructions.clone(),
+                memory: group.memory.clone(),
+                responder_policy: group.responder_policy.clone(),
+                member_names,
+            },
+            members,
+        });
+    }
+
+    fn ensure_bot(&mut self, index: usize) {
+        let Some(bot) = self.roster.bots.get(index) else {
+            return;
+        };
+        let key = bot_key(&bot.id);
+        if self.chats.get(&key).is_some_and(|chat| chat.ready) {
+            return;
+        }
+        let workspace = if bot.directory.trim().is_empty() {
+            backend::fallback_workspace().to_string_lossy().into_owned()
+        } else {
+            bot.directory.clone()
+        };
+        let identity = bot.identity();
+        let model = bot.model.clone();
+        let resume_id = self.sessions.get(&bot.id);
+        let engine = self.sessions.engine_of(&bot.id).map(str::to_string);
+        let chat = self.chats.entry(key.clone()).or_default();
+        if chat.status.is_empty() {
+            chat.status = i18n::t("连接 Agent…").to_string();
+        }
+        // 操控分页的只读状态：Bot 工作目录的官方插件开关。
+        chat.control = Some(ControlStatus {
+            directory: workspace.clone(),
+            switches: data::read_plugin_switches(&workspace),
+        });
+        self.backend
+            .ensure(key, workspace, identity, model, resume_id, engine);
+    }
+
+    fn active_key(&self) -> Option<String> {
+        match self.selection? {
+            Selection::Bot(index) => self.roster.bots.get(index).map(|bot| bot_key(&bot.id)),
+            Selection::Group(index) => self.roster.groups.get(index).map(|group| group_key(&group.id)),
+        }
+    }
+
+    fn selected_bot(&self) -> Option<&Bot> {
+        match self.selection? {
+            Selection::Bot(index) => self.roster.bots.get(index),
+            Selection::Group(_) => None,
+        }
+    }
+
+    fn selected_group(&self) -> Option<&Group> {
+        match self.selection? {
+            Selection::Bot(_) => None,
+            Selection::Group(index) => self.roster.groups.get(index),
+        }
+    }
+
+    /// 刷新会话运行状态缓存；错误回合转入 error 时发一次托盘通知。
+    fn refresh_runtime_status(&mut self) {
+        let keys: Vec<String> = self.chats.keys().cloned().collect();
+        for key in keys {
+            let status = chat_runtime_status(self.chats.get(&key)).to_string();
+            let previous = self.runtime_status.insert(key.clone(), status.clone());
+            if previous.as_deref() != Some(status.as_str()) && status == "error" {
+                let name = key
+                    .strip_prefix("bot:")
+                    .and_then(|id| self.roster.bot_by_id(id))
+                    .map(|bot| bot.name.clone())
+                    .or_else(|| {
+                        key.strip_prefix("group:")
+                            .and_then(|id| {
+                                self.roster
+                                    .groups
+                                    .iter()
+                                    .find(|group| group.id == id)
+                            })
+                            .map(|group| group.name.clone())
+                    })
+                    .unwrap_or_else(|| "会话".to_string());
+                notify_background(
+                    self.background_notifications,
+                    "Mode Bot",
+                    &format!("{name}：回合失败"),
+                );
+            }
+        }
+        let chats = &self.chats;
+        self.runtime_status
+            .retain(|key, _| chats.contains_key(key));
+    }
+
+    fn apply_event(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
+        match event {
+            BackendEvent::Status(text) => self.backend_status = text,
+            BackendEvent::PluginsOverview {
+                key, bot_id, result, ..
+            } => {
+                if let Some(view) = self.plugins_view.as_mut()
+                    && view.bot_id == bot_id
+                    && key == bot_key(&bot_id)
+                {
+                    view.loading = false;
+                    match result {
+                        Ok(overview) => {
+                            view.overview = Some(overview);
+                            view.error = None;
+                        }
+                        Err(message) => view.error = Some(message),
+                    }
+                }
+            }
+            BackendEvent::PluginAction {
+                key,
+                bot_id,
+                label,
+                result,
+            } => {
+                let text = match result {
+                    Ok(message) => format!("{label}：{message}"),
+                    Err(message) => tri!("{label}失败：{message}", "{label} failed: {message}"),
+                };
+                self.toast(text, cx);
+                if let Some(view) = self.plugins_view.as_mut()
+                    && view.bot_id == bot_id
+                    && key == bot_key(&bot_id)
+                {
+                    view.busy = None;
+                    if !matches!(label.as_str(), "保存插件配置" | "清空插件配置") {
+                        view.loading = true;
+                    }
+                }
+            }
+            BackendEvent::PluginConfig {
+                key,
+                bot_id,
+                plugin_id,
+                result,
+            } => {
+                let _ = key;
+                if self.plugin_config_pending.as_deref() == Some(plugin_id.as_str()) {
+                    self.plugin_config_pending = None;
+                    if let Some(view) = self.plugins_view.as_mut()
+                        && view.bot_id == bot_id
+                    {
+                        view.busy = None;
+                    }
+                    let same_bot = self
+                        .plugins_view
+                        .as_ref()
+                        .is_some_and(|view| view.bot_id == bot_id);
+                    match result {
+                        Ok(info) if same_bot => {
+                            self.pending_plugin_config = Some(*info);
+                        }
+                        Ok(_) => {}
+                        Err(message) => self.toast(message, cx),
+                    }
+                }
+            }
+            BackendEvent::AttachmentImage {
+                attachment_ref,
+                path,
+                error,
+            } => {
+                self.history_images_pending.remove(&attachment_ref);
+                match (path, error) {
+                    (Some(path), _) => {
+                        self.history_images
+                            .insert(attachment_ref, std::path::PathBuf::from(path));
+                    }
+                    (_, Some(error)) => self.toast(tri!("图片加载失败：{error}", "Failed to load the image: {error}"), cx),
+                    _ => {}
+                }
+            }
+            BackendEvent::Session { key, event } => {
+                let task_key = key.clone();
+                let mut review_due = false;
+                let mut task_bar_due = false;
+                let mut mirror_reply_session: Option<String> = None;
+                let active = self.active_key().as_deref() == Some(key.as_str());
+                let bot_id = key
+                    .strip_prefix("bot:")
+                    .map(str::to_string)
+                    .filter(|_| key.starts_with("bot:"));
+                // 审批策略：full/auto 能自动放行的（或明确拒绝的）先算好，ask 才弹卡。
+                let auto_permission = match (&event, bot_id.as_deref()) {
+                    (SessionEvent::Permission(prompt), Some(bot_id)) => self
+                        .roster
+                        .bot_by_id(bot_id)
+                        .and_then(|bot| auto_permission(bot, prompt)),
+                    _ => None,
+                };
+                let resolve_key = key.clone();
+                let chat = self.chats.entry(key).or_default();
+                let mut auto_action: Option<(String, String)> = None;
+                match event {
+                    SessionEvent::History(entries) => {
+                        // 性能测量钩子：`BOT_PILOT_FAKE_HISTORY=500` 时用合成历史替换，
+                        // 不写库、不影响真实数据（只为量「长 transcript 的渲染成本」）。
+                        let entries = match std::env::var("BOT_PILOT_FAKE_HISTORY")
+                            .ok()
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                        {
+                            Some(count) if count > 0 => {
+                                let now = time::now_ms();
+                                (0..count)
+                                    .map(|index| backend::HistoryEntry {
+                                        user: index % 2 == 0,
+                                        reasoning: false,
+                                        attachments: Vec::new(),
+                                        text: format!(
+                                            "合成消息 #{index}：这一段用来测试长会话的渲染开销。
+
+- 列表项 A
+- 列表项 B
+
+| 列1 | 列2 |
+| --- | --- |
+| a | b |"
+                                        ),
+                                        tool: None,
+                                        member: None,
+                                        at: now - ((count - index) as u64) * 1000,
+                                    })
+                                    .collect()
+                            }
+                            _ => entries,
+                        };
+                        chat.messages = entries
+                            .into_iter()
+                            .map(|entry| {
+                                let mut message = match entry.tool {
+                                    Some(card) => Message::tool(card),
+                                    None => Message::text(
+                                        if entry.user { Role::User } else { Role::Assistant },
+                                        entry.text,
+                                        false,
+                                    ),
+                                };
+                                message.member = entry.member;
+                                if entry.at > 0 {
+                                    message.at = entry.at;
+                                }
+                                message
+                            })
+                            .collect();
+                        chat.member_stream.clear();
+                        chat.rebuild_tool_index();
+                        chat.streaming = false;
+                        chat.error = false;
+                        chat.status = i18n::t("已恢复历史").to_string();
+                        chat.refresh_meta();
+                    }
+                    SessionEvent::Tool(card) => {
+                        chat.apply_tool(card);
+                        if !chat.streaming {
+                            chat.status = i18n::t("就绪").to_string();
+                        }
+                    }
+                    SessionEvent::Ready {
+                        session_id,
+                        slot,
+                    } => {
+                        chat.ready = true;
+                        chat.error = false;
+                        chat.status = i18n::t("就绪").to_string();
+                        chat.session_id = Some(session_id.clone());
+                        // automation 协议按 sessionId 找 workspace（CronCreate 的 targetTaskId）。
+                        if let Some(bot_id) = bot_id.as_deref()
+                            && let Some(bot) = self.roster.bot_by_id(bot_id)
+                        {
+                            let identity = format!("mode-bot:teammate:{}", bot.id);
+                            crate::automation_scope::register(
+                                &session_id,
+                                &bot.directory,
+                                Some(identity.clone()),
+                            );
+                            crate::automation_scope::set_active(&bot.directory, Some(identity));
+                        }
+                        // 私聊按 botId 存；频道成员按内部槽位键存（重启续用）。
+                        let store_key = slot.clone().or_else(|| bot_id.clone());
+                        if let Some(store_key) = store_key
+                            && self.sessions.set(&store_key, &session_id)
+                        {
+                            self.sessions.save();
+                        }
+                        // 性能测量的合成历史：新会话没有 History 事件，这里补注入。
+                        if chat.messages.is_empty() {
+                            let injected = fake_history_or(Vec::new());
+                            if !injected.is_empty() {
+                                chat.messages = history_messages(injected);
+                                chat.rebuild_tool_index();
+                            }
+                        }
+                        chat.refresh_meta();
+                    }
+                    SessionEvent::UserEcho(text) => {
+                        chat.push_user(text);
+                        chat.status = i18n::t("等待回复…").to_string();
+                        chat.error = false;
+                    }
+                    SessionEvent::Delta { member, text } => {
+                        match &member {
+                            Some(name) => chat.push_member_delta(name, &text),
+                            None => chat.push_delta(&text),
+                        }
+                        chat.status = i18n::t("生成中…").to_string();
+                        chat.error = false;
+                    }
+                    SessionEvent::Reasoning {
+                        member,
+                        text,
+                        done,
+                        reset,
+                    } => {
+                        chat.push_reasoning(member.as_deref(), &text, done, reset);
+                        if !done {
+                            chat.status = i18n::t("思考中…").to_string();
+                        }
+                        chat.error = false;
+                    }
+                    SessionEvent::Done { member } => {
+                        chat.finish_reasoning(member.as_deref());
+                        if !active {
+                            chat.unread = chat.unread.saturating_add(1);
+                        }
+                        match &member {
+                            Some(name) => chat.finish_member(name),
+                            None => chat.finish(),
+                        }
+                        if member.is_some() && !chat.streaming {
+                            review_due = true;
+                        }
+                        task_bar_due = true;
+                        if member.is_none()
+                            && let Some(session_id) = chat.session_id.clone()
+                            && self.mirror_reply_sessions.remove(&session_id)
+                        {
+                            mirror_reply_session = Some(session_id);
+                        }
+                        chat.ready = true;
+                        if !chat.streaming {
+                            chat.status = i18n::t("就绪").to_string();
+                        }
+                        chat.error = false;
+                        chat.refresh_meta();
+                        if member.is_none() {
+                            chat.permissions.clear();
+                            chat.questions.clear();
+                            chat.elicitations.clear();
+                        } else {
+                            // 成员回合结束：该成员已提交的卡随回合收走（未提交的仍在等作答）。
+                            let name = member.as_deref().unwrap_or_default();
+                            chat.permissions.retain(|pending| {
+                                !(pending.sent
+                                    && pending.prompt.member.as_deref() == Some(name))
+                            });
+                            chat.questions.retain(|pending| {
+                                !(pending.sent && pending.card.member.as_deref() == Some(name))
+                            });
+                        }
+                        if let Some(name) = member.as_deref() {
+                            settle_group_task_turn(
+                                &mut self.group_task_turns,
+                                &task_key,
+                                name,
+                                true,
+                            );
+                            refresh_group_tasks_view(
+                                self.group_tasks_view.as_ref(),
+                                &task_key,
+                                cx,
+                            );
+                        }
+                    }
+                    SessionEvent::Permission(prompt) => {
+                        chat.error = false;
+                        if is_user_input_backed(&prompt.tool_name) {
+                            // AskUserQuestion/ExitPlanMode 的 permission 只是等待态标记；
+                            // 弹卡或代答都会把 CLI 带进「已拒绝」路径（真实 UI 同样屏蔽）。
+                            // 问题本体经 legacy requestUserInput 到达，用问题卡作答。
+                            chat.status = i18n::t("等待提问…").to_string();
+                        } else if let Some((request_id, option_id, note)) = auto_permission {
+                            chat.status = note;
+                            auto_action = Some((request_id, option_id));
+                        } else if let Some(pending) = chat
+                            .permissions
+                            .iter_mut()
+                            .find(|pending| pending.prompt.request_id == prompt.request_id)
+                        {
+                            // 重发的同一审批请求：原地覆盖，保留 sent 态。
+                            pending.prompt = prompt;
+                        } else {
+                            chat.status = i18n::t("等待审批").to_string();
+                            chat.permissions.push(PendingApproval {
+                                prompt,
+                                sent: false,
+                            });
+                            notify_background(
+                                self.background_notifications,
+                                "Mode Bot",
+                                i18n::t("有工具调用等待审批"),
+                            );
+                        }
+                    }
+                    SessionEvent::PermissionResolved { request_id } => {
+                        chat.permissions
+                            .retain(|pending| pending.prompt.request_id != request_id);
+                        if chat.permissions.is_empty() && !chat.streaming {
+                            chat.status = i18n::t("就绪").to_string();
+                        }
+                    }
+                    SessionEvent::Question(card) => {
+                        // 双源投递（legacy requestUserInput + v4 userInput）会重复投同一
+                        // request_id：已有则原地覆盖，保留 sent 态，不叠多张卡。
+                        if let Some(pending) = chat
+                            .questions
+                            .iter_mut()
+                            .find(|pending| pending.card.request_id == card.request_id)
+                        {
+                            pending.card = card;
+                        } else {
+                            chat.questions.push(PendingQuestion { card, sent: false });
+                            notify_background(
+                                self.background_notifications,
+                                "Mode Bot",
+                                i18n::t("有一个问题等待回答"),
+                            );
+                        }
+                        chat.status = i18n::t("等待回答").to_string();
+                        chat.error = false;
+                    }
+                    SessionEvent::QuestionResolved { request_id } => {
+                        chat.questions
+                            .retain(|pending| pending.card.request_id != request_id);
+                        if chat.questions.is_empty() && !chat.streaming {
+                            chat.status = i18n::t("就绪").to_string();
+                        }
+                    }
+                    SessionEvent::Elicitation(card) => {                        if let Some(pending) = chat
+                            .elicitations
+                            .iter_mut()
+                            .find(|pending| pending.card.request_id == card.request_id)
+                        {
+                            pending.card = card;
+                        } else {
+                            let mut texts = HashMap::new();
+                            for field in &card.fields {
+                                if matches!(
+                                    field.kind,
+                                    ElicitationFieldKind::Text
+                                        | ElicitationFieldKind::Number { .. }
+                                        | ElicitationFieldKind::TextList
+                                ) {
+                                    let placeholder = if field.required {
+                                        i18n::t("必填，输入回答…")
+                                    } else {
+                                        i18n::t("可选，输入回答…")
+                                    };
+                                    let input = cx.new(|cx| {
+                                        SimpleInput::new(placeholder, theme::ink_tertiary, cx)
+                                    });
+                                    texts.insert(field.key.clone(), input);
+                                }
+                            }
+                            chat.elicitations.push(PendingElicitation {
+                                card,
+                                sent: false,
+                                single: HashMap::new(),
+                                multi: HashMap::new(),
+                                texts,
+                            });
+                            notify_background(
+                                self.background_notifications,
+                                "Mode Bot",
+                                i18n::t("有一个表单等待填写"),
+                            );
+                        }
+                        chat.status = i18n::t("等待填写表单").to_string();
+                        chat.error = false;
+                    }
+                    SessionEvent::Error { member, message } => {
+                        chat.finish_reasoning(member.as_deref());
+                        let failed_member = member.clone();
+                        match &member {
+                            Some(name) => chat.finish_member(name),
+                            None => chat.finish(),
+                        }
+                        chat.status = message.clone();
+                        chat.error = true;
+                        if member.is_none() {
+                            chat.questions.clear();
+                            chat.elicitations.clear();
+                        }
+                        chat.messages.push(Message::text_member(
+                            Role::Assistant,
+                            format!("⚠ {message}"),
+                            false,
+                            member,
+                        ));
+                        if is_terminal_group_error(&message) {
+                            task_bar_due = true;
+                            match failed_member.as_deref() {
+                                Some(name) => settle_group_task_turn(
+                                    &mut self.group_task_turns,
+                                    &task_key,
+                                    name,
+                                    false,
+                                ),
+                                None => fail_group_task_turn(
+                                    &mut self.group_task_turns,
+                                    &task_key,
+                                ),
+                            }
+                            refresh_group_tasks_view(
+                                self.group_tasks_view.as_ref(),
+                                &task_key,
+                                cx,
+                            );
+                        }
+                    }
+                }
+                if let Some((request_id, option_id)) = auto_action {
+                    self.backend.resolve(resolve_key, request_id, option_id);
+                }
+                if active {
+                    self.scroll.scroll_to_bottom();
+                }
+                if task_bar_due
+                    && let Some(group_id) = task_key.strip_prefix("group:")
+                {
+                    self.refresh_group_task_bar(group_id);
+                }
+                if review_due {
+                    self.schedule_group_memory_review(&task_key, cx);
+                }
+                if let Some(session_id) = mirror_reply_session {
+                    let reply = self.chats.get(&task_key).and_then(|chat| {
+                        chat.messages
+                            .iter()
+                            .rev()
+                            .find(|message| {
+                                message.role == Role::Assistant
+                                    && message.kind == MsgKind::Text
+                                    && !message.text.trim().is_empty()
+                            })
+                            .map(|message| message.text.clone())
+                    });
+                    if let (Some(reply), Some(bot), Some(service)) = (
+                        reply,
+                        bot_id
+                            .as_deref()
+                            .and_then(|id| self.roster.bot_by_id(id)),
+                        im_service::handle(),
+                    ) {
+                        let identity = bot.identity();
+                        service.mirror_desktop_message(
+                            &session_id,
+                            &bot.directory,
+                            Some(&identity),
+                            &reply,
+                            0,
+                        );
+                    }
+                }
+                self.refresh_runtime_status();
+            }
+        }
+    }
+
+    fn send_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 浮层打开时 Enter 属于浮层（菜单选中项 / 对话框提交），不能落成「发送」。
+        if self.detail_menu_open {
+            return;
+        }
+        if matches!(self.selection, Some(Selection::Group(_))) {
+            self.send_group_current(window, cx);
+            return;
+        }
+        let Some(Selection::Bot(index)) = self.selection else {
+            return;
+        };
+        let Some(bot) = self.roster.bots.get(index) else {
+            return;
+        };
+        let key = bot_key(&bot.id);
+        let text = self.input.read(cx).content().trim().to_string();
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        if text.is_empty() && chat.pending_attachments.is_empty() {
+            return;
+        }
+        if !chat.ready {
+            chat.status = i18n::t("会话建立中…").to_string();
+            cx.notify();
+            return;
+        }
+        if chat.streaming {
+            return;
+        }
+        // 表单卡未提交时，Enter 不落成主输入框发送（否则会绕过表单）。
+        if chat.elicitations.iter().any(|pending| !pending.sent) {
+            return;
+        }
+        let attachments = std::mem::take(&mut chat.pending_attachments);
+        chat.pending_attachment_previews.clear();
+        let attachment_names: Vec<String> = attachments
+            .iter()
+            .map(|attachment| attachment.file_name.clone())
+            .collect();
+        let payload = compose_with_quote(&text, chat.quote.take());
+        let mirror_session = chat.session_id.clone();
+        let mirror_text = payload.clone();
+        let attachment_count = attachments.len();
+        chat.push_user(payload.clone());
+        if !attachment_names.is_empty()
+            && let Some(message) = chat
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|message| message.role == Role::User && message.kind == MsgKind::Text)
+        {
+            message.attachments = attachment_names;
+        }
+        chat.status = i18n::t("等待回复…").to_string();
+        chat.error = false;
+        chat.last_sent = Some(text.clone());
+        self.drafts.remove(&key);
+        if attachments.is_empty() {
+            self.backend.send(key, payload);
+        } else {
+            self.backend.send_with_attachments(key, payload, attachments);
+        }
+        if let Some(session_id) = mirror_session
+            && let Some(service) = im_service::handle()
+        {
+            let identity = bot.identity();
+            let mirrored = service.mirror_desktop_message(
+                &session_id,
+                &bot.directory,
+                Some(&identity),
+                &mirror_text,
+                attachment_count,
+            );
+            if mirrored > 0 {
+                self.mirror_reply_sessions.insert(session_id);
+            }
+        }
+        self.input.update(cx, |input, cx| input.clear(window, cx));
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 频道发言：一条用户消息，成员回复按成员名各自开流。
+    fn send_group_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 引用逻辑与私聊一致，见 compose_with_quote（在下面的发送处消费 chat.quote）。
+        let Some(Selection::Group(index)) = self.selection else {
+            return;
+        };
+        let Some(group) = self.roster.groups.get(index) else {
+            return;
+        };
+        let group_id = group.id.clone();
+        let responder_policy = group.responder_policy.clone();
+        let admin_id = group.admin_id.clone();
+        let member_pairs: Vec<(String, String)> = group
+            .member_ids
+            .iter()
+            .filter_map(|member_id| self.roster.bot_by_id(member_id))
+            .map(|bot| (bot.id.clone(), bot.name.clone()))
+            .collect();
+        let key = group_key(&group.id);
+        let text = self.input.read(cx).content().trim().to_string();
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        if text.is_empty() && chat.pending_attachments.is_empty() {
+            return;
+        }
+        if !chat.ready {
+            chat.status = i18n::t("成员会话建立中…").to_string();
+            cx.notify();
+            return;
+        }
+        if chat.streaming {
+            return;
+        }
+        let attachments = std::mem::take(&mut chat.pending_attachments);
+        chat.pending_attachment_previews.clear();
+        let attachment_names: Vec<String> = attachments
+            .iter()
+            .map(|attachment| attachment.file_name.clone())
+            .collect();
+        let payload = compose_with_quote(&text, chat.quote.take());
+        chat.push_user_group(payload.clone(), attachment_names);
+        chat.status = i18n::t("等待回复…").to_string();
+        chat.error = false;
+        chat.last_sent = Some(text.clone());
+        self.drafts.remove(&key);
+        // 台账：根容器 + 每个被路由成员一条子任务；失败不影响发送。
+        let chosen =
+            route_group_members(&payload, &member_pairs, &responder_policy, admin_id.as_deref());
+        match group_tasks::create_turn(
+            &data::data_root(),
+            &group_id,
+            &payload,
+            &text,
+            &chosen,
+        ) {
+            Ok((root, children)) => {
+                if self.group_task_turns.contains_key(&key) {
+                    fail_group_task_turn(&mut self.group_task_turns, &key);
+                }
+                self.group_task_turns.insert(
+                    key.clone(),
+                    GroupTaskTurn {
+                        root_id: root.id,
+                        members: children.into_iter().collect(),
+                    },
+                );
+            }
+            Err(message) => eprintln!("[tasks] 创建群任务失败：{message}"),
+        }
+        self.refresh_group_task_bar(&group_id);
+        self.backend.send_group(key, payload, attachments);
+        self.input.update(cx, |input, cx| input.clear(window, cx));
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 群回合结束后组一份回顾快照交给 backend（延迟/串行/开关都在 backend 里）。
+    fn schedule_group_memory_review(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !crate::memory_review::enabled() {
+            return;
+        }
+        let Some(group_id) = key.strip_prefix("group:") else {
+            return;
+        };
+        let Some(group) = self.roster.groups.iter().find(|group| group.id == group_id)
+        else {
+            return;
+        };
+        let Some(chat) = self.chats.get(key) else {
+            return;
+        };
+        let owner = group
+            .admin_id
+            .as_deref()
+            .and_then(|id| self.roster.bot_by_id(id))
+            .or_else(|| {
+                group
+                    .member_ids
+                    .iter()
+                    .find_map(|id| self.roster.bot_by_id(id))
+            });
+        let Some(owner) = owner else {
+            return;
+        };
+        let Some(model) = owner.model.clone() else {
+            return;
+        };
+        if !chat.messages.iter().any(|message| {
+            message.role == Role::Assistant
+                && message.kind == MsgKind::Text
+                && !message.text.trim().is_empty()
+        }) {
+            return;
+        }
+        let workspace = group
+            .directory
+            .clone()
+            .filter(|directory| !directory.trim().is_empty())
+            .or_else(|| {
+                (!owner.directory.trim().is_empty()).then(|| owner.directory.clone())
+            })
+            .or_else(|| {
+                group.member_ids.iter().find_map(|id| {
+                    self.roster
+                        .bot_by_id(id)
+                        .map(|bot| bot.directory.clone())
+                        .filter(|directory| !directory.trim().is_empty())
+                })
+            })
+            .unwrap_or_default();
+        if workspace.trim().is_empty() {
+            return;
+        }
+        let mut options = serde_json::Map::new();
+        if let Some(level) = &model.reasoning_level {
+            options.insert(
+                "reasoningLevel".to_string(),
+                serde_json::Value::String(level.clone()),
+            );
+        }
+        let model_json = serde_json::json!({
+            "providerId": model.provider_id,
+            "modelId": model.model_id,
+            "options": options,
+        });
+        let group_name = group.name.clone();
+        let lines: Vec<&Message> = chat
+            .messages
+            .iter()
+            .filter(|message| {
+                message.kind == MsgKind::Text && !message.text.trim().is_empty()
+            })
+            .collect();
+        let start = lines.len().saturating_sub(24);
+        let transcript: Vec<crate::memory_review::TranscriptLine> = lines[start..]
+            .iter()
+            .map(|message| {
+                let who = match message.role {
+                    Role::User => "用户".to_string(),
+                    Role::Assistant => message
+                        .member
+                        .as_deref()
+                        .map(|name| format!("成员（{name}）"))
+                        .unwrap_or_else(|| group_name.clone()),
+                };
+                crate::memory_review::TranscriptLine {
+                    who,
+                    text: message.text.clone(),
+                }
+            })
+            .collect();
+        self.backend.memory_review(crate::memory_review::ReviewSnapshot {
+            group_id: group_id.to_string(),
+            group_name,
+            workspace,
+            identity: format!("mode-bot:group:{group_id}"),
+            model: model_json,
+            transcript,
+        });
+        let _ = cx;
+    }
+
+    /// 群任务重试/改派：后端按成员重发一回合，UI 只记台账映射（不追加用户气泡）。
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_group_task_turn(
+        &mut self,
+        group_key: &str,
+        root_id: &str,
+        task_id: &str,
+        owner_id: &str,
+        owner_name: &str,
+        expected: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let text = if expected.trim().is_empty() {
+            "继续这个任务".to_string()
+        } else {
+            format!("继续任务：{}", expected.trim())
+        };
+        self.backend.continue_task(group_key, owner_id, text);
+        if let Some(turn) = self.group_task_turns.get_mut(group_key) {
+            turn.members
+                .insert(owner_name.to_string(), task_id.to_string());
+        } else {
+            let mut members = HashMap::new();
+            members.insert(owner_name.to_string(), task_id.to_string());
+            self.group_task_turns.insert(
+                group_key.to_string(),
+                GroupTaskTurn {
+                    root_id: root_id.to_string(),
+                    members,
+                },
+            );
+        }
+        if let Some(chat) = self.chats.get_mut(group_key) {
+            chat.status = i18n::t("等待回复…").to_string();
+            chat.error = false;
+        }
+        cx.notify();
+    }
+    fn stop_streaming(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        if let Some(chat) = self.chats.get_mut(&key) {
+            // Stop 会把挂起的权限/表单在 ACP 侧一并 cancel；卡片立即收走。
+            chat.elicitations.clear();
+        }
+        // 群任务台账：停止本轮所有开放任务，避免列表停在 Running。
+        if let Some(Selection::Group(index)) = self.selection
+            && let Some(group) = self.roster.groups.get(index)
+        {
+            group_tasks::stop_open(&data::data_root(), &group.id);
+            self.group_task_turns.remove(&key);
+            refresh_group_tasks_view(self.group_tasks_view.as_ref(), &key, cx);
+        }
+        self.backend.stop(key);
+        cx.notify();
+    }
+
+    fn resolve_permission(&mut self, request_id: String, option_id: String, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        let Some(pending) = chat
+            .permissions
+            .iter_mut()
+            .find(|pending| pending.prompt.request_id == request_id)
+        else {
+            return;
+        };
+        if pending.sent {
+            return;
+        }
+        pending.sent = true;
+        chat.status = i18n::t("提交审批…").to_string();
+        // 后端按 request_map 把作答路由回来源成员会话；key 只是 UI 归属。
+        self.backend.resolve(key, request_id, option_id);
+        cx.notify();
+    }
+
+    fn answer_question(&mut self, request_id: String, answer: Option<String>, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        let Some(pending) = chat
+            .questions
+            .iter_mut()
+            .find(|pending| pending.card.request_id == request_id)
+        else {
+            return;
+        };
+        if pending.sent {
+            return;
+        }
+        let question = pending.card.question.clone();
+        pending.sent = true;
+        chat.status = i18n::t("提交回答…").to_string();
+        // 后端按 request_map 把作答路由回来源成员会话；key 只是 UI 归属。
+        self.backend
+            .answer_question(key, request_id, question, answer);
+        cx.notify();
+    }
+
+    /// 频道成员可并发出卡；每张卡独立渲染，卡头标注归属成员（复用群气泡标签样式）。
+    fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(key) = self.active_key() else {
+            return Vec::new();
+        };
+        let Some(chat) = self.chats.get(&key) else {
+            return Vec::new();
+        };
+        chat.questions
+            .iter()
+            .map(|pending| self.question_card_el(pending, cx))
+            .collect()
+    }
+
+    fn question_card_el(
+        &self,
+        pending: &PendingQuestion,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let card = &pending.card;
+        let request_id = card.request_id.clone();
+        let sent = pending.sent;
+
+        let mut options = div().flex().flex_wrap().gap(px(6.));
+        if sent {
+            options = options.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::ink_tertiary())
+                    .child(i18n::t("已提交，等待 Agent 继续…")),
+            );
+        } else {
+            for (index, (value, label)) in card.options.iter().enumerate() {
+                let value = value.clone();
+                let request_id_click = request_id.clone();
+                options = options.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "question-opt-{}-{}",
+                            request_id, index
+                        )))
+                        .h(px(28.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(theme::accent())
+                        .bg(theme::raised())
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.opacity(0.85))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.answer_question(request_id_click.clone(), Some(value.clone()), cx);
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme::ink())
+                                .child(SharedString::from(label.clone())),
+                        ),
+                );
+            }
+            options = options.child(
+                div()
+                    .id(SharedString::from(format!("question-cancel-{}", request_id)))
+                    .h(px(28.)).rounded_full()
+                    .border_1()
+                    .border_color(theme::danger())
+                    .bg(theme::card())
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.85))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.answer_question(request_id.clone(), None, cx);
+                    }))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .text_color(theme::danger())
+                            .child(i18n::t("取消")),
+                    ),
+            );
+        }
+
+        div()
+            .w_full()
+            .max_w(px(960.))
+            .mx_auto()
+            .mb(px(8.))
+            .flex_shrink_0()
+            .rounded(px(theme::RADIUS_CARD))
+            .border_1()
+            .border_color(theme::success())
+            .bg(theme::card())
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::ink())
+                            .child(i18n::t("Bot 提问 · AskUserQuestion")),
+                    )
+                    .child(div().flex_1())
+                    .children(member_label(&card.member)),
+            )
+            .children((!card.question.is_empty()).then(|| {
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(card.question.clone()))
+            }))
+            .child(options)
+            .into_any_element()
+    }
+
+    /// ACP elicitation 表单：多题并排，提交后回填 content；取消 = decline。
+    fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(key) = self.active_key() else {
+            return Vec::new();
+        };
+        let Some(chat) = self.chats.get(&key) else {
+            return Vec::new();
+        };
+        chat.elicitations
+            .iter()
+            .map(|pending| self.elicitation_card_el(pending, cx))
+            .collect()
+    }
+
+    fn elicitation_card_el(
+        &self,
+        pending: &PendingElicitation,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let card = &pending.card;
+        let request_id = card.request_id.clone();
+        let sent = pending.sent;
+        let mut fields = div().flex().flex_col().gap(px(10.));
+        if sent {
+            fields = fields.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::ink_tertiary())
+                    .child(i18n::t("已提交，等待 Agent 继续…")),
+            );
+        } else {
+            for field in &card.fields {
+                let mut block = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .text_color(theme::ink())
+                            .child(SharedString::from(format!(
+                                "{}{}",
+                                field.title,
+                                if field.required { " *" } else { "" }
+                            ))),
+                    );
+                match &field.kind {
+                    ElicitationFieldKind::Text
+                    | ElicitationFieldKind::Number { .. }
+                    | ElicitationFieldKind::TextList => {
+                        if matches!(field.kind, ElicitationFieldKind::TextList) {
+                            block = block.child(settings_note(i18n::t("多个值用逗号或换行分隔")));
+                        }
+                        if let Some(input) = pending.texts.get(&field.key) {
+                            block = block.child(input.clone());
+                        }
+                    }
+                    ElicitationFieldKind::Single(options) => {
+                        let mut chips = div().flex().flex_wrap().gap(px(6.));
+                        for (index, (value, label)) in options.iter().enumerate() {
+                            let selected = pending.single.get(&field.key) == Some(value);
+                            let value = value.clone();
+                            let field_key = field.key.clone();
+                            let request = request_id.clone();
+                            chips = chips.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "elicit-{request_id}-{}-{index}",
+                                        field.key
+                                    )))
+                                    .h(px(26.))
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(if selected {
+                                        theme::accent()
+                                    } else {
+                                        theme::edge()
+                                    })
+                                    .bg(if selected {
+                                        theme::selected()
+                                    } else {
+                                        theme::card()
+                                    })
+                                    .px(px(9.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.elicit_select(
+                                            &request,
+                                            &field_key,
+                                            value.clone(),
+                                            false,
+                                            cx,
+                                        );
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(11.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(SharedString::from(label.clone())),
+                                    ),
+                            );
+                        }
+                        block = block.child(chips);
+                    }
+                    ElicitationFieldKind::Multi(options) => {
+                        let mut chips = div().flex().flex_wrap().gap(px(6.));
+                        let picked = pending.multi.get(&field.key).cloned().unwrap_or_default();
+                        for (index, (value, label)) in options.iter().enumerate() {
+                            let selected = picked.contains(value);
+                            let value = value.clone();
+                            let field_key = field.key.clone();
+                            let request = request_id.clone();
+                            chips = chips.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "elicit-{request_id}-{}-{index}",
+                                        field.key
+                                    )))
+                                    .h(px(26.))
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(if selected {
+                                        theme::accent()
+                                    } else {
+                                        theme::edge()
+                                    })
+                                    .bg(if selected {
+                                        theme::selected()
+                                    } else {
+                                        theme::card()
+                                    })
+                                    .px(px(9.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.elicit_select(
+                                            &request,
+                                            &field_key,
+                                            value.clone(),
+                                            true,
+                                            cx,
+                                        );
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(11.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(SharedString::from(label.clone())),
+                                    ),
+                            );
+                        }
+                        block = block.child(chips);
+                    }
+                    ElicitationFieldKind::Boolean => {
+                        let mut chips = div().flex().gap(px(6.));
+                        for (value, label) in [("true", i18n::t("是")), ("false", i18n::t("否"))] {
+                            let selected = pending.single.get(&field.key).map(String::as_str)
+                                == Some(value);
+                            let value = value.to_string();
+                            let field_key = field.key.clone();
+                            let request = request_id.clone();
+                            chips = chips.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "elicit-{request_id}-{}-{value}",
+                                        field.key
+                                    )))
+                                    .h(px(26.))
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(if selected {
+                                        theme::accent()
+                                    } else {
+                                        theme::edge()
+                                    })
+                                    .bg(if selected {
+                                        theme::selected()
+                                    } else {
+                                        theme::card()
+                                    })
+                                    .px(px(12.))
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.elicit_select(
+                                            &request,
+                                            &field_key,
+                                            value.clone(),
+                                            false,
+                                            cx,
+                                        );
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(11.))
+                                            .text_color(theme::ink_secondary())
+                                            .child(i18n::t(label)),
+                                    ),
+                            );
+                        }
+                        block = block.child(chips);
+                    }
+                }
+                fields = fields.child(block);
+            }
+            let request = request_id.clone();
+            fields = fields.child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("elicit-decline-{request_id}")))
+                            .h(px(28.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::card())
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.answer_elicitation(request.clone(), None, cx);
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("取消")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("elicit-submit-{request_id}")))
+                            .h(px(28.))
+                            .rounded_full()
+                            .bg(theme::accent())
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|style| style.opacity(0.85))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.submit_elicitation(request_id.clone(), cx);
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(theme::accent_ink())
+                                    .child(i18n::t("提交")),
+                            ),
+                    ),
+            );
+        }
+
+        div()
+            .w_full()
+            .max_w(px(960.))
+            .mx_auto()
+            .mb(px(8.))
+            .flex_shrink_0()
+            .rounded(px(theme::RADIUS_CARD))
+            .border_1()
+            .border_color(theme::accent())
+            .bg(theme::card())
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::ink())
+                            .child(i18n::t("Bot 提问 · 填写表单")),
+                    )
+                    .child(div().flex_1())
+                    .children(member_label(&card.member)),
+            )
+            .children((!card.message.is_empty()).then(|| {
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(card.message.clone()))
+            }))
+            .child(fields)
+            .into_any_element()
+    }
+
+    fn elicit_select(
+        &mut self,
+        request_id: &str,
+        field_key: &str,
+        value: String,
+        multi: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        let Some(pending) = chat
+            .elicitations
+            .iter_mut()
+            .find(|pending| pending.card.request_id == request_id)
+        else {
+            return;
+        };
+        if pending.sent {
+            return;
+        }
+        if multi {
+            let picked = pending.multi.entry(field_key.to_string()).or_default();
+            if let Some(index) = picked.iter().position(|item| item == &value) {
+                picked.remove(index);
+            } else {
+                picked.push(value);
+            }
+        } else {
+            pending.single.insert(field_key.to_string(), value);
+        }
+        cx.notify();
+    }
+
+    fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let built = {
+            let Some(chat) = self.chats.get(&key) else {
+                return;
+            };
+            let Some(pending) = chat
+                .elicitations
+                .iter()
+                .find(|pending| pending.card.request_id == request_id)
+            else {
+                return;
+            };
+            if pending.sent {
+                return;
+            }
+            let card = pending.card.clone();
+            let mut problem = None;
+            for field in &card.fields {
+                let text = pending
+                    .texts
+                    .get(&field.key)
+                    .map(|input| input.read(cx).content().trim().to_string())
+                    .unwrap_or_default();
+                let answered = match &field.kind {
+                    ElicitationFieldKind::Text
+                    | ElicitationFieldKind::Number { .. }
+                    | ElicitationFieldKind::TextList => !text.is_empty(),
+                    ElicitationFieldKind::Single(_) | ElicitationFieldKind::Boolean => {
+                        pending.single.contains_key(&field.key)
+                    }
+                    ElicitationFieldKind::Multi(_) => pending
+                        .multi
+                        .get(&field.key)
+                        .is_some_and(|values| !values.is_empty()),
+                };
+                if field.required && !answered {
+                    problem = Some(tri!("请先回答：{}", "Please answer: {}", field.title));
+                    break;
+                }
+                if let ElicitationFieldKind::Number { integer } = &field.kind
+                    && !text.is_empty()
+                {
+                    let valid = if *integer {
+                        text.parse::<i64>().is_ok()
+                    } else {
+                        text.parse::<f64>().is_ok()
+                    };
+                    if !valid {
+                        let kind = if *integer { i18n::t("整数") } else { i18n::t("数字") };
+                        problem = Some(tri!("{} 需要{}", "{} must be {}", field.title, kind));
+                        break;
+                    }
+                }
+            }
+            if problem.is_some() {
+                (problem, None)
+            } else {
+                let mut content = ElicitationContent::new();
+                for field in &card.fields {
+                    let text = pending
+                        .texts
+                        .get(&field.key)
+                        .map(|input| input.read(cx).content().trim().to_string())
+                        .unwrap_or_default();
+                    let value = match &field.kind {
+                        ElicitationFieldKind::Text => {
+                            (!text.is_empty()).then_some(ElicitationValue::Text(text.clone()))
+                        }
+                        ElicitationFieldKind::Number { integer } => {
+                            if text.is_empty() {
+                                None
+                            } else if *integer {
+                                text.parse::<i64>()
+                                    .ok()
+                                    .map(ElicitationValue::Integer)
+                            } else {
+                                text.parse::<f64>()
+                                    .ok()
+                                    .map(ElicitationValue::Number)
+                            }
+                        }
+                        ElicitationFieldKind::TextList => {
+                            let items: Vec<String> = text
+                                .split([',', '，', '\n'])
+                                .map(str::trim)
+                                .filter(|item| !item.is_empty())
+                                .map(str::to_string)
+                                .collect();
+                            (!items.is_empty()).then_some(ElicitationValue::List(items))
+                        }
+                        ElicitationFieldKind::Single(_) => pending
+                            .single
+                            .get(&field.key)
+                            .cloned()
+                            .map(ElicitationValue::Text),
+                        ElicitationFieldKind::Multi(_) => pending
+                            .multi
+                            .get(&field.key)
+                            .filter(|values| !values.is_empty())
+                            .cloned()
+                            .map(ElicitationValue::List),
+                        ElicitationFieldKind::Boolean => pending
+                            .single
+                            .get(&field.key)
+                            .map(|value| ElicitationValue::Bool(value == "true")),
+                    };
+                    if let Some(value) = value {
+                        content.insert(field.key.clone(), value);
+                    }
+                }
+                (None, Some(content))
+            }
+        };
+        match built {
+            (Some(message), _) => self.toast(message, cx),
+            (None, Some(content)) => {
+                self.answer_elicitation(request_id, Some(content), cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn answer_elicitation(
+        &mut self,
+        request_id: String,
+        content: Option<ElicitationContent>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        let Some(pending) = chat
+            .elicitations
+            .iter_mut()
+            .find(|pending| pending.card.request_id == request_id)
+        else {
+            return;
+        };
+        if pending.sent {
+            return;
+        }
+        pending.sent = true;
+        chat.status = i18n::t("提交回答…").to_string();
+        self.backend.answer_elicitation(key, request_id, content);
+        cx.notify();
+    }
+
+    /// 审批卡同问题卡：支持多张并存，卡头标注归属成员。
+    fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(key) = self.active_key() else {
+            return Vec::new();
+        };
+        let Some(chat) = self.chats.get(&key) else {
+            return Vec::new();
+        };
+        chat.permissions
+            .iter()
+            .map(|pending| self.approval_card_el(pending, cx))
+            .collect()
+    }
+
+    fn approval_card_el(
+        &self,
+        pending: &PendingApproval,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let prompt = &pending.prompt;
+        let request_id = prompt.request_id.clone();
+        let sent = pending.sent;
+        let risk = if prompt.risk.is_empty() {
+            String::new()
+        } else {
+            tri!("风险 {}", "Risk {}", prompt.risk)
+        };
+
+        let mut options = div().flex().flex_wrap().gap(px(6.));
+        if sent {
+            options = options.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::ink_tertiary())
+                    .child(i18n::t("已提交，等待 Agent 确认…")),
+            );
+        } else {
+            for (index, option) in prompt.options.iter().enumerate() {
+                let kind = option.kind.clone();
+                let option_id = option.option_id.clone();
+                let request_id_click = request_id.clone();
+                let (bg, border, fg) = match kind.as_str() {
+                    "deny" => (theme::card(), theme::danger(), theme::danger()),
+                    "allowAlways" => (theme::accent(), theme::accent(), theme::accent_ink()),
+                    _ => (theme::raised(), theme::edge(), theme::ink()),
+                };
+                options = options.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "approval-opt-{}-{}",
+                            request_id, index
+                        )))
+                        .h(px(28.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(border)
+                        .bg(bg)
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.opacity(0.85))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.resolve_permission(request_id_click.clone(), option_id.clone(), cx);
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(fg)
+                                .child(SharedString::from(i18n::owned(approval_option_label(
+                                    &kind,
+                                    &option.label,
+                                )))),
+                        ),
+                );
+            }
+        }
+
+        div()
+            .mx(px(16.))
+            .mb(px(8.))
+            .flex_shrink_0()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme::accent())
+            .bg(theme::card())
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::ink())
+                            .child(tri!("需要确认 · {}", "Needs confirmation · {}", prompt.tool_name)),
+                    )
+                    .child(div().flex_1())
+                    .children(member_label(&prompt.member))
+                    .children((!risk.is_empty()).then(|| {
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_tertiary())
+                            .child(risk)
+                    })),
+            )
+            .children((!prompt.reason.is_empty()).then(|| {
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(prompt.reason.clone()))
+            }))
+            .child(options)
+            .into_any_element()
+    }
+
+    /// Esc：只关一层，顺序与视觉层级一致（后开的先关）。
+    fn on_close_overlay(&mut self, _: &CloseOverlay, window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("CloseOverlay");
+        // IME 组合中 Esc 是「取消候选」，不能顺手关掉当前浮层。
+        if self.ime_composing(cx) {
+            return;
+        }
+        if self.mention_context(cx).is_some() {
+            self.mention_dismissed = true;
+            cx.notify();
+            return;
+        }
+        if self.image_preview.is_some() {
+            self.image_preview = None;
+        } else if self.palette.is_some() {
+            self.palette = None;
+        } else if self.find_dialog.is_some() {
+            self.find_dialog = None;
+        } else if self.me_card_open {
+            self.me_card_open = false;
+            return;
+        } else if self.detail_menu_open {
+            self.close_detail_menu(window, cx);
+            return;
+        } else if self.footer_menu_open {
+            self.footer_menu_open = false;
+            return;
+        } else if self.settings_open {
+            self.settings_open = false;
+        } else if self.search_open {
+            self.search_open = false;
+            let search = self.search_input.clone();
+            search.update(cx, |input, cx| input.set_content("", cx));
+        } else {
+            // 没有浮层可关：不动草稿，也不抢输入框焦点。
+            return;
+        }
+        // 关掉最后一层后把焦点还给输入框：浮层（菜单/搜索/对话框）可能持有过焦点，
+        // 元素一消失焦点就悬空，之后打字会全部静默丢失。
+        self.refocus_composer_if_clear(window, cx);
+        cx.notify();
+    }
+
+    /// 没有浮层时把焦点交给输入框（多用于 Esc 逐层关闭之后）。
+    fn refocus_composer_if_clear(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let clear = self.palette.is_none()
+            && self.find_dialog.is_none()
+            && !self.detail_menu_open
+            && !self.settings_open
+            && !self.search_open;
+        if clear {
+            let handle = self.input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        } else if self.settings_open {
+            // 设置窗口还开着：把焦点收回设置卡，别让它悬在刚关闭的子对话框上。
+            self.settings_focus.clone().focus(window, cx);
+        }
+    }
+
+    /// kit AlertDialog 关闭后不会自动恢复焦点；on_close 里统一还给输入框/设置卡。
+    /// 关闭当帧对话框还在退场动画里，焦点会被浮层盖住，所以延后一帧再还。
+    fn dialog_focus_restore(&self, cx: &mut Context<Self>) -> DialogFocusRestore {
+        let weak = cx.weak_entity();
+        std::rc::Rc::new(move |_, window, cx| {
+            Self::defer_focus_restore(weak.clone(), window, cx);
+        })
+    }
+
+    /// 延后一帧恢复焦点（程序化 close_dialog 不触发 on_close 时也要调用）。
+    fn defer_focus_restore(weak: gpui::WeakEntity<Self>, window: &mut Window, cx: &mut App) {
+        window.defer(cx, move |window, cx| {
+            let _ = weak.update(cx, |this, cx| this.refocus_composer_if_clear(window, cx));
+        });
+    }
+
+    /// Ctrl+N：与右栏「新会话」同一条路径（仅私聊；频道没有新会话语义）。
+    fn on_new_session_shortcut(
+        &mut self,
+        _: &NewSessionShortcut,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_action("NewSessionShortcut");
+        let Some(bot) = self.selected_bot().cloned() else {
+            return;
+        };
+        let key = bot_key(&bot.id);
+        if self
+            .chats
+            .get(&key)
+            .is_some_and(|chat| chat.streaming)
+        {
+            // 生成中不换会话：先 Stop 或等回合结束。
+            return;
+        }
+        if let Some(chat) = self.chats.get(&key)
+            && let Some(old_id) = chat.session_id.clone()
+        {
+            self.sessions.push_history(&bot.id, &old_id);
+            self.sessions.save();
+        }
+        self.chats.remove(&key);
+        let workspace = if bot.directory.trim().is_empty() {
+            backend::fallback_workspace().to_string_lossy().into_owned()
+        } else {
+            bot.directory.clone()
+        };
+        self.backend
+            .new_session(
+                key,
+                workspace,
+                bot.identity(),
+                bot.model.clone(),
+                self.sessions.engine_of(&bot.id).map(str::to_string),
+            );
+        cx.notify();
+    }
+
+    /// Ctrl+K：展开搜索并把焦点交给搜索框（Esc 可退出）。
+    fn on_search_shortcut(&mut self, _: &SearchShortcut, window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("SearchShortcut");
+        self.search_open = true;
+        let search = self.search_input.clone();
+        let handle = search.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Ctrl+,：打开设置信息面板。
+    fn on_settings_shortcut(
+        &mut self,
+        _: &SettingsShortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_action("SettingsShortcut");
+        self.settings_open = true;
+        self.automations_view = None;
+        self.pending_bot_dialog = None;
+        self.detail_menu_open = false;
+        self.settings_focus.clone().focus(window, cx);
+        cx.notify();
+    }
+
+    /// 检查更新：后台跑 curl，回到 UI 线程落结果（阻塞不占 UI 线程）。
+    /// 后台定时检查更新（release 默认开；debug 需要 BOT_PILOT_AUTO_UPDATE=1）。
+    fn schedule_auto_update(&mut self, cx: &mut Context<Self>) {
+        if cfg!(debug_assertions)
+            && std::env::var("BOT_PILOT_AUTO_UPDATE").ok().as_deref() != Some("1")
+        {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs(5))
+                .await;
+            loop {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { update::check(Duration::from_secs(10)) })
+                    .await;
+                let newer = matches!(
+                    &result,
+                    update::Check::Done { newer: true, .. }
+                );
+                let _ = this.update(cx, |this, cx| {
+                    this.update_check = Some(result);
+                    if newer {
+                        this.toast(i18n::t("发现新版本，可在设置 → 关于里更新"), cx);
+                    }
+                    cx.notify();
+                });
+                cx.background_executor()
+                    .timer(Duration::from_secs(4 * 60 * 60))
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    fn check_updates(&mut self, cx: &mut Context<Self>) {
+        if self.update_checking {
+            return;
+        }
+        self.update_checking = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { update::check(Duration::from_secs(8)) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.update_checking = false;
+                this.update_check = Some(result);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn update_target(&self) -> Option<update::Target> {
+        match &self.update_check {
+            Some(update::Check::Done {
+                newer: true,
+                target: Some(target),
+                ..
+            }) => Some(target.clone()),
+            _ => None,
+        }
+    }
+
+    /// 下载 → SHA-256 校验 → 解压 → 启动替换脚本并退出。
+    fn start_update(&mut self, cx: &mut Context<Self>) {
+        if self.update_busy {
+            return;
+        }
+        let Some(target) = self.update_target() else {
+            self.toast(i18n::t("没有可自更新的平台包；请到发布页下载"), cx);
+            return;
+        };
+        let Ok(current_exe) = std::env::current_exe() else {
+            self.toast(i18n::t("无法定位当前可执行文件"), cx);
+            return;
+        };
+        if let Err(message) = update::can_self_update(&current_exe) {
+            self.toast(message, cx);
+            return;
+        }
+        self.update_busy = true;
+        self.confirm_update = false;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { update::download_and_stage(&target) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(staged) => match update::spawn_swap_and_restart(&current_exe, &staged) {
+                        Ok(()) => {
+                            this.update_busy = false;
+                            this.toast(i18n::t("更新器已启动，应用即将退出…"), cx);
+                            cx.notify();
+                            // 给 toast 一帧时间；脚本会等本进程退出后再替换。
+                            std::thread::spawn(|| {
+                                std::thread::sleep(Duration::from_millis(800));
+                                std::process::exit(0);
+                            });
+                        }
+                        Err(error) => {
+                            this.update_busy = false;
+                            this.toast(tri!("启动更新失败：{error}", "Failed to start the update: {error}"), cx);
+                            cx.notify();
+                        }
+                    },
+                    Err(error) => {
+                        this.update_busy = false;
+                        this.toast(tri!("更新失败：{error}", "Update failed: {error}"), cx);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn on_new_bot_shortcut(
+        &mut self,
+        _: &NewBotShortcut,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_action("NewBotShortcut");
+        self.open_new_dialog(cx);
+    }
+
+    fn on_edit_bot_shortcut(
+        &mut self,
+        _: &EditBotShortcut,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_action("EditBotShortcut");
+        let Some(bot) = self.selected_bot() else {
+            return;
+        };
+        let bot_id = bot.id.clone();
+        self.open_edit_dialog(bot_id, cx);
+    }
+
+    fn on_new_channel_shortcut(
+        &mut self,
+        _: &NewChannelShortcut,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_action("NewChannelShortcut");
+        self.open_new_group_dialog(cx);
+    }
+
+    /// Enter（Dialog 上下文）：优先提交频道对话框；Bot 对话框走它自己的按钮。
+    fn on_submit_dialog(&mut self, _: &SubmitDialog, _window: &mut Window, _cx: &mut Context<Self>) {
+        debug_action("SubmitDialog");
+    }
+
+    /// Ctrl+F：打开会话全文搜索（输入即查，命中按会话去重）。
+    fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("FindShortcut");
+        if self.find_dialog.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| SimpleInput::new(i18n::t("搜索历史消息…"), theme::ink_tertiary, cx));
+        // 每次输入变化就重查（本地库、limit 8；不足 2 字由 search_messages 自己挡掉）。
+        cx.observe(&input, |this: &mut Self, input, cx| {
+            let query = input.read(cx).content().to_string();
+            // 结果集变了，高亮回到第一条。
+            this.find_selected = 0;
+            this.find_seq = this.find_seq.wrapping_add(1);
+            let seq = this.find_seq;
+            // 真机会话库能到 GB 级：LIKE 扫描放在后台线程，再做 120ms 防抖，
+            // 过期结果用序号丢弃（不能阻塞 UI 线程，否则输入一个字卡一次）。
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                let fresh = this
+                    .update(cx, |this, _| this.find_seq == seq)
+                    .unwrap_or(false);
+                if !fresh {
+                    return;
+                }
+                let results = cx
+                    .background_executor()
+                    .spawn(async move { session_db::search_messages(&query, 8) })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.find_seq == seq
+                        && let Some(dialog) = this.find_dialog.as_mut()
+                    {
+                        dialog.results = results;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+        })
+        .detach();
+        let handle = input.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+        self.find_dialog = Some(FindState {
+            input,
+            results: Vec::new(),
+        });
+        self.find_selected = 0;
+        self.find_seq = self.find_seq.wrapping_add(1);
+        cx.notify();
+    }
+
+    /// 搜索命中属于谁（私聊 Bot / 频道成员）。
+    fn find_owner_of_session(&self, session_id: &str) -> Option<Selection> {
+        for (index, bot) in self.roster.bots.iter().enumerate() {
+            if self.sessions.get(&bot.id).as_deref() == Some(session_id)
+                || self
+                    .sessions
+                    .history_of(&bot.id)
+                    .iter()
+                    .any(|id| id == session_id)
+            {
+                return Some(Selection::Bot(index));
+            }
+        }
+        for (index, group) in self.roster.groups.iter().enumerate() {
+            for member_id in &group.member_ids {
+                let slot = backend::member_session_key(&group_key(&group.id), member_id);
+                if self.sessions.get(&slot).as_deref() == Some(session_id) {
+                    return Some(Selection::Group(index));
+                }
+            }
+        }
+        None
+    }
+
+    fn on_find_next(&mut self, _: &FindNext, _window: &mut Window, cx: &mut Context<Self>) {
+        let count = self
+            .find_dialog
+            .as_ref()
+            .map(|dialog| dialog.results.len())
+            .unwrap_or(0);
+        if count == 0 {
+            return;
+        }
+        self.find_selected = (self.find_selected + 1) % count;
+        cx.notify();
+    }
+
+    fn on_find_prev(&mut self, _: &FindPrev, _window: &mut Window, cx: &mut Context<Self>) {
+        let count = self
+            .find_dialog
+            .as_ref()
+            .map(|dialog| dialog.results.len())
+            .unwrap_or(0);
+        if count == 0 {
+            return;
+        }
+        self.find_selected = (self.find_selected + count - 1) % count;
+        cx.notify();
+    }
+
+    fn on_mention_next(&mut self, _: &MentionNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, names)) = self.mention_context(cx) {
+            let count = names.len();
+            self.mention_selected = (self.mention_selected + 1) % count;
+            cx.notify();
+        }
+    }
+
+    fn on_mention_prev(&mut self, _: &MentionPrev, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, names)) = self.mention_context(cx) {
+            let count = names.len();
+            self.mention_selected = (self.mention_selected + count - 1) % count;
+            cx.notify();
+        }
+    }
+
+    fn on_focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_next(cx);
+    }
+
+    fn on_focus_prev(&mut self, _: &FocusPrev, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_prev(cx);
+    }
+
+    fn on_find_open(&mut self, _: &FindOpen, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.ime_composing(cx) {
+            return;
+        }
+        let Some(hit) = self
+            .find_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.results.get(self.find_selected))
+            .cloned()
+        else {
+            return;
+        };
+        self.jump_to_hit(&hit, cx);
+    }
+
+    /// 跳到搜索结果：私聊直接切换会话；频道成员会话只切过去（暂不支持换成员会话）。
+    fn jump_to_hit(&mut self, hit: &session_db::SearchHit, cx: &mut Context<Self>) {
+        let session_id = hit.session_id.clone();
+        match self.find_owner_of_session(&session_id) {
+            Some(Selection::Bot(index)) => {
+                let Some(bot) = self.roster.bots.get(index).cloned() else {
+                    return;
+                };
+                let key = bot_key(&bot.id);
+                let is_current = self
+                    .chats
+                    .get(&key)
+                    .and_then(|chat| chat.session_id.as_deref())
+                    == Some(session_id.as_str());
+                self.selection = Some(Selection::Bot(index));
+                self.active_tab = 0;
+                if is_current {
+                    self.find_dialog = None;
+                    cx.notify();
+                    return;
+                }
+                if let Some(chat) = self.chats.get(&key)
+                    && let Some(current) = chat.session_id.clone()
+                    && current != session_id
+                {
+                    self.sessions.push_history(&bot.id, &current);
+                    self.sessions.save();
+                }
+                if let Some(chat) = self.chats.get_mut(&key) {
+                    chat.messages.clear();
+                    chat.streaming_index = None;
+                    chat.tool_index.clear();
+                    chat.member_stream.clear();
+                    chat.streaming = false;
+                    chat.permissions.clear();
+                    chat.questions.clear();
+                    chat.elicitations.clear();
+                    chat.session_id = None;
+                    chat.ready = false;
+                    chat.status = i18n::t("切换会话…").to_string();
+                }
+                let workspace = if bot.directory.trim().is_empty() {
+                    backend::fallback_workspace().to_string_lossy().into_owned()
+                } else {
+                    bot.directory.clone()
+                };
+                self.backend.switch_session(
+                    key,
+                    workspace,
+                    bot.identity(),
+                    bot.model.clone(),
+                    bot.id.clone(),
+                    session_id,
+                    self.sessions.engine_of(&bot.id).map(str::to_string),
+                );
+                self.find_dialog = None;
+                self.scroll.scroll_to_bottom();
+                cx.notify();
+            }
+            Some(Selection::Group(index)) => {
+                // 频道成员会话：切到该频道（成员会话切换不在本批范围）。
+                self.find_dialog = None;
+                self.select_group(index, cx);
+            }
+            None => {
+                // 名册里找不到归属（旧会话/已删 Bot）：只关闭对话框。
+                self.find_dialog = None;
+                cx.notify();
+            }
+        }
+    }
+
+    /// 命令面板的候选（静态动作 + 当前名册里的 Bot/频道）。
+    fn palette_entries(&self) -> Vec<(String, String, PaletteCmd)> {
+        let mut entries = vec![
+            (i18n::t("新建 Bot").to_string(), "Ctrl+B".to_string(), PaletteCmd::NewBot),
+            (i18n::t("编辑当前 Bot").to_string(), "Ctrl+E".to_string(), PaletteCmd::EditBot),
+            (i18n::t("新建频道").to_string(), "Ctrl+G".to_string(), PaletteCmd::NewChannel),
+            (i18n::t("新会话").to_string(), "Ctrl+N".to_string(), PaletteCmd::NewSession),
+            (i18n::t("搜索历史消息").to_string(), "Ctrl+F".to_string(), PaletteCmd::FindMessages),
+            (i18n::t("选择模型").to_string(), String::new(), PaletteCmd::PickModel),
+            (i18n::t("审批白名单").to_string(), String::new(), PaletteCmd::EditAllowlist),
+            (i18n::t("打开设置").to_string(), "Ctrl+,".to_string(), PaletteCmd::OpenSettings),
+        ];
+        for (index, bot) in self.roster.bots.iter().enumerate() {
+            entries.push((
+                tri!("切换到 {}", "Switch to {}", bot.name),
+                bot.role.clone(),
+                PaletteCmd::SelectBot(index),
+            ));
+        }
+        for (index, group) in self.roster.groups.iter().enumerate() {
+            entries.push((
+                tri!("切换到 {}", "Switch to {}", group.name),
+                i18n::t("频道").to_string(),
+                PaletteCmd::SelectGroup(index),
+            ));
+        }
+        entries
+    }
+
+    /// 按输入过滤（不区分大小写，全部关键词都要命中）。
+    fn filtered_palette(&self, cx: &App) -> Vec<(String, String, PaletteCmd)> {
+        let query = self
+            .palette
+            .as_ref()
+            .map(|palette| palette.input.read(cx).content().trim().to_lowercase())
+            .unwrap_or_default();
+        let mut entries = self.palette_entries();
+        if !query.is_empty() {
+            entries.retain(|(label, hint, _)| {
+                let haystack = format!("{} {}", label, hint).to_lowercase();
+                query.split_whitespace().all(|part| haystack.contains(part))
+            });
+        }
+        entries.truncate(10);
+        entries
+    }
+
+    fn on_palette_shortcut(
+        &mut self,
+        _: &PaletteShortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_action("PaletteShortcut");
+        if self.palette.is_some() {
+            self.palette = None;
+            cx.notify();
+            return;
+        }
+        let input = cx.new(|cx| SimpleInput::new(i18n::t("输入命令…"), theme::ink_tertiary, cx));
+        cx.observe(&input, |_, _, cx| cx.notify()).detach();
+        let handle = input.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+        self.palette = Some(PaletteState {
+            input,
+            selected: 0,
+        });
+        cx.notify();
+    }
+
+    fn on_palette_prev(&mut self, _: &PalettePrev, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("PalettePrev");
+        let count = self.filtered_palette(cx).len();
+        if count == 0 {
+            return;
+        }
+        if let Some(palette) = self.palette.as_mut() {
+            palette.selected = if palette.selected == 0 {
+                count - 1
+            } else {
+                palette.selected - 1
+            };
+        }
+        cx.notify();
+    }
+
+    fn on_palette_next(&mut self, _: &PaletteNext, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("PaletteNext");
+        let count = self.filtered_palette(cx).len();
+        if count == 0 {
+            return;
+        }
+        if let Some(palette) = self.palette.as_mut() {
+            palette.selected = (palette.selected + 1) % count;
+        }
+        cx.notify();
+    }
+
+    fn on_palette_submit(&mut self, _: &PaletteSubmit, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("PaletteSubmit");
+        if self.ime_composing(cx) {
+            return;
+        }
+        let Some(palette) = self.palette.as_ref() else {
+            return;
+        };
+        let index = palette.selected;
+        let entries = self.filtered_palette(cx);
+        let Some((_, _, command)) = entries.get(index).cloned() else {
+            return;
+        };
+        self.palette = None;
+        self.run_palette_command(command, cx);
+        cx.notify();
+    }
+
+    /// 执行命令面板的一项（关面板由调用方保证）。
+    fn run_palette_command(&mut self, command: PaletteCmd, cx: &mut Context<Self>) {
+        match command {
+            PaletteCmd::NewBot => self.open_new_dialog(cx),
+            PaletteCmd::EditBot => {
+                if let Some(bot) = self.selected_bot() {
+                    let bot_id = bot.id.clone();
+                    self.open_edit_dialog(bot_id, cx);
+                }
+            }
+            PaletteCmd::NewChannel => self.open_new_group_dialog(cx),
+            PaletteCmd::NewSession => {
+                // 与 Ctrl+N 同一条路径：复用快捷键处理逻辑。
+                if let Some(bot) = self.selected_bot().cloned() {
+                    let key = bot_key(&bot.id);
+                    if !self.chats.get(&key).is_some_and(|chat| chat.streaming) {
+                        if let Some(chat) = self.chats.get(&key)
+                            && let Some(old_id) = chat.session_id.clone()
+                        {
+                            self.sessions.push_history(&bot.id, &old_id);
+                            self.sessions.save();
+                        }
+                        self.chats.remove(&key);
+                        let workspace = if bot.directory.trim().is_empty() {
+                            backend::fallback_workspace().to_string_lossy().into_owned()
+                        } else {
+                            bot.directory.clone()
+                        };
+                        self.backend.new_session(
+                            key,
+                            workspace,
+                            bot.identity(),
+                            bot.model.clone(),
+                            self.sessions.engine_of(&bot.id).map(str::to_string),
+                        );
+                        cx.notify();
+                    }
+                }
+            }
+            PaletteCmd::FindMessages => {
+                // 打开搜索要有 window 才能聚焦输入框：交给下一帧渲染处理。
+                self.pending_find = true;
+                cx.notify();
+            }
+            PaletteCmd::OpenSettings => {
+                self.settings_open = true;
+                self.automations_view = None;
+                cx.notify();
+            }
+            PaletteCmd::PickModel => {
+                if let Some(bot) = self.selected_bot() {
+                    self.pending_model_dialog = Some(bot.id.clone());
+                }
+                cx.notify();
+            }
+            PaletteCmd::EditAllowlist => {
+                if let Some(bot) = self.selected_bot() {
+                    self.pending_allowlist_dialog = Some(bot.id.clone());
+                }
+                cx.notify();
+            }
+            PaletteCmd::SelectBot(index) => self.select_bot(index, cx),
+            PaletteCmd::SelectGroup(index) => self.select_group(index, cx),
+        }
+    }
+
+    /// 左栏条目线性顺序：Bot（名册顺序）在前、频道在后。
+    fn step_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let bots = self.roster.bots.len();
+        let groups = self.roster.groups.len();
+        let total = bots + groups;
+        if total == 0 {
+            return;
+        }
+        let current = match self.selection {
+            Some(Selection::Bot(index)) => index as isize,
+            Some(Selection::Group(index)) => (bots + index) as isize,
+            None => -1,
+        };
+        // 从「无选中」出发：↓ 落到第一个，↑ 落到最后一个。
+        let next = if current < 0 {
+            if delta >= 0 { 0 } else { total as isize - 1 }
+        } else {
+            (current + delta).rem_euclid(total as isize)
+        };
+        if (next as usize) < bots {
+            self.select_bot(next as usize, cx);
+        } else if let Some(index) = (next as usize).checked_sub(bots) {
+            self.select_group(index, cx);
+        }
+    }
+
+    fn on_select_next(&mut self, _: &SelectNextItem, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("SelectNextItem");
+        self.step_selection(1, cx);
+    }
+
+    fn on_select_prev(&mut self, _: &SelectPrevItem, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("SelectPrevItem");
+        self.step_selection(-1, cx);
+    }
+
+    /// 批准：优先 allowAlways/allowOnce，其次任意非 deny 选项。
+    fn on_approve_allow(&mut self, _: &ApproveAllow, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("ApproveAllow");
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(chat) = self.chats.get(&key) else {
+            return;
+        };
+        let Some(pending) = chat.permissions.iter().find(|pending| !pending.sent) else {
+            return;
+        };
+        let options = &pending.prompt.options;
+        let chosen = options
+            .iter()
+            .find(|option| option.kind == "allowAlways")
+            .or_else(|| options.iter().find(|option| option.kind == "allowOnce"))
+            .or_else(|| options.iter().find(|option| option.kind != "deny"));
+        let Some(option) = chosen else {
+            return;
+        };
+        let (request_id, option_id) = (pending.prompt.request_id.clone(), option.option_id.clone());
+        self.resolve_permission(request_id, option_id, cx);
+    }
+
+    fn on_approve_deny(&mut self, _: &ApproveDeny, _window: &mut Window, cx: &mut Context<Self>) {
+        debug_action("ApproveDeny");
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(chat) = self.chats.get(&key) else {
+            return;
+        };
+        let Some(pending) = chat.permissions.iter().find(|pending| !pending.sent) else {
+            return;
+        };
+        let Some(option) = pending
+            .prompt
+            .options
+            .iter()
+            .find(|option| option.kind == "deny")
+        else {
+            return;
+        };
+        let (request_id, option_id) = (pending.prompt.request_id.clone(), option.option_id.clone());
+        self.resolve_permission(request_id, option_id, cx);
+    }
+
+    /// 是否有输入框正处于 IME 组合态（候选未上屏）：组合中的 Enter/Esc 归输入法，
+    /// 应用侧不能把它当成「发送/提交/关浮层」。
+    fn ime_composing(&self, cx: &App) -> bool {
+        // 仅 composer 还是自绘 TextInput；其余输入框由 gpui-kit 内部处理组合态。
+        self.input.read(cx).is_composing()
+    }
+
+    fn on_send(&mut self, _: &Send, window: &mut Window, cx: &mut Context<Self>) {
+        // IME 组合中 Enter 是「上屏候选」，不能当成发送（否则把拼音发出去）。
+        if self.ime_composing(cx) {
+            return;
+        }
+        // @ 候选面板打开时，Enter 先把选中成员插进草稿，不发送。
+        if let Some((_, names)) = self.mention_context(cx) {
+            let index = self.mention_selected.min(names.len().saturating_sub(1));
+            let name = names[index].clone();
+            self.insert_mention_at(&name, cx);
+            return;
+        }
+        self.send_current(window, cx);
+    }
+
+    // ---- @ 提及候选（群聊 composer） ----
+
+    /// 输入框末尾正在敲的 @提及：返回（`@` 的字节位置，查询串）。
+    fn mention_context(&self, cx: &Context<Self>) -> Option<(usize, Vec<String>)> {
+        let group = self.selected_group()?;
+        if self.mention_dismissed {
+            return None;
+        }
+        let text = self.input.read(cx).content().to_string();
+        let start = text.rfind('@')?;
+        let query = &text[start + 1..];
+        // 只在「@ 后面还没空格、没第二个 @」时提示（已经写完的不再弹）。
+        if query.chars().any(char::is_whitespace) || query.contains('@') {
+            return None;
+        }
+        let needle = query.to_lowercase();
+        let mut names: Vec<String> = group
+            .member_ids
+            .iter()
+            .filter_map(|id| self.roster.bot_by_id(id).map(|bot| bot.name.clone()))
+            .filter(|name| name.to_lowercase().contains(&needle))
+            .collect();
+        if ALL_MENTION.to_lowercase().contains(&needle) {
+            names.push(ALL_MENTION.to_string());
+        }
+        if names.is_empty() {
+            return None;
+        }
+        names.dedup();
+        Some((start, names))
+    }
+
+    /// 把末尾的 `@查询` 替换成 `@选中名字 `（光标落到末尾）。
+    fn insert_mention_at(&mut self, name: &str, cx: &mut Context<Self>) {
+        let text = self.input.read(cx).content().to_string();
+        let Some(start) = text.rfind('@') else {
+            return;
+        };
+        let next = format!("{}@{} ", &text[..start], name);
+        let input = self.input.clone();
+        input.update(cx, |input, cx| input.set_content(next, cx));
+        self.mention_selected = 0;
+        self.mention_dismissed = false;
+        cx.notify();
+    }
+
+    fn mention_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let (_, names) = self.mention_context(cx)?;
+        let selected = self.mention_selected.min(names.len().saturating_sub(1));
+        let mut rows = div().w_full().flex().flex_col().gap(px(1.));
+        for (index, name) in names.iter().enumerate() {
+            let label = name.clone();
+            let pick = name.clone();
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(format!("mention-{index}")))
+                    .h(px(28.))
+                    .rounded(px(6.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .bg(if index == selected {
+                        theme::hover()
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.insert_mention_at(&pick.clone(), cx);
+                    }))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .text_color(if index == selected {
+                                theme::ink()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(SharedString::from(format!("@{label}"))),
+                    ),
+            );
+        }
+        Some(
+            div()
+                .w_full()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::panel())
+                .p(px(4.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(rows)
+                .child(
+                    div()
+                        .px(px(8.))
+                        .pt(px(2.))
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .text_color(theme::ink_tertiary())
+                        .child(i18n::t("Tab 选择 · Enter 插入 · Esc 收起")),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// 浏览器/电脑操控分页：只读状态 + 打开工作目录入口（完整操控未移植）。
+    fn control_card(&self, kind: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let (title, plugin_id) = if kind == 1 {
+            (i18n::t("浏览器操控"), data::PLUGIN_BROWSER)
+        } else {
+            (i18n::t("电脑操控"), data::PLUGIN_COMPUTER)
+        };
+        // 展示用短名（完整 id 太长会把右侧状态挤出卡外）。
+        let plugin_short = plugin_id.split('@').next().unwrap_or(plugin_id);
+        let chat = self.active_key().and_then(|key| self.chats.get(&key));
+        let Some(control) = chat.and_then(|chat| chat.control.as_ref()) else {
+            return empty_state(
+                title,
+                i18n::t("会话尚未建立；选中左侧条目后这里显示 workspace 插件的只读状态。"),
+            )
+            .into_any_element();
+        };
+        let (browser_on, computer_on) = control.switches.unwrap_or((false, false));
+        let on = if kind == 1 { browser_on } else { computer_on };
+        let unknown = control.switches.is_none();
+        let (state_label, state_color) = if unknown {
+            ("未知（workspace 无 .mode/config.json）", theme::ink_tertiary())
+        } else if on {
+            (i18n::t("已启用"), theme::success())
+        } else {
+            ("未启用", theme::ink_tertiary())
+        };
+        let directory = control.directory.clone();
+        let has_directory = !directory.trim().is_empty();
+        // 有工作目录且配置可读时才给开关（二次确认后写 workspace 配置）。
+        let switchable = has_directory && !unknown;
+        let switch_dir = directory.clone();
+        let next_on = !on;
+        div()
+            .w_full()
+            .rounded(px(theme::RADIUS_CARD))
+            .border_1()
+            .border_color(theme::edge())
+            .bg(theme::card())
+            .p(px(14.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme::ink())
+                    .child(title),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(theme::ink_secondary())
+                            .child(SharedString::from(tri!("插件 {plugin_short}", "Plugin {plugin_short}"))),
+                    )
+                    .child(if switchable {
+                        switch(
+                            SharedString::from(format!("plugin-switch-{}", plugin_short)),
+                            on,
+                        )
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            this.open_plugin_confirm_dialog(
+                                PluginSwitchConfirm {
+                                    directory: switch_dir.clone(),
+                                    plugin: plugin_id,
+                                    label: title,
+                                    next_on,
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element()
+                    } else {
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(state_color)
+                            .child(i18n::t(state_label))
+                            .into_any_element()
+                    }),
+            )
+            .child(section_label(i18n::t("工作目录")))
+            .child(
+                div()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme::edge())
+                    .bg(theme::bg())
+                    .px(px(10.))
+                    .py(px(8.))
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(directory.clone())),
+            )
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_tertiary())
+                    .child(
+                        i18n::t("开关写 workspace 的 .mode/config.json（官方插件键）；完整操控尚未移植到 GPUI。"),
+                    ),
+            )
+            .children(has_directory.then(|| {
+                let directory = directory.clone();
+                div()
+                    .flex()
+                    .justify_end()
+                    .child(
+                        div()
+                            .id(SharedString::from(if kind == 1 {
+                                "open-browser-ws"
+                            } else {
+                                "open-computer-ws"
+                            }))
+                            .h(px(28.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::card())
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                let _ = this;
+                                // 打开 Bot 的工作目录（完整操控尚未移植）。
+                                if let Err(error) = std::process::Command::new("explorer")
+                                    .arg(&directory)
+                                    .spawn()
+                                {
+                                    eprintln!("[control] 打开工作目录失败：{error}");
+                                }
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("打开工作目录")),
+                            ),
+                    )
+                    .into_any_element()
+            }))
+            .children((kind == 1).then(|| self.browser_panel_section(cx)))
+            .into_any_element()
+    }
+
+    /// 浏览器分页的「打开 URL / 最近记录 / 已安装浏览器」（与 WebView BrowserTab 对齐）。
+    fn browser_panel_section(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let bot_id = self
+            .selected_bot()
+            .map(|bot| bot.id.clone())
+            .unwrap_or_default();
+        let recents = self
+            .browser_recents
+            .get(&bot_id)
+            .cloned()
+            .unwrap_or_default();
+        let open_bot = bot_id.clone();
+        let recents_block = div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .children((!recents.is_empty()).then(|| section_label(i18n::t("最近打开"))))
+            .children(recents.iter().enumerate().map(|(index, url)| {
+                let target = url.clone();
+                let update = open_bot.clone();
+                div()
+                    .id(SharedString::from(format!("browser-recent-{index}")))
+                    .h(px(28.))
+                    .w_full()
+                    .rounded(px(6.))
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        match shell_open::open_url(&target) {
+                            Ok(()) => this.record_browser_open(&update, &target),
+                            Err(message) => this.toast(message, cx),
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .truncate()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_secondary())
+                            .child(SharedString::from(url.clone())),
+                    )
+            }));
+        let browsers = shell_open::installed_browsers();
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(section_label(i18n::t("打开 URL")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().flex_1().min_w(px(0.)).child(self.browser_url_input.clone()))
+                    .child(
+                        settings_button("browser-open-url", i18n::t("打开")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                let url = this
+                                    .browser_url_input
+                                    .read(cx)
+                                    .content()
+                                    .trim()
+                                    .to_string();
+                                match shell_open::open_url(&url) {
+                                    Ok(()) => {
+                                        this.record_browser_open(&open_bot, &url);
+                                        this.browser_url_input.update(cx, |input, cx| {
+                                            input.set_content("", cx);
+                                        });
+                                    }
+                                    Err(message) => this.toast(message, cx),
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            )
+            .child(recents_block)
+            .child(section_label(i18n::t("已安装浏览器")))
+            .child(settings_group(
+                browsers
+                    .into_iter()
+                    .map(|(name, available)| {
+                        settings_row(
+                            name.to_string(),
+                            Some(if available { i18n::t("已检测到") } else { i18n::t("未安装") }.to_string()),
+                        )
+                        .into_any_element()
+                    })
+                    .collect(),
+            ))
+            .into_any_element()
+    }
+
+    fn record_browser_open(&mut self, bot_id: &str, url: &str) {
+        if bot_id.is_empty() {
+            return;
+        }
+        let entry = self
+            .browser_recents
+            .entry(bot_id.to_string())
+            .or_insert_with(|| load_browser_recents(bot_id));
+        entry.retain(|item| item != url);
+        entry.insert(0, url.to_string());
+        entry.truncate(5);
+        save_browser_recents(bot_id, entry);
+    }
+
+    fn chat_status(&self) -> (String, bool) {
+        if let Some(key) = self.active_key()
+            && let Some(chat) = self.chats.get(&key) {
+                return (chat.status.clone(), chat.error);
+            }
+        (self.backend_status.clone(), false)
+    }
+
+    /// 「新建 Bot」Overlay：半透明遮罩 + 居中表单卡。
+    /// 「新建/编辑 Bot」对话框 Overlay（表单卡 + 身份同步开关）。
+    /// 全屏图片预览：点任意处/Esc 关闭。
+    fn image_preview_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let path = self.image_preview.clone()?;
+        Some(
+            div()
+                .id("image-preview-scrim")
+                .absolute()
+                .inset_0()
+                .bg(rgba(0x000000e6))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.image_preview = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .max_w(px(920.))
+                        .max_h(px(660.))
+                        .rounded(px(8.))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(wecom_theme::composer_border())
+                        .child(
+                            img(path)
+                                .max_w(px(920.))
+                                .max_h(px(660.))
+                                .object_fit(gpui::ObjectFit::Contain),
+                        ),
+                )
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wecom_theme::list_preview())
+                        .child(i18n::t("点击任意处或按 Esc 关闭")),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn settings_overlay(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        // 企微四栏：设置占右侧主区（内嵌），不弹窗。
+        if self.wecom_mode || !self.settings_open {
+            return None;
+        }
+        const NAV_WIDTH: f32 = 198.0;
+        let viewport = window.viewport_size();
+        let viewport_width = f32::from(viewport.width);
+        let viewport_height = f32::from(viewport.height);
+        let card_width = (viewport_width - 48.).min(1100.);
+        let card_height = (viewport_height - 64.).min(780.);
+        let nav = self.settings_nav(cx);
+        let page = self.settings_page(cx);
+        let card = div()
+            .id("settings-card")
+            .track_focus(&self.settings_focus)
+            .relative()
+            .w(px(card_width))
+            .h(px(card_height))
+            .rounded(px(theme::RADIUS_DIALOG))
+            .border_1()
+            .border_color(theme::edge())
+            .bg(theme::app())
+            .shadow(theme::shadow_4())
+            .overflow_hidden()
+            .flex()
+            .child(
+                div()
+                    .id("settings-nav")
+                    .w(px(NAV_WIDTH))
+                    .flex_shrink_0()
+                    .h_full()
+                    .bg(theme::panel())
+                    .border_r_1()
+                    .border_color(theme::edge())
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .child(nav),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(20.))
+                            .pr(px(56.))
+                            .pt(px(16.))
+                            .pb(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(15.))
+                                    .line_height(px(24.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(theme::ink())
+                                    .child(i18n::t(SETTINGS_PAGES[self.settings_tab])),
+                            )
+                            .child(
+                                div()
+                                    .id("settings-pin-page")
+                                    .h(px(28.))
+                                    .px(px(8.))
+                                    .rounded(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.toggle_pinned_setting(this.settings_tab, cx);
+                                    }))
+                                    .child(icons::icon(
+                                        icons::Icon::Pin,
+                                        13.,
+                                        if self.pinned_settings.contains(&self.settings_tab) {
+                                            theme::accent()
+                                        } else {
+                                            theme::ink_tertiary()
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(12.))
+                                            .line_height(px(18.))
+                                            .text_color(if self
+                                                .pinned_settings
+                                                .contains(&self.settings_tab)
+                                            {
+                                                theme::accent()
+                                            } else {
+                                                theme::ink_secondary()
+                                            })
+                                            .child(if self
+                                                .pinned_settings
+                                                .contains(&self.settings_tab)
+                                            {
+                                                i18n::t("从侧栏移除")
+                                            } else {
+                                                i18n::t("添加到侧栏")
+                                            }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("settings-page")
+                            .flex_1()
+                            .min_h(px(0.))
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(6.))
+                            .px(px(20.))
+                            .pt(px(12.))
+                            .pb(px(24.))
+                            .child(
+                                div()
+                                    .relative()
+                                    .with_animation(
+                                        SharedString::from(format!(
+                                            "settings-page-{}",
+                                            self.settings_tab
+                                        )),
+                                        gpui::Animation::new(theme::motion_base())
+                                            .with_easing(theme::ease_out),
+                                        |element, delta| {
+                                            let delta = delta.clamp(0., 1.);
+                                            element.opacity(delta).top(px(6. * (1. - delta)))
+                                        },
+                                    )
+                                    .child(page),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-close")
+                    .absolute()
+                    .top(px(12.))
+                    .right(px(12.))
+                    .size(px(32.))
+                    .rounded_full()
+                    .bg(theme::hover())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::raised_hover()))
+                    .on_click(cx.listener(|this, _event, window, cx| {
+                        this.settings_open = false;
+                        this.refocus_composer_if_clear(window, cx);
+                        cx.notify();
+                    }))
+                    .child(icons::icon(icons::Icon::X, 16., theme::ink_secondary())),
+            );
+        Some(overlay_center(card))
+    }
+
+    fn settings_nav(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let mut nav = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .px(px(8.))
+            .py(px(16.));
+        for (index, label) in SETTINGS_PAGES.iter().enumerate() {
+            let active = self.settings_tab == index;
+            if index == 14 {
+                nav = nav.child(
+                    div()
+                        .mx(px(6.))
+                        .my(px(6.))
+                        .h(px(1.))
+                        .bg(theme::edge()),
+                );
+            }
+            nav = nav.child(
+                div()
+                    .id(SharedString::from(format!("settings-nav-{index}")))
+                    .h(px(32.))
+                    .rounded(px(8.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .bg(if active {
+                        theme::selected()
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.settings_tab = index;
+                        this.automations_view = None;
+                        cx.notify();
+                    }))
+                    .child(icons::icon(
+                        settings_page_icon(index),
+                        16.,
+                        if active {
+                            theme::accent()
+                        } else {
+                            theme::ink_tertiary()
+                        },
+                    ))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .text_color(if active {
+                                theme::ink()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+        nav
+    }
+
+    fn settings_page(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match self.settings_tab {
+            0 => self.settings_page_general(cx),
+            1 => self.settings_page_models(cx),
+            2 => self.settings_page_plugins(cx),
+            3 => self.settings_page_local_agents(cx),
+            4 => self.settings_page_bots(cx),
+            5 => self.settings_page_channels(cx),
+            6 => self.settings_page_team_memory(cx),
+            7 => self.settings_page_connectors(cx),
+            8 => self.settings_page_im(cx),
+            9 => self.settings_page_schedules(cx),
+            10 => self.settings_page_secrets(cx),
+            11 => self.settings_page_capabilities(),
+            12 => self.settings_page_usage(),
+            13 => self.settings_page_about(cx),
+            14 => self.settings_page_feedback(cx),
+            15 => self.settings_page_browser(cx),
+            16 => self.settings_page_computer(cx),
+            _ => self.settings_page_more(cx),
+        }
+    }
+
+    fn settings_page_browser(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut body = settings_page_body("浏览器")
+            .child(settings_note(
+                i18n::t("用系统默认浏览器打开 URL，页面操作由 Bot 的 Playwright MCP 完成。"),
+            ));
+        if self.selected_bot().is_none() {
+            return body
+                .child(hint_row(i18n::t("先在左栏选中一个 Bot")))
+                .into_any_element();
+        }
+        body = body.child(settings_section(i18n::t("浏览器工具")));
+        body.child(self.control_card(1, cx)).into_any_element()
+    }
+
+    fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut body = settings_page_body(i18n::t("电脑操控")).child(settings_note(
+            i18n::t("computer-use 插件的 workspace 开关，远程桌面尚未接线。"),
+        ));
+        if self.selected_bot().is_none() {
+            return body
+                .child(hint_row(i18n::t("先在左栏选中一个 Bot")))
+                .into_any_element();
+        }
+        body = body.child(self.control_card(2, cx));
+        body.into_any_element()
+    }
+
+    fn settings_page_general(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let data_root = self.roster.data_root.display().to_string();
+        let env_value = |key: &str, fallback: &str| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| fallback.to_string())
+        };
+        let session_db = env_value(
+            "MODE_SESSION_DB_PATH",
+            i18n::t("默认（未设置 MODE_SESSION_DB_PATH，与主程序同库）"),
+        );
+        let storage_dir = env_value("MODE_STORAGE_DIR", i18n::t("默认（未设置 MODE_STORAGE_DIR）"));
+        let rows: Vec<(&'static str, String)> = vec![
+            ("数据根", data_root.clone()),
+            (
+                "名册（共享）",
+                format!("{}\nteammates.json · groups.json", data_root),
+            ),
+            ("会话库（隔离）", session_db),
+            ("记忆存储（隔离）", storage_dir),
+            ("试点状态文件", state::state_path().display().to_string()),
+        ];
+        let mut body = settings_page_body("通用")
+            .child(settings_note(
+                i18n::t("名册与产品共享，会话与记忆保存在本机隔离目录。"),
+            ))
+            .child(settings_section(i18n::t("外观")));
+        if self.wecom_mode {
+            body = body.child(settings_note(
+                i18n::t("微信皮肤固定深色，可用 BOT_PILOT_CLASSIC_UI=1 回到经典三栏。"),
+            ));
+        } else {
+            body = body.child(self.theme_picker(cx));
+        }
+        let mut appearance_rows: Vec<gpui::AnyElement> = Vec::new();
+        appearance_rows.push(self.language_row(cx));
+        if !self.wecom_mode {
+            appearance_rows.push(self.accent_row(cx));
+            appearance_rows.push(self.message_width_row(cx));
+        }
+        appearance_rows.push(self.motion_row(cx));
+        appearance_rows.push(
+            settings_row(i18n::t("显示思考过程").to_string(), None)
+                .child(
+                    settings_button(
+                        SharedString::from("show-thinking-toggle"),
+                        if self.show_thinking { i18n::t("已显示") } else { i18n::t("已隐藏") },
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_thinking = !this.show_thinking;
+                        save_ui_bool("show_thinking", this.show_thinking);
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+        );
+        appearance_rows.push(
+            settings_row(i18n::t("后台通知").to_string(), None)
+                .child(
+                    settings_button(
+                        SharedString::from("notify-background-toggle"),
+                        if self.background_notifications {
+                            i18n::t("已开启")
+                        } else {
+                            i18n::t("已关闭")
+                        },
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.background_notifications = !this.background_notifications;
+                        save_ui_bool("notify_background", this.background_notifications);
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+        );
+        body = body
+            .child(settings_group(appearance_rows))
+            .child(settings_section(i18n::t("输入")))
+            .child(settings_group(vec![
+                settings_row(i18n::t("回车发送").to_string(), None)
+                .child(
+                    settings_button(
+                        SharedString::from("enter-to-send-toggle"),
+                        if self.enter_to_send { i18n::t("已开启") } else { i18n::t("已关闭") },
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.enter_to_send = !this.enter_to_send;
+                        save_ui_bool("enter_to_send", this.enter_to_send);
+                        let enabled = this.enter_to_send;
+                        this.input.update(cx, |input, cx| {
+                            input.set_submit_on_enter(enabled, cx);
+                        });
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+                settings_row(
+                    i18n::t("新建 Bot 默认模型").to_string(),
+                    Some(
+                        self.new_bot_model
+                            .as_ref()
+                            .map(|model| model.label())
+                            .unwrap_or_else(|| i18n::t("跟随第一个 Bot 的模型").to_string()),
+                    ),
+                )
+                .child(
+                    settings_button(SharedString::from("new-bot-model"), i18n::t("选择")).on_click(
+                        cx.listener(|this, _event, window, cx| {
+                            this.open_new_bot_model_dialog(window, cx);
+                        }),
+                    ),
+                )
+                .into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("侧栏分组")));
+        if self.sidebar_sections.sections.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/频道移入")));
+        } else {
+            let mut section_rows: Vec<gpui::AnyElement> = Vec::new();
+            for section in self.sidebar_sections.sections.clone() {
+                let count = self
+                    .sidebar_sections
+                    .membership
+                    .values()
+                    .filter(|id| **id == section.id)
+                    .count();
+                let color_label = section
+                    .color
+                    .as_deref()
+                    .and_then(|id| {
+                        SIDEBAR_SECTION_COLORS
+                            .iter()
+                            .find(|(value, _)| *value == id)
+                            .map(|(_, label)| *label)
+                    })
+                    .unwrap_or(i18n::t("无"));
+                let mut row = settings_row(
+                    section.name.clone(),
+                    Some(if i18n::is_en() { format!("{} · color {color_label}", i18n::n(count, "item", "items")) } else { format!("{count} 项 · 颜色 {color_label}") }),
+                );
+                let id_up = section.id.clone();
+                let id_down = section.id.clone();
+                let id_rename = section.id.clone();
+                let id_color = section.id.clone();
+                let id_delete = section.id.clone();
+                row = row
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-up-{}", id_up)),
+                            "↑",
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.move_sidebar_section(&id_up, -1);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-down-{}", id_down)),
+                            "↓",
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.move_sidebar_section(&id_down, 1);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-rename-{}", id_rename)),
+                            i18n::t("改名"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.pending_section_dialog =
+                                Some(SectionDialogRequest::Rename(id_rename.clone()));
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-color-{}", id_color)),
+                            i18n::t("颜色"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.cycle_sidebar_section_color(&id_color);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-delete-{}", id_delete)),
+                            i18n::t("删除"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.delete_sidebar_section(&id_delete);
+                            this.toast(i18n::t("已删除分组，成员回到未分组"), cx);
+                            cx.notify();
+                        })),
+                    );
+                section_rows.push(row.into_any_element());
+            }
+            body = body.child(settings_group(section_rows));
+        }
+        body = body.child(div().flex().justify_end().child(
+            settings_button(SharedString::from("section-new"), i18n::t("新建分组")).on_click(
+                cx.listener(|this, _event, _window, cx| {
+                    this.pending_section_dialog = Some(SectionDialogRequest::New);
+                    cx.notify();
+                }),
+            ),
+        ));
+        body = body
+            .child(settings_section(i18n::t("启动与后台")))
+            .child(settings_group(vec![
+                settings_row(i18n::t("关闭窗口").to_string(), None)
+                .into_any_element(),
+                settings_row(
+                    i18n::t("开机自启").to_string(),
+                    Some(if self.autostart_enabled {
+                        i18n::t("已开启").to_string()
+                    } else {
+                        i18n::t("已关闭").to_string()
+                    }),
+                )
+                .child(
+                    settings_button(
+                        SharedString::from("autostart-toggle"),
+                        if self.autostart_enabled { i18n::t("关闭") } else { i18n::t("开启") },
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        let next = !this.autostart_enabled;
+                        match autostart::set_enabled(next) {
+                            Ok(()) => {
+                                this.autostart_enabled = next;
+                                this.toast(
+                                    if next { i18n::t("已开启开机自启") } else { i18n::t("已关闭开机自启") },
+                                    cx,
+                                );
+                            }
+                            Err(message) => this.toast(message, cx),
+                        }
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+                settings_row(
+                    i18n::t("自动更新").to_string(),
+                    Some(if cfg!(debug_assertions) {
+                        i18n::t("开发构建默认关闭自动检查").to_string()
+                    } else {
+                        i18n::t("启动后 5 秒检查，之后每 4 小时一次").to_string()
+                    }),
+                )
+                .into_any_element(),
+                settings_row(i18n::t("测试通知").to_string(), None)
+                    .child(
+                        settings_button(SharedString::from("notify-test"), i18n::t("测试")).on_click(
+                            cx.listener(|this, _event, _window, cx| {
+                                #[cfg(windows)]
+                                tray::notify("Mode Bot", i18n::t("测试通知：托盘气泡显示正常"));
+                                this.toast(i18n::t("已发送测试通知"), cx);
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("数据")));
+        for (label, value) in rows {
+            body = body.child(value_box(value, Some(i18n::t(label))));
+        }
+        body.into_any_element()
+    }
+
+    fn language_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut controls = div().flex().items_center().gap(px(4.));
+        for (lang, label) in [("zh", "简体中文"), ("en", "English")] {
+            let active = i18n::lang() == lang;
+            controls = controls.child(
+                settings_button(
+                    SharedString::from(format!("lang-{lang}")),
+                    if active {
+                        format!("{} ✓", i18n::t(label))
+                    } else {
+                        label.to_string()
+                    },
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    if i18n::lang() != lang {
+                        i18n::set_lang(lang);
+                        save_ui_value("lang", serde_json::json!(lang));
+                        cx.notify();
+                        this.settings_focus.focus(_window, cx);
+                    }
+                })),
+            );
+        }
+        settings_row(i18n::t("界面语言").to_string(), None)
+            .child(controls)
+            .into_any_element()
+    }
+
+    fn accent_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut controls = div().flex().items_center().gap(px(6.));
+        let default_active = self.accent.is_none();
+        // 默认按钮照原版：蓝/炭黑对角分割的圆片，不是文字。
+        controls = controls.child(
+            div()
+                .id("accent-default")
+                .size(px(20.))
+                .rounded_full()
+                .border_2()
+                .border_color(if default_active { theme::ink() } else { theme::edge() })
+                .bg(gpui::linear_gradient(
+                    135.,
+                    gpui::linear_color_stop(gpui::rgba(0x4d6bfe), 0.5),
+                    gpui::linear_color_stop(gpui::rgba(0x1f1f1f), 0.5),
+                ))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.accent = None;
+                    theme::set_accent(None);
+                    save_ui_value("accent", serde_json::Value::Null);
+                    cx.notify();
+                })),
+        );
+        for hex in [
+            "#4d6bfe", "#141416", "#2d2d2d", "#ec2f6b", "#0aa8d6", "#ff6900", "#082dff",
+        ] {
+            let Some(color) = parse_hex_color(hex) else {
+                continue;
+            };
+            let selected = self.accent.is_some_and(|current| color_hex(current) == hex);
+            controls = controls.child(
+                div()
+                    .id(SharedString::from(format!("accent-{hex}")))
+                    .size(px(20.))
+                    .rounded_full()
+                    .bg(color)
+                    .border_2()
+                    .border_color(if selected { theme::ink() } else { theme::edge() })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.accent = Some(color);
+                        theme::set_accent(Some(color));
+                        save_ui_value("accent", serde_json::json!(hex));
+                        cx.notify();
+                    })),
+            );
+        }
+        settings_row(i18n::t("强调色（经典三栏）").to_string(), None)
+            .child(controls)
+            .into_any_element()
+    }
+
+    fn motion_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut controls = div().flex().items_center().gap(px(4.));
+        for (level, label) in [("quiet", "安静"), ("normal", "标准"), ("lively", "活泼")] {
+            let active = self.motion == level;
+            controls = controls.child(
+                settings_button(
+                    SharedString::from(format!("motion-{level}")),
+                    if active {
+                        format!("{} ✓", i18n::t(label))
+                    } else {
+                        i18n::t(label).to_string()
+                    },
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.motion = level;
+                    theme::set_motion(level);
+                    save_ui_value("motion", serde_json::json!(level));
+                    cx.notify();
+                })),
+            );
+        }
+        settings_row(i18n::t("动效").to_string(), None)
+            .child(controls)
+            .into_any_element()
+    }
+
+    fn message_width_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let width = self.message_width;
+        let controls = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(
+                settings_button("message-width-minus", "−5%").on_click(cx.listener(
+                    |this, _event, _window, cx| {
+                        this.message_width = this.message_width.saturating_sub(5).max(50);
+                        save_ui_value("message_width", serde_json::json!(this.message_width));
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                div()
+                    .w(px(40.))
+                    .text_center()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(format!("{width}%"))),
+            )
+            .child(
+                settings_button("message-width-plus", "+5%").on_click(cx.listener(
+                    |this, _event, _window, cx| {
+                        this.message_width = (this.message_width + 5).min(100);
+                        save_ui_value("message_width", serde_json::json!(this.message_width));
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                settings_button("message-width-reset", i18n::t("重置")).on_click(cx.listener(
+                    |this, _event, _window, cx| {
+                        this.message_width = 80;
+                        save_ui_value("message_width", serde_json::json!(80));
+                        cx.notify();
+                    },
+                )),
+            );
+        settings_row(i18n::t("消息宽度（经典三栏）").to_string(), None)
+            .child(controls)
+            .into_any_element()
+    }
+
+    fn theme_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut pills = div().flex().gap(px(5.));
+        for (light, label) in [(false, "深色"), (true, "浅色")] {
+            let active = theme::is_light() == light;
+            pills = pills.child(
+                div()
+                    .id(SharedString::from(format!("theme-{}", label)))
+                    .h(px(32.))
+                    .rounded(px(theme::RADIUS_SEGMENT))
+                    .border_1()
+                    .border_color(if active {
+                        theme::accent_border()
+                    } else {
+                        theme::edge()
+                    })
+                    .bg(if active {
+                        theme::accent_soft()
+                    } else {
+                        theme::card()
+                    })
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        theme::set_light(light);
+                        this.toast(
+                            if light {
+                                i18n::t("已切换到浅色")
+                            } else {
+                                i18n::t("已切换到深色")
+                            },
+                            cx,
+                        );
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(if active {
+                                theme::accent_text()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+        pills
+    }
+
+    fn settings_page_models(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self
+            .selected_bot()
+            .map(|bot| match &bot.model {
+                Some(model) => model_label(model),
+                None => i18n::t("跟随默认").to_string(),
+            })
+            .unwrap_or_else(|| i18n::t("未选中 Bot").to_string());
+        let providers = data::provider_entries();
+        let mut body = settings_page_body("模型").child(settings_note(
+            i18n::t("模型在 Bot/频道详情里切换，这里管理 provider 与 API Key。"),
+        ));
+        body = body
+            .child(settings_section(i18n::t("当前 Bot")))
+            .child(settings_group(vec![kv_row(current, i18n::t("当前选择")).into_any_element()]))
+            .child(settings_section(i18n::t("Provider 与模型")));
+        if providers.is_empty() {
+            body = body.child(hint_row(
+                i18n::t("没有读到 provider_config.json（缺失或没有已配置的 provider）"),
+            ));
+        } else {
+            for provider in providers {
+                let editable = matches!(
+                    provider.access_type.as_str(),
+                    "api-key" | "zhipu-coding-plan-api-key"
+                );
+                let status = if provider.has_api_key {
+                    i18n::t("已配置 API Key")
+                } else {
+                    i18n::t("未配置 API Key")
+                };
+                let mut row = settings_row(
+                    format!("{} · {}", provider.provider_name, provider.provider_id),
+                    Some(status.to_string()),
+                );
+                let order_id = provider.provider_id.clone();
+                row = row
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("provider-up-{}", order_id)),
+                            "↑",
+                        )
+                        .on_click(cx.listener({
+                            let id = order_id.clone();
+                            move |this, _event, _window, cx| {
+                                if let Err(message) = data::move_provider(&id, -1) {
+                                    this.toast(message, cx);
+                                }
+                                cx.notify();
+                            }
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("provider-down-{}", order_id)),
+                            "↓",
+                        )
+                        .on_click(cx.listener({
+                            let id = order_id.clone();
+                            move |this, _event, _window, cx| {
+                                if let Err(message) = data::move_provider(&id, 1) {
+                                    this.toast(message, cx);
+                                }
+                                cx.notify();
+                            }
+                        })),
+                    );
+                if editable {
+                    let provider_id = provider.provider_id.clone();
+                    let provider_name = provider.provider_name.clone();
+                    row = row.child(
+                        settings_button(
+                            SharedString::from(format!(
+                                "provider-key-{}",
+                                provider.provider_id
+                            )),
+                            i18n::t("改密钥"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.pending_provider_key_dialog =
+                                Some((provider_id.clone(), provider_name.clone()));
+                            cx.notify();
+                        })),
+                    );
+                }
+                if let Some(base_url) = provider.base_url.clone() {
+                    let provider_id = provider.provider_id.clone();
+                    let provider_name = provider.provider_name.clone();
+                    row = row.child(
+                        settings_button(
+                            SharedString::from(format!(
+                                "provider-url-{}",
+                                provider.provider_id
+                            )),
+                            i18n::t("地址"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.pending_provider_url_dialog = Some((
+                                provider_id.clone(),
+                                provider_name.clone(),
+                                base_url.clone(),
+                            ));
+                            cx.notify();
+                        })),
+                    );
+                }
+                let delete_id = provider.provider_id.clone();
+                let delete_name = provider.provider_name.clone();
+                row = row.child(
+                    settings_button(
+                        SharedString::from(format!("provider-del-{}", delete_id)),
+                        i18n::t("删除"),
+                    )
+                    .on_click(cx.listener(move |this, _event, window, cx| {
+                        this.open_delete_provider_dialog(
+                            delete_id.clone(),
+                            delete_name.clone(),
+                            window,
+                            cx,
+                        );
+                    })),
+                );
+                let mut provider_rows = vec![row.into_any_element()];
+                let model_rows = data::provider_model_rows(&provider.provider_id);
+                for model in model_rows {
+                    let provider_id = provider.provider_id.clone();
+                    let model_id = model.model_id.clone();
+                    let enabled = model.enabled;
+                    let mut model_row = settings_row(
+                        format!("　· {}", model.model_id),
+                        Some(if enabled { i18n::t("已启用") } else { i18n::t("已停用") }.to_string()),
+                    );
+                    model_row = model_row
+                        .child(
+                            settings_button(
+                                SharedString::from(format!(
+                                    "model-toggle-{}-{}",
+                                    provider_id, model_id
+                                )),
+                                if enabled { i18n::t("停用") } else { i18n::t("启用") },
+                            )
+                            .on_click(cx.listener({
+                                let provider_id = provider_id.clone();
+                                let model_id = model_id.clone();
+                                move |this, _event, _window, cx| {
+                                    if let Err(message) = data::set_model_enabled(
+                                        &provider_id,
+                                        &model_id,
+                                        !enabled,
+                                    ) {
+                                        this.toast(message, cx);
+                                    }
+                                    cx.notify();
+                                }
+                            })),
+                        )
+                        .child(
+                            settings_button(
+                                SharedString::from(format!(
+                                    "model-up-{}-{}",
+                                    provider_id, model_id
+                                )),
+                                "↑",
+                            )
+                            .on_click(cx.listener({
+                                let provider_id = provider_id.clone();
+                                let model_id = model_id.clone();
+                                move |this, _event, _window, cx| {
+                                    if let Err(message) =
+                                        data::move_model(&provider_id, &model_id, -1)
+                                    {
+                                        this.toast(message, cx);
+                                    }
+                                    cx.notify();
+                                }
+                            })),
+                        )
+                        .child(
+                            settings_button(
+                                SharedString::from(format!(
+                                    "model-down-{}-{}",
+                                    provider_id, model_id
+                                )),
+                                "↓",
+                            )
+                            .on_click(cx.listener({
+                                let provider_id = provider_id.clone();
+                                let model_id = model_id.clone();
+                                move |this, _event, _window, cx| {
+                                    if let Err(message) =
+                                        data::move_model(&provider_id, &model_id, 1)
+                                    {
+                                        this.toast(message, cx);
+                                    }
+                                    cx.notify();
+                                }
+                            })),
+                        );
+                    provider_rows.push(model_row.into_any_element());
+                }
+                body = body.child(settings_group(provider_rows));
+            }
+        }
+        body = body.child(div().flex().justify_end().child(
+            settings_button(SharedString::from("provider-add"), i18n::t("从模板新增")).on_click(
+                cx.listener(|this, _event, window, cx| {
+                    this.open_add_provider_dialog(window, cx);
+                }),
+            ),
+        ));
+        body.into_any_element()
+    }
+
+    /// 工作区插件（只读 config.json 的 enabledPlugins；开关写回同一文件）。
+    fn settings_page_plugins(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // 设置页可能在 selection 尚未落定/被清空时渲染；插件按 workspace 工作，
+        // 没有选中项时用第一个 Bot 兜底，避免整页不可用。
+        let bot = self
+            .selected_bot()
+            .cloned()
+            .or_else(|| self.roster.bots.first().cloned());
+        let mut body = settings_page_body("插件").child(settings_note(
+            i18n::t("上半部分为 workspace 插件开关，下半部分读取 Mode 插件市场。"),
+        ));
+        let Some(bot) = bot else {
+            return body
+                .child(hint_row(i18n::t("先选中一个 Bot（插件按工作目录隔离）")))
+                .into_any_element();
+        };
+        let directory = Self::plugin_workspace(&bot);
+        if self
+            .plugins_view
+            .as_ref()
+            .map(|view| view.bot_id.as_str())
+            != Some(bot.id.as_str())
+        {
+            self.request_plugins_overview(&bot, cx);
+        }
+        let plugins = data::workspace_plugins(&directory);
+        body = body
+            .child(settings_section(i18n::t("工作目录")))
+            .child(value_box(directory.clone(), None))
+            .child(settings_section(i18n::t("已登记插件（workspace 开关）")));
+        if plugins.is_empty() {
+            body = body.child(hint_row(
+                i18n::t("没有读到插件登记（workspace 还没有 .mode/config.json，或 plugins.enabledPlugins 为空）"),
+            ));
+        }
+        let mut registered_rows: Vec<gpui::AnyElement> = Vec::new();
+        for (plugin, enabled) in plugins {
+            let directory = directory.clone();
+            let plugin_id = plugin.clone();
+            let next_on = !enabled;
+            registered_rows.push(
+                settings_row(plugin, Some(if enabled { i18n::t("已启用") } else { i18n::t("已关闭") }.to_string()))
+                    .child(
+                        switch(
+                            SharedString::from(format!("plugin-toggle-{}", plugin_id)),
+                            enabled,
+                        )
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            match data::set_plugin_switch(&directory, &plugin_id, next_on) {
+                                Ok(()) => this.toast(
+                                    if next_on { i18n::t("已启用插件") } else { i18n::t("已关闭插件") },
+                                    cx,
+                                ),
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if !registered_rows.is_empty() {
+            body = body.child(settings_group(registered_rows));
+        }
+
+        let overview = self
+            .plugins_view
+            .as_ref()
+            .and_then(|view| view.overview.clone());
+        let loading = self
+            .plugins_view
+            .as_ref()
+            .is_some_and(|view| view.loading);
+        let busy = self.plugins_view.as_ref().and_then(|view| view.busy.clone());
+        let error = self.plugins_view.as_ref().and_then(|view| view.error.clone());
+        body = body
+            .child(settings_section(i18n::t("插件市场（host）")))
+            .child(settings_note(
+                i18n::t("插件操作走后端 RPC，完成后自动刷新列表。"),
+            ))
+            .child(settings_group(vec![
+                settings_row(i18n::t("市场索引").to_string(), None)
+                .child(
+                    settings_button(SharedString::from("plugin-market-refresh"), i18n::t("刷新")).on_click(
+                        cx.listener({
+                            let bot = bot.clone();
+                            move |this, _event, _window, cx| {
+                                this.plugin_market_refresh(&bot, cx);
+                            }
+                        }),
+                    ),
+                )
+                .into_any_element(),
+            ]));
+        if let Some(busy) = busy {
+            body = body.child(hint_row(busy));
+        } else if loading {
+            body = body.child(hint_row(i18n::t("读取插件市场…")));
+        }
+        if let Some(error) = error {
+            body = body.child(settings_group(vec![
+                settings_row(i18n::t("读取失败").to_string(), Some(error))
+                    .child(
+                        settings_button(SharedString::from("plugins-retry"), i18n::t("重试")).on_click(
+                            cx.listener({
+                                let bot = bot.clone();
+                                move |this, _event, _window, cx| {
+                                    this.request_plugins_overview(&bot, cx);
+                                }
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
+            ]));
+        }
+        if let Some(overview) = overview {
+            if !overview.capability.supported {
+                body = body.child(hint_row(
+                    overview
+                        .capability
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| i18n::t("当前 host 不支持插件市场").to_string()),
+                ));
+            }
+            body = body.child(settings_section(i18n::t("已安装")));
+            if overview.installed_plugins.is_empty() {
+                body = body.child(hint_row(i18n::t("还没有已安装插件")));
+            }
+            let mut installed_rows: Vec<gpui::AnyElement> = Vec::new();
+            for plugin in overview.installed_plugins {
+                let version = plugin.version.clone().unwrap_or_else(|| "-".to_string());
+                let scope = match plugin.scope {
+                    agent_protocol::plugin::PluginScope::Workspace => i18n::t("工作区"),
+                    agent_protocol::plugin::PluginScope::User => i18n::t("用户"),
+                };
+                let update_available = plugin.update_status.is_some_and(|status| {
+                    status != agent_protocol::plugin::PluginUpdateStatus::None
+                });
+                let update = if update_available { if i18n::is_en() { " · update available" } else { " · 可更新" } } else { "" };
+                let mut row = settings_row(
+                    plugin.name.clone(),
+                    Some(format!("v{version} · {scope}{update}")),
+                );
+                let plugin_id = plugin.id.clone();
+                let enabled = plugin.enabled;
+                let bot_toggle = bot.clone();
+                row = row.child(
+                    settings_button(
+                        SharedString::from(format!("plugin-rpc-toggle-{}", plugin_id)),
+                        if enabled { i18n::t("停用") } else { i18n::t("启用") },
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.plugin_set_enabled(&bot_toggle, &plugin_id, !enabled, cx);
+                    })),
+                );
+                let plugin_id = plugin.id.clone();
+                let bot_config = bot.clone();
+                row = row.child(
+                    settings_button(
+                        SharedString::from(format!("plugin-rpc-config-{}", plugin_id)),
+                        i18n::t("配置"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.request_plugin_config(&bot_config, &plugin_id, cx);
+                    })),
+                );
+                let plugin_id = plugin.id.clone();
+                let plugin_name_reset = plugin.name.clone();
+                let bot_reset = bot.clone();
+                row = row.child(
+                    settings_button(
+                        SharedString::from(format!("plugin-rpc-reset-{}", plugin_id)),
+                        i18n::t("重置"),
+                    )
+                    .on_click(cx.listener(move |this, _event, window, cx| {
+                        this.open_plugin_reset_dialog(
+                            &bot_reset,
+                            plugin_id.clone(),
+                            plugin_name_reset.clone(),
+                            window,
+                            cx,
+                        );
+                    })),
+                );
+                if update_available {
+                    let plugin_id = plugin.id.clone();
+                    let bot_update = bot.clone();
+                    row = row.child(
+                        settings_button(
+                            SharedString::from(format!("plugin-rpc-update-{}", plugin_id)),
+                            i18n::t("更新"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.plugin_update(&bot_update, Some(plugin_id.clone()), cx);
+                        })),
+                    );
+                }
+                let plugin_id = plugin.id.clone();
+                let bot_remove = bot.clone();
+                row = row.child(
+                    settings_button(
+                        SharedString::from(format!("plugin-rpc-remove-{}", plugin_id)),
+                        i18n::t("卸载"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.plugin_uninstall(&bot_remove, &plugin_id, cx);
+                    })),
+                );
+                installed_rows.push(row.into_any_element());
+            }
+            if !installed_rows.is_empty() {
+                body = body.child(settings_group(installed_rows));
+            }
+            body = body.child(settings_section(i18n::t("可安装")));
+            let available: Vec<_> = overview
+                .available_plugins
+                .into_iter()
+                .filter(|plugin| !plugin.installed)
+                .collect();
+            if available.is_empty() {
+                body = body.child(hint_row(i18n::t("市场里没有未安装的插件")));
+            }
+            let mut available_rows: Vec<gpui::AnyElement> = Vec::new();
+            for plugin in available {
+                let display = plugin
+                    .listing
+                    .as_ref()
+                    .and_then(|listing| listing.display_name.clone())
+                    .unwrap_or_else(|| plugin.name.clone());
+                let description = plugin
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("{} · {}", plugin.marketplace, plugin.id));
+                let mut row = settings_row(display, Some(description));
+                let bot_install = bot.clone();
+                let name = plugin.name.clone();
+                let marketplace = plugin.marketplace.clone();
+                row = row.child(
+                    settings_button(
+                        SharedString::from(format!("plugin-rpc-install-{}", plugin.id)),
+                        i18n::t("安装"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.plugin_install(&bot_install, &name, &marketplace, cx);
+                    })),
+                );
+                available_rows.push(row.into_any_element());
+            }
+            if !available_rows.is_empty() {
+                body = body.child(settings_group(available_rows));
+            }
+        }
+        body.into_any_element()
+    }
+
+    /// 历史图片按需读取：用当前会话 id + row 定位，host 分段读后落临时文件。
+    fn load_history_image(
+        &mut self,
+        attachment: &backend::HistoryAttachment,
+        cx: &mut Context<Self>,
+    ) {
+        let (workspace, identity, session_id) = if let Some(bot) = self.selected_bot() {
+            let Some(key) = self.active_key() else {
+                return;
+            };
+            let Some(session_id) = self
+                .chats
+                .get(&key)
+                .and_then(|chat| chat.session_id.clone())
+            else {
+                self.toast(i18n::t("会话未就绪，稍后再试"), cx);
+                return;
+            };
+            (
+                Self::plugin_workspace(bot),
+                bot.identity(),
+                session_id,
+            )
+        } else if let Some(group) = self.selected_group() {
+            // 群历史：附件行带有成员 id + 成员 session id，据此定位到对应成员会话。
+            let Some(member_id) = attachment.member_id.as_deref() else {
+                self.toast(i18n::t("这条历史图片缺少成员会话信息"), cx);
+                return;
+            };
+            let Some(bot) = self.roster.bot_by_id(member_id) else {
+                self.toast(i18n::t("找不到该历史图片所属的成员"), cx);
+                return;
+            };
+            let Some(session_id) = attachment.session_id.clone() else {
+                self.toast(i18n::t("这条历史图片缺少会话 id"), cx);
+                return;
+            };
+            let workspace = group
+                .directory
+                .clone()
+                .filter(|directory| !directory.trim().is_empty())
+                .unwrap_or_else(|| Self::plugin_workspace(bot));
+            (
+                workspace,
+                group_member_workspace_identity(&group.id, &bot.id),
+                session_id,
+            )
+        } else {
+            return;
+        };
+        if !self
+            .history_images_pending
+            .insert(attachment.attachment_ref.clone())
+        {
+            return;
+        }
+        self.backend.load_attachment_image(
+            workspace,
+            identity,
+            session_id,
+            attachment.attachment_ref.clone(),
+            attachment.row_id,
+            attachment.entity_id.clone(),
+            attachment.index,
+        );
+        cx.notify();
+    }
+
+    fn plugin_workspace(bot: &Bot) -> String {
+        if bot.directory.trim().is_empty() {
+            backend::fallback_workspace().to_string_lossy().into_owned()
+        } else {
+            bot.directory.clone()
+        }
+    }
+
+    fn request_plugins_overview(&mut self, bot: &Bot, cx: &mut Context<Self>) {
+        let keep = self
+            .plugins_view
+            .take()
+            .filter(|view| view.bot_id == bot.id)
+            .and_then(|view| view.overview);
+        self.plugins_view = Some(PluginsView {
+            bot_id: bot.id.clone(),
+            loading: true,
+            busy: None,
+            overview: keep,
+            error: None,
+        });
+        self.backend.plugins_overview(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+        );
+        cx.notify();
+    }
+
+    fn plugin_install(
+        &mut self,
+        bot: &Bot,
+        plugin_name: &str,
+        marketplace: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = Some(tri!("安装 {plugin_name}…", "Installing {plugin_name}…"));
+        }
+        self.backend.plugin_install(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+            plugin_name,
+            marketplace,
+        );
+        cx.notify();
+    }
+
+    fn plugin_uninstall(&mut self, bot: &Bot, plugin_id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = Some(tri!("卸载 {plugin_id}…", "Uninstalling {plugin_id}…"));
+        }
+        self.backend.plugin_uninstall(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+            plugin_id,
+        );
+        cx.notify();
+    }
+
+    fn plugin_set_enabled(
+        &mut self,
+        bot: &Bot,
+        plugin_id: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = Some(if enabled {
+                i18n::t("启用插件…").to_string()
+            } else {
+                i18n::t("停用插件…").to_string()
+            });
+        }
+        self.backend.plugin_set_enabled(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+            plugin_id,
+            enabled,
+        );
+        cx.notify();
+    }
+
+    fn request_plugin_config(
+        &mut self,
+        bot: &Bot,
+        plugin_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = Some(i18n::t("读取插件配置…").to_string());
+        }
+        self.plugin_config_pending = Some(plugin_id.to_string());
+        self.backend.plugin_config_load(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+            plugin_id,
+        );
+        cx.notify();
+    }
+
+    fn open_plugin_config_dialog(
+        &mut self,
+        info: agent_protocol::plugin::PluginInfo,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bot) = self.selected_bot().cloned() else {
+            self.toast(i18n::t("先选中一个 Bot"), cx);
+            return;
+        };
+        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = None;
+        }
+        let configured = info.configured_options.clone().unwrap_or_default();
+        let options = info.user_config.clone().unwrap_or_default();
+        let mut fields = Vec::new();
+        for (key, option) in options {
+            let configured_value = configured.get(&key);
+            let default_value = option.default.as_ref();
+            let kind = option.option_type.or_else(|| {
+                default_value.map(|value| match value {
+                    agent_protocol::plugin::PluginOptionValue::Boolean(_) => {
+                        agent_protocol::plugin::PluginUserConfigOptionType::Boolean
+                    }
+                    agent_protocol::plugin::PluginOptionValue::Number(_) => {
+                        agent_protocol::plugin::PluginUserConfigOptionType::Number
+                    }
+                    agent_protocol::plugin::PluginOptionValue::Text(_) => {
+                        agent_protocol::plugin::PluginUserConfigOptionType::String
+                    }
+                })
+            });
+            let sensitive = option.sensitive.unwrap_or(false);
+            let value_text = if sensitive {
+                String::new()
+            } else {
+                configured_value
+                    .or(default_value)
+                    .map(|value| match value {
+                        agent_protocol::plugin::PluginOptionValue::Text(text) => text.clone(),
+                        agent_protocol::plugin::PluginOptionValue::Number(number) => {
+                            number.to_string()
+                        }
+                        agent_protocol::plugin::PluginOptionValue::Boolean(value) => {
+                            value.to_string()
+                        }
+                    })
+                    .unwrap_or_default()
+            };
+            let boolean = match configured_value.or(default_value) {
+                Some(agent_protocol::plugin::PluginOptionValue::Boolean(value)) => *value,
+                _ => false,
+            };
+            let placeholder = if sensitive && configured_value.is_some() {
+                i18n::t("已配置（留空保持）")
+            } else {
+                i18n::t("输入值")
+            };
+            let input = cx.new(|cx| SimpleInput::new(placeholder, theme::ink_tertiary, cx));
+            input.update(cx, |input, cx| input.set_content(value_text, cx));
+            fields.push(PluginConfigField {
+                key: key.clone(),
+                title: option.title.clone().unwrap_or(key),
+                description: option.description.clone(),
+                required: option.required.unwrap_or(false),
+                kind,
+                input,
+                boolean,
+                configured: configured_value.is_some(),
+            });
+        }
+        let focus = fields
+            .iter()
+            .find(|field| {
+                field.kind
+                    != Some(agent_protocol::plugin::PluginUserConfigOptionType::Boolean)
+            })
+            .map(|field| field.input.read(cx).focus_handle(cx));
+        let plugin_name = info.name.clone();
+        let form = cx.new(|_| PluginConfigState {
+            fields,
+            error: None,
+        });
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        let plugin_id = info.id.clone();
+        let bot_key_text = bot_key(&bot.id);
+        let bot_id = bot.id.clone();
+        let workspace = Self::plugin_workspace(&bot);
+        let identity = bot.identity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let plugin_id = plugin_id.clone();
+            let bot_key_text = bot_key_text.clone();
+            let bot_id = bot_id.clone();
+            let workspace = workspace.clone();
+            let identity = identity.clone();
+            alert
+                .title(tri!("插件配置 · {plugin_name}", "Plugin config · {plugin_name}"))
+                .description(i18n::t("按插件声明的 userConfig 生成表单；保存后立即生效。"))
+                .width(px(520.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let plugin_id = plugin_id.clone();
+                    let bot_key_text = bot_key_text.clone();
+                    let bot_id = bot_id.clone();
+                    let workspace = workspace.clone();
+                    let identity = identity.clone();
+                    let mut options = std::collections::BTreeMap::new();
+                    let mut clear_keys = Vec::new();
+                    let mut error = None;
+                    {
+                        let form = form_ok.read(cx);
+                        for field in &form.fields {
+                            if field.kind
+                                == Some(
+                                    agent_protocol::plugin::PluginUserConfigOptionType::Boolean,
+                                )
+                            {
+                                options.insert(
+                                    field.key.clone(),
+                                    serde_json::json!(field.boolean),
+                                );
+                                continue;
+                            }
+                            let text = field.input.read(cx).content().trim().to_string();
+                            if text.is_empty() {
+                                if field.required {
+                                    error = Some(tri!("{} 不能为空", "{} cannot be empty", field.title));
+                                    break;
+                                }
+                                if field.configured {
+                                    clear_keys.push(field.key.clone());
+                                }
+                                continue;
+                            }
+                            if field.kind
+                                == Some(
+                                    agent_protocol::plugin::PluginUserConfigOptionType::Number,
+                                )
+                            {
+                                match text.parse::<f64>() {
+                                    Ok(value) if value.is_finite() => {
+                                        options.insert(
+                                            field.key.clone(),
+                                            serde_json::json!(value),
+                                        );
+                                    }
+                                    _ => {
+                                        error = Some(tri!(
+                                            "{} 不是有效数字",
+                                            "{} is not a valid number",
+                                            field.title
+                                        ));
+                                        break;
+                                    }
+                                }
+                            } else {
+                                options.insert(
+                                    field.key.clone(),
+                                    serde_json::Value::String(text),
+                                );
+                            }
+                        }
+                    }
+                    if let Some(error) = error {
+                        form_ok.update(cx, |form, cx| {
+                            form.error = Some(error);
+                            cx.notify();
+                        });
+                        return false;
+                    }
+                    let _ = weak.update(cx, |this, _cx| {
+                        this.backend.plugin_configure(
+                            bot_key_text,
+                            bot_id,
+                            workspace,
+                            identity,
+                            plugin_id,
+                            options,
+                            clear_keys,
+                        );
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        if let Some(focus) = focus {
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+        }
+    }
+
+    fn open_plugin_reset_dialog(
+        &mut self,
+        bot: &Bot,
+        plugin_id: String,
+        plugin_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = bot_key(&bot.id);
+        let bot_id = bot.id.clone();
+        let workspace = Self::plugin_workspace(bot);
+        let identity = bot.identity();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let plugin_id = plugin_id.clone();
+            let key = key.clone();
+            let bot_id = bot_id.clone();
+            let workspace = workspace.clone();
+            let identity = identity.clone();
+            alert
+                .title(tri!("清空「{plugin_name}」的配置？", "Clear configuration for {plugin_name}?"))
+                .description(i18n::t("只清空该插件的用户配置，插件本身与启用状态不变。"))
+                .width(px(440.))
+                .centered()
+                .ok_text(i18n::t("清空配置"))
+                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let _ = weak.update(cx, |this, _cx| {
+                        this.backend.plugin_reset_config(
+                            key.clone(),
+                            bot_id.clone(),
+                            workspace.clone(),
+                            identity.clone(),
+                            plugin_id.clone(),
+                        );
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    fn plugin_update(
+        &mut self,
+        bot: &Bot,
+        plugin_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = Some(i18n::t("更新插件…").to_string());
+        }
+        self.backend.plugin_update(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+            plugin_id,
+        );
+        cx.notify();
+    }
+
+    fn plugin_market_refresh(&mut self, bot: &Bot, cx: &mut Context<Self>) {
+        if let Some(view) = self.plugins_view.as_mut() {
+            view.busy = Some(i18n::t("刷新市场索引…").to_string());
+        }
+        self.backend.plugin_marketplace_update(
+            bot_key(&bot.id),
+            bot.id.clone(),
+            Self::plugin_workspace(bot),
+            bot.identity(),
+        );
+        cx.notify();
+    }
+
+    /// 智能体：探测本机 CLI 引擎，并给当前 Bot 选择引擎（Mode Agent 或本地 ACP）。
+    fn settings_page_local_agents(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let agents = data::local_agents();
+        let bot = self.selected_bot().cloned();
+        let bot_index = self.bot_index();
+        let bot_id_opt = bot.as_ref().map(|bot| bot.id.clone());
+        let current = bot
+            .as_ref()
+            .and_then(|bot| self.sessions.engine_of(&bot.id))
+            .unwrap_or("mode")
+            .to_string();
+        let current_label = if current == "mode" {
+            "Mode Agent".to_string()
+        } else {
+            agents
+                .iter()
+                .find(|agent| agent.command == current || agent.id == current)
+                .map(|agent| agent.name.to_string())
+                .unwrap_or_else(|| current.clone())
+        };
+        let mut body = settings_page_body("智能体").child(settings_note(
+            i18n::t("内置 Mode Agent 走 v4，本地 Pi/DeepSeek/Hermes/ZCode 通过 ACP 接入。"),
+        ));
+        if backend::local_engine().is_some() {
+            body = body.child(settings_note(tri!(
+                "环境变量 BOT_PILOT_ENGINE 生效中：{}（未单独设置引擎的 Bot 用它）",
+                "BOT_PILOT_ENGINE is active: {} (used by bots without their own engine)",
+                backend::active_engine_label()
+            )));
+        }
+        if let Some(bot) = &bot {
+            body = body
+                .child(settings_section(i18n::t("当前 Bot")))
+                .child(settings_group(vec![
+                    kv_row(bot.name.clone(), "Bot").into_any_element(),
+                    kv_row(current_label.clone(), i18n::t("当前引擎")).into_any_element(),
+                ]));
+        } else {
+            body = body.child(hint_row(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
+        }
+        body = body.child(settings_section(i18n::t("支持的引擎")));
+        let mut engine_rows: Vec<gpui::AnyElement> = Vec::new();
+        for agent in agents {
+            let is_current = current == agent.command
+                || (current == "mode" && agent.wired);
+            let status = if agent.wired {
+                i18n::t("内置")
+            } else if agent.path.is_some() {
+                i18n::t("可选用")
+            } else {
+                i18n::t("未安装")
+            };
+            let wechat = wecom_theme::active();
+            let color = if is_current {
+                if wechat {
+                    wecom_theme::send_enabled()
+                } else {
+                    theme::accent()
+                }
+            } else if agent.wired {
+                theme::success()
+            } else if agent.path.is_some() {
+                if wechat {
+                    wecom_theme::panel_text()
+                } else {
+                    theme::ink_secondary()
+                }
+            } else if wechat {
+                wecom_theme::time_label()
+            } else {
+                theme::ink_tertiary()
+            };
+            let detail = if agent.wired {
+                tri!("{} · 内置运行时（随应用分发）", "{} · built-in runtime (bundled with the app)", agent.id)
+            } else {
+                format!(
+                    "{} · {}",
+                    agent.id,
+                    agent
+                        .path
+                        .clone()
+                        .unwrap_or_else(|| tri!("PATH 上没找到 {}", "{} was not found on PATH", agent.command))
+                )
+            };
+            let row = settings_row(agent.name.to_string(), Some(detail)).child(
+                div()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
+                    } else {
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(if wechat { 12. } else { 11. }))
+                    .line_height(px(if wechat { 18. } else { 16. }))
+                    .text_color(color)
+                    .child(if is_current { i18n::t("当前") } else { status }),
+            );
+            // 只有已接入适配层的引擎可选用：Mode（内置）、pi-acp / deepseek-acp /
+            // zcode-acp-server / hermes（均为 ACP）。其余只展示检测结果，
+            // 否则选了会静默回落到 Mode（resolve_engine 认不出命令）。
+            let adapter = agent.wired
+                || matches!(
+                    agent.command,
+                    "pi-acp" | "deepseek-acp" | "zcode-acp-server" | "hermes"
+                );
+            let selectable = bot_id_opt.is_some() && adapter && agent.path.is_some() && !is_current;
+            engine_rows.push(if selectable {
+                let bot_id = bot_id_opt.clone().unwrap_or_default();
+                let engine_id = agent.command.to_string();
+                row.child(
+                    settings_button(
+                        SharedString::from(format!("engine-pick-{}", agent.command)),
+                        i18n::t("选用"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        if this.sessions.set_engine(&bot_id, &engine_id) {
+                            this.sessions.save();
+                        }
+                        let key = bot_key(&bot_id);
+                        this.backend.reset_session(&key);
+                        this.chats.remove(&key);
+                        this.ensure_bot(bot_index);
+                        this.toast(tri!("已切换到 {engine_id}", "Switched to {engine_id}"), cx);
+                        cx.notify();
+                    })),
+                )
+            } else if bot_id_opt.is_some() && agent.wired && !is_current {
+                let bot_id = bot_id_opt.clone().unwrap_or_default();
+                row.child(
+                    settings_button(
+                        SharedString::from(format!("engine-pick-{}", agent.command)),
+                        i18n::t("选用"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        if this.sessions.set_engine(&bot_id, "mode") {
+                            this.sessions.save();
+                        }
+                        let key = bot_key(&bot_id);
+                        this.backend.reset_session(&key);
+                        this.chats.remove(&key);
+                        this.ensure_bot(bot_index);
+                        this.toast(i18n::t("已切换到 Mode Agent"), cx);
+                        cx.notify();
+                    })),
+                )
+            } else {
+                row
+            }.into_any_element());
+        }
+        if !engine_rows.is_empty() {
+            body = body.child(settings_group(engine_rows));
+        }
+        body.child(settings_note(
+            i18n::t("切换后会重建会话；本地 ACP 引擎不支持附件，审批与提问卡已接通。"),
+        ))
+        .into_any_element()
+    }
+
+    fn settings_page_bots(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let bots = self.roster.bots.clone();
+        let hidden = self.roster.hidden_bots.clone();
+        let mut body = settings_page_body("Bot").child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(settings_note(tri!(
+                    "共 {} 个 Bot（名册与产品共享）。",
+                    "{} bots (the roster is shared with the product).",
+                    bots.len()
+                )))
+                .child(
+                    settings_button("settings-new-bot", i18n::t("新建 Bot")).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            this.open_new_dialog(cx);
+                        },
+                    )),
+                ),
+        );
+        body = body.child(settings_section(i18n::t("全部 Bot")));
+        if bots.is_empty() {
+            body = body.child(hint_row(i18n::t("名册里还没有 Bot")));
+        }
+        let mut bot_rows: Vec<gpui::AnyElement> = Vec::new();
+        for bot in &bots {
+            let bot_id = bot.id.clone();
+            let detail = if bot.role.trim().is_empty() {
+                i18n::t("未设角色").to_string()
+            } else {
+                bot.role.clone()
+            };
+            bot_rows.push(
+                settings_row(bot.name.clone(), Some(detail))
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("settings-edit-bot-{}", bot.id)),
+                            i18n::t("编辑"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.open_edit_dialog(bot_id.clone(), cx);
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if !bot_rows.is_empty() {
+            body = body.child(settings_group(bot_rows));
+        }
+        if !hidden.is_empty() {
+            body = body.child(settings_section(i18n::t("已隐藏")));
+            let mut hidden_rows: Vec<gpui::AnyElement> = Vec::new();
+            for bot in &hidden {
+                let bot_id = bot.id.clone();
+                let label = if bot.role.trim().is_empty() {
+                    bot.name.clone()
+                } else {
+                    format!("{}（{}）", bot.name, bot.role.trim())
+                };
+                hidden_rows.push(
+                    settings_row(label, None)
+                        .child(
+                            settings_button(
+                                SharedString::from(format!("restore-bot-{}", bot.id)),
+                                i18n::t("恢复显示"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                let keep = selected_ids(this);
+                                if let Err(message) = data::set_bot_flags(&bot_id, None, Some(false)) {
+                                    eprintln!("[settings] 恢复 Bot 失败：{message}");
+                                }
+                                this.roster = Roster::load();
+                                this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+                                cx.notify();
+                            })),
+                        )
+                        .into_any_element(),
+                );
+            }
+            body = body.child(settings_group(hidden_rows));
+        }
+        body.into_any_element()
+    }
+
+    fn settings_page_channels(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let groups = self.roster.groups.clone();
+        let hidden = self.roster.hidden_groups.clone();
+        let archived = self.roster.archived_groups.clone();
+        let mut body = settings_page_body("频道").child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(settings_note(if i18n::is_en() { format!("{}.", count_channels(groups.len())) } else { format!("共 {} 个频道。", groups.len()) }))
+                .child(
+                    settings_button("settings-new-group", i18n::t("新建频道")).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            this.open_new_group_dialog(cx);
+                        },
+                    )),
+                ),
+        );
+        body = body.child(settings_section(i18n::t("全部频道")));
+        if groups.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有频道")));
+        }
+        let mut group_rows: Vec<gpui::AnyElement> = Vec::new();
+        for group in &groups {
+            let group_id = group.id.clone();
+            group_rows.push(
+                settings_row(
+                    group.name.clone(),
+                    Some(count_members(group.member_ids.len())),
+                )
+                .child(
+                    settings_button(
+                        SharedString::from(format!("settings-edit-group-{}", group.id)),
+                        i18n::t("编辑"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_edit_group_dialog(group_id.clone(), cx);
+                    })),
+                )
+                .into_any_element(),
+            );
+        }
+        if !group_rows.is_empty() {
+            body = body.child(settings_group(group_rows));
+        }
+        if !hidden.is_empty() {
+            body = body.child(settings_section(i18n::t("已隐藏")));
+            let mut hidden_rows: Vec<gpui::AnyElement> = Vec::new();
+            for group in &hidden {
+                let group_id = group.id.clone();
+                hidden_rows.push(
+                    settings_row(tri!("{}（频道）", "{} (channel)", group.name), None)
+                        .child(
+                            settings_button(
+                                SharedString::from(format!("restore-group-{}", group.id)),
+                                i18n::t("恢复显示"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                let keep = selected_ids(this);
+                                if let Err(message) =
+                                    data::set_group_flags(&group_id, None, Some(false))
+                                {
+                                    eprintln!("[settings] 恢复频道失败：{message}");
+                                }
+                                this.roster = Roster::load();
+                                this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+                                cx.notify();
+                            })),
+                        )
+                        .into_any_element(),
+                );
+            }
+            body = body.child(settings_group(hidden_rows));
+        }
+        if !archived.is_empty() {
+            body = body.child(settings_section(i18n::t("已归档频道")));
+            let mut archived_rows: Vec<gpui::AnyElement> = Vec::new();
+            for group in &archived {
+                let group_id = group.id.clone();
+                archived_rows.push(
+                    settings_row(group.name.clone(), None)
+                        .child(
+                            settings_button(
+                                SharedString::from(format!("restore-archived-{}", group.id)),
+                                i18n::t("取消归档"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                let keep = selected_ids(this);
+                                if let Err(message) = data::set_group_archived(&group_id, false) {
+                                    eprintln!("[settings] 取消归档失败：{message}");
+                                }
+                                this.roster = Roster::load();
+                                this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+                                cx.notify();
+                            })),
+                        )
+                        .into_any_element(),
+                );
+            }
+            body = body.child(settings_group(archived_rows));
+        }
+        body.into_any_element()
+    }
+
+    /// 重读定时任务快照（打开设置页/切换页/动作后调用，不进每帧渲染路径）。
+    fn reload_automations(&mut self) {
+        let db_path = automations::db_path(&self.roster.data_root);
+        let bots: Vec<automations::BotRef<'_>> = self
+            .roster
+            .bots
+            .iter()
+            .map(|bot| automations::BotRef {
+                id: &bot.id,
+                name: &bot.name,
+                directory: &bot.directory,
+            })
+            .collect();
+        self.automations_view = Some(match automations::load(&db_path, &bots) {
+            Ok(entries) => AutomationsView {
+                entries,
+                error: None,
+            },
+            Err(error) => AutomationsView {
+                entries: Vec::new(),
+                error: Some(error),
+            },
+        });
+    }
+
+    /// IM：微信/企业微信机器人的扫码、运行态、绑定与群聊审批（配置与主程序同源）。
+    fn settings_page_im(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.ensure_im_ticker(cx);
+        let data_root = self.roster.data_root.clone();
+        let service = im_service::handle();
+        let mut body = settings_page_body("IM").child(settings_note(
+            i18n::t("微信/企微机器人的扫码、运行与回合都在本进程执行。"),
+        ));
+        let rows = match im::list(&data_root) {
+            Ok(rows) => rows,
+            Err(error) => {
+                return body
+                    .child(settings_error(tri!("读取 IM 配置失败：{error}", "Failed to read IM config: {error}")))
+                    .into_any_element();
+            }
+        };
+        let new_root = data_root.clone();
+        let new_wecom_root = data_root.clone();
+        body = body.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(8.))
+                .child(
+                    settings_button("im-new-weixin", i18n::t("新建微信机器人")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            match im::create_weixin_bot(&new_root) {
+                                Ok(bot) => {
+                                    this.im_selected = Some(bot.id.clone());
+                                    if let Some(service) = im_service::handle() {
+                                        service.start_weixin_qr(&bot.id);
+                                        service.refresh_runtime();
+                                    }
+                                    this.toast(i18n::t("已新建微信机器人，请扫码登录"), cx);
+                                }
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    settings_button("im-new-wecom", i18n::t("新建企业微信机器人")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            match im::create_wecom_bot(&new_wecom_root) {
+                                Ok(bot) => {
+                                    this.im_selected = Some(bot.id.clone());
+                                    if let Some(service) = im_service::handle() {
+                                        service.start_wecom_qr(&bot.id);
+                                        service.refresh_runtime();
+                                    }
+                                    this.toast(i18n::t("已新建企业微信机器人，请扫码创建"), cx);
+                                }
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(settings_note(
+                    i18n::t("微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。"),
+                )),
+        );
+        if rows.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有 IM 机器人；点上方按钮新建并扫码。")));
+            return body.into_any_element();
+        }
+        body = body.child(settings_section(count_bots(rows.len())));
+        let selected = self.im_selected.clone();
+        let mut im_rows: Vec<gpui::AnyElement> = Vec::new();
+        for row in &rows {
+            let (label, color) = im_runtime_label(service.as_ref(), row);
+            let provider = i18n::owned(row.provider_label.to_string());
+            let access = i18n::owned(row.access_mode.to_string());
+            let workspaces = if i18n::is_en() {
+                i18n::n(row.workspace_count, "workspace", "workspaces")
+            } else {
+                format!("工作区 {} 个", row.workspace_count)
+            };
+            let credentials = if row.credential_registered {
+                i18n::t("凭据已就绪")
+            } else {
+                i18n::t("凭据未配置")
+            };
+            let detail = if i18n::is_en() {
+                format!("{provider} · {access} · {workspaces} · {credentials}")
+            } else {
+                format!("{} · {} · {} · {}", provider, access, workspaces, credentials)
+            };
+            let row_id = row.id.clone();
+            let row_root = data_root.clone();
+            let title = if row.name.trim().is_empty() {
+                tri!("未命名{} Bot", "Unnamed {} bot", provider)
+            } else {
+                row.name.clone()
+            };
+            let mut element = settings_row(title, Some(detail))
+                .id(SharedString::from(format!("im-bot-{}", row.id)))
+                .cursor_pointer()
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(color)
+                        .child(SharedString::from(label)),
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.im_selected = Some(row_id.clone());
+                    this.im_delete = None;
+                    if let Ok(Some(bot)) = im::bot(&row_root, &row_id) {
+                        let minutes = bot
+                            .heartbeat
+                            .as_ref()
+                            .map(|heartbeat| heartbeat.interval_minutes)
+                            .unwrap_or(0);
+                        this.im_heartbeat_input.update(cx, |input, cx| {
+                            input.set_content(minutes.to_string(), cx);
+                        });
+                    }
+                    cx.notify();
+                }));
+            if selected.as_deref() == Some(row.id.as_str()) {
+                element = element.bg(theme::hover());
+            }
+            im_rows.push(element.into_any_element());
+        }
+        if !im_rows.is_empty() {
+            body = body.child(settings_group(im_rows));
+        }
+        let Some(bot_id) = self.im_selected.clone() else {
+            return body
+                .child(hint_row(i18n::t("点一个机器人查看详情：扫码、启停、访问模式与绑定码。")))
+                .into_any_element();
+        };
+        let bot = match im::bot(&data_root, &bot_id) {
+            Ok(Some(bot)) => bot,
+            Ok(None) => {
+                self.im_selected = None;
+                return body.into_any_element();
+            }
+            Err(error) => {
+                return body
+                    .child(settings_error(tri!("读取机器人失败：{error}", "Failed to read bots: {error}")))
+                    .into_any_element();
+            }
+        };
+        let runtime = service.as_ref().and_then(|service| service.runtime_status(&bot_id));
+        let running = service
+            .as_ref()
+            .is_some_and(|service| service.is_running(&bot_id));
+        body = body
+            .child(settings_section(i18n::t("机器人详情")))
+            .child(settings_group(vec![
+                kv_row(
+                    if bot.name.trim().is_empty() {
+                        i18n::t("未命名微信 Bot").to_string()
+                    } else {
+                        bot.name.clone()
+                    },
+                    i18n::t("名称"),
+                )
+                .into_any_element(),
+                kv_row(bot.id.clone(), "Bot ID").into_any_element(),
+                kv_row(
+                    bot.provider_self_id
+                        .clone()
+                        .or_else(|| bot.wecom_bot_id.clone())
+                        .filter(|id| !id.trim().is_empty())
+                        .unwrap_or_else(|| i18n::t("未登录").to_string()),
+                    i18n::t("机器人 ID"),
+                )
+                .into_any_element(),
+                kv_row(bot_access_label(&bot).to_string(), i18n::t("访问模式")).into_any_element(),
+                kv_row(
+                    bot.provider_user_id
+                        .clone()
+                        .filter(|user| !user.trim().is_empty())
+                        .unwrap_or_else(|| i18n::t("未绑定用户").to_string()),
+                    i18n::t("绑定用户"),
+                )
+                .into_any_element(),
+                kv_row(
+                    if !bot.enabled {
+                        i18n::t("已停用").to_string()
+                    } else if matches!(
+                        bot.provider,
+                        bots_service::BotProvider::Weixin | bots_service::BotProvider::Wecom
+                    ) {
+                        match &runtime {
+                            Some(status) => format!(
+                                "{}{}",
+                                im_status_text(status.status),
+                                status
+                                    .message
+                                    .as_deref()
+                                    .map(|message| format!("（{message}）"))
+                                    .unwrap_or_default()
+                            ),
+                            None if running => i18n::t("运行中").to_string(),
+                            None => i18n::t("待启动").to_string(),
+                        }
+                    } else {
+                        i18n::t("运行时未移植").to_string()
+                    },
+                    i18n::t("运行状态"),
+                )
+                .into_any_element(),
+            ]));
+        // 群聊方式 + 待批准群（两个通道共用 gate 语义）。
+        let group_activation = bot.group_chat.as_ref().map(|group| group.activation);
+        body = body.child(settings_section(i18n::t("群聊")));
+        body = body.child(settings_group(vec![
+            kv_row(
+                group_activation_label(group_activation).to_string(),
+                i18n::t("群聊方式"),
+            )
+            .into_any_element(),
+        ]));
+        let mut group_buttons = div().flex().flex_wrap().gap(px(8.));
+        for (label, activation) in [
+            (i18n::t("不响应群聊"), bots_service::BotGroupActivation::Disabled),
+            (i18n::t("仅 @ 时回复"), bots_service::BotGroupActivation::Mention),
+            (i18n::t("始终回复"), bots_service::BotGroupActivation::Always),
+        ] {
+            let group_root = data_root.clone();
+            let group_bot = bot_id.clone();
+            let button_id = SharedString::from(format!("im-group-activation-{label}"));
+            group_buttons = group_buttons.child(
+                settings_button(button_id, label).on_click(cx.listener(
+                    move |this, _event, _window, cx| {
+                        match im::set_group_activation(&group_root, &group_bot, activation) {
+                            Ok(()) => {
+                                if let Some(service) = im_service::handle() {
+                                    service.refresh_runtime();
+                                }
+                                this.toast(tri!("群聊方式已改为：{label}", "Group reply mode set to: {label}"), cx);
+                            }
+                            Err(message) => this.toast(message, cx),
+                        }
+                        cx.notify();
+                    },
+                )),
+            );
+        }
+        body = body.child(group_buttons);
+        if let Some(groups) = bot
+            .group_chat
+            .as_ref()
+            .and_then(|group| group.permissions.clone())
+        {
+            let mut pending_rows: Vec<gpui::AnyElement> = Vec::new();
+            for group in groups
+                .into_iter()
+                .filter(|group| group.status == bots_service::BotGroupPermissionStatus::Pending)
+            {
+                let approve_root = data_root.clone();
+                let approve_bot = bot_id.clone();
+                let approve_group = group.group_id.clone();
+                let reject_root = data_root.clone();
+                let reject_bot = bot_id.clone();
+                let reject_group = group.group_id.clone();
+                pending_rows.push(
+                    settings_row(
+                        group.group_name.clone(),
+                        Some(tri!("待批准 · {}", "Pending approval · {}", group.group_id)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(6.))
+                            .child(
+                                settings_button("im-group-approve", i18n::t("批准")).on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        match im::approve_group(&approve_root, &approve_bot, &approve_group) {
+                                            Ok(()) => {
+                                                if let Some(service) = im_service::handle() {
+                                                    service.refresh_runtime();
+                                                }
+                                                this.toast(i18n::t("已批准群聊"), cx);
+                                            }
+                                            Err(message) => this.toast(message, cx),
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                settings_button("im-group-reject", i18n::t("拒绝")).on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        match im::reject_group(&reject_root, &reject_bot, &reject_group) {
+                                            Ok(()) => this.toast(i18n::t("已拒绝群聊"), cx),
+                                            Err(message) => this.toast(message, cx),
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    )
+                    .into_any_element(),
+                );
+            }
+            if !pending_rows.is_empty() {
+                body = body.child(settings_group(pending_rows));
+            }
+        }
+        // 机器人心跳。
+        let heartbeat_root = data_root.clone();
+        let heartbeat_bot = bot_id.clone();
+        body = body
+            .child(settings_section(i18n::t("机器人心跳")))
+            .child(dialog_field(
+                "im-heartbeat-field",
+                i18n::t("间隔（分钟，0 关闭）"),
+                &self.im_heartbeat_input,
+            ));
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    settings_button("im-heartbeat-save", i18n::t("保存心跳")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            let raw = this
+                                .im_heartbeat_input
+                                .read(cx)
+                                .content()
+                                .trim()
+                                .to_string();
+                            let minutes = match raw.parse::<i64>() {
+                                Ok(minutes) if minutes >= 0 => minutes,
+                                _ => {
+                                    this.toast(i18n::t("心跳间隔需要是非负整数（0 = 关闭）"), cx);
+                                    return;
+                                }
+                            };
+                            match im::set_heartbeat(&heartbeat_root, &heartbeat_bot, minutes) {
+                                Ok(()) => this.toast(
+                                    if minutes == 0 {
+                                        i18n::t("已关闭机器人心跳").to_string()
+                                    } else {
+                                        tri!("心跳间隔已设为 {minutes} 分钟", "Heartbeat interval set to {minutes} minutes")
+                                    },
+                                    cx,
+                                ),
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(settings_note(
+                    i18n::t("到点后静默检查工作区，只回 HEARTBEAT_OK 时不打扰。"),
+                )),
+        );
+        if matches!(
+            bot.provider,
+            bots_service::BotProvider::Weixin | bots_service::BotProvider::Wecom
+        ) {
+            body = body.child(self.im_qr_card(
+                &bot_id,
+                bot.provider == bots_service::BotProvider::Wecom,
+                service.as_ref(),
+                cx,
+            ));
+            let toggle_root = data_root.clone();
+            let toggle_id = bot_id.clone();
+            let enabled = bot.enabled;
+            let access_root = data_root.clone();
+            let access_id = bot_id.clone();
+            let bind_id = bot_id.clone();
+            let free = bot.access_mode == Some(bots_service::BotAccessMode::Free);
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .child(
+                        settings_button(
+                            "im-toggle-enabled",
+                            if enabled { i18n::t("停用机器人") } else { i18n::t("启用机器人") },
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            match im::set_enabled(&toggle_root, &toggle_id, !enabled) {
+                                Ok(()) => {
+                                    if let Some(service) = im_service::handle() {
+                                        service.refresh_runtime();
+                                    }
+                                    this.toast(
+                                        if enabled { i18n::t("已停用机器人") } else { i18n::t("已启用机器人") },
+                                        cx,
+                                    );
+                                }
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            "im-toggle-access",
+                            if free { i18n::t("改为白名单") } else { i18n::t("改为自由访问") },
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            match im::set_access_mode(&access_root, &access_id, !free) {
+                                Ok(()) => {
+                                    if let Some(service) = im_service::handle() {
+                                        service.refresh_runtime();
+                                    }
+                                    this.toast(
+                                        if free { i18n::t("已改为白名单") } else { i18n::t("已改为自由访问") },
+                                        cx,
+                                    );
+                                }
+                                Err(message) => this.toast(message, cx),
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button("im-bind-code", i18n::t("生成绑定码")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                let Some(service) = im_service::handle() else {
+                                    this.toast(i18n::t("IM 服务尚未就绪"), cx);
+                                    return;
+                                };
+                                match service.create_bind_code(&bind_id) {
+                                    Ok(view) => this.toast(
+                                        tri!("绑定码：{}（10 分钟内有效）", "Bind code: {} (valid for 10 minutes)", view.code),
+                                        cx,
+                                    ),
+                                    Err(message) => this.toast(message, cx),
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            );
+            if let Some(bind) = service.as_ref().and_then(|service| service.bind_for(&bot_id)) {
+                body = body.child(value_box(
+                    bind.code.clone(),
+                    Some(i18n::t("绑定码：在微信里发送 /bind <绑定码>")),
+                ));
+            }
+            let delete_id = bot_id.clone();
+            if self.im_delete.as_deref() == Some(bot_id.as_str()) {
+                let confirm_root = data_root.clone();
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(settings_note(i18n::t("删除后配置/凭据/会话绑定一并清理，确定？")))
+                        .child(
+                            settings_button("im-delete-confirm", i18n::t("确认删除")).on_click(
+                                cx.listener(move |this, _event, _window, cx| {
+                                    match im::delete(&confirm_root, &delete_id) {
+                                        Ok(()) => {
+                                            this.im_selected = None;
+                                            if let Some(service) = im_service::handle() {
+                                                service.cancel_qr(&delete_id);
+                                                service.refresh_runtime();
+                                            }
+                                            this.toast(i18n::t("已删除机器人"), cx);
+                                        }
+                                        Err(message) => this.toast(message, cx),
+                                    }
+                                    this.im_delete = None;
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                        .child(
+                            settings_button("im-delete-cancel", i18n::t("取消")).on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.im_delete = None;
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                );
+            } else {
+                body = body.child(
+                    div().flex().child(
+                        settings_button("im-delete", i18n::t("删除机器人")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.im_delete = Some(delete_id.clone());
+                                cx.notify();
+                            },
+                        )),
+                    ),
+                );
+            }
+        } else {
+            body = body.child(settings_note(
+                i18n::t("该通道的运行时尚未移植到 GPUI；如需继续使用，请暂用已安装的 0.0.42 主程序。"),
+            ));
+        }
+        body.into_any_element()
+    }
+
+    /// IM 设置页停在页面上时每 800ms 重绘一次（运行态/扫码状态由后台任务更新）。
+    fn ensure_im_ticker(&mut self, cx: &mut Context<Self>) {
+        if self.im_tick_started {
+            return;
+        }
+        self.im_tick_started = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(800))
+                    .await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.settings_open && this.settings_tab == 8 {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 扫码卡片：二维码/状态/刷新按钮（服务未就绪时退化为提示）。
+    fn im_qr_card(
+        &self,
+        bot_id: &str,
+        wecom: bool,
+        service: Option<&std::sync::Arc<im_service::ImService>>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(service) = service else {
+            return settings_note(i18n::t("IM 服务尚未就绪（Agent 控制面还在启动）。")).into_any_element();
+        };
+        let start_label = if wecom { i18n::t("扫码创建") } else { i18n::t("扫码登录") };
+        let hint = if wecom {
+            i18n::t("用企业微信扫码并确认创建机器人；创建后机器人 id 与 secret 自动保存。")
+        } else {
+            i18n::t("用微信扫码；已在别处登录的 Bot 可重新扫码换号。")
+        };
+        let Some(view) = service.qr_for(bot_id) else {
+            let start_id = bot_id.to_string();
+            return div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    settings_button("im-qr-start", start_label).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            if let Some(service) = im_service::handle() {
+                                if wecom {
+                                    service.start_wecom_qr(&start_id);
+                                } else {
+                                    service.start_weixin_qr(&start_id);
+                                }
+                            }
+                            this.toast(i18n::t("正在生成二维码…"), cx);
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(settings_note(hint))
+                .into_any_element();
+        };
+        let start_label = if view.provider == im_service::ImQrProvider::Wecom {
+            i18n::t("重新创建")
+        } else {
+            i18n::t("重新扫码")
+        };
+        let status = match view.status {
+            "starting" => i18n::t("正在生成二维码…"),
+            "pending" => i18n::t("等待扫码"),
+            "scanned" => i18n::t("已扫码，请在手机上确认"),
+            "success" => i18n::t("扫码成功，凭据已保存"),
+            "expired" => i18n::t("二维码已过期"),
+            _ => i18n::t("扫码失败"),
+        };
+        let mut card = div()
+            .w_full()
+            .rounded(px(theme::RADIUS_CARD))
+            .border_1()
+            .border_color(theme::edge())
+            .bg(theme::card())
+            .p(px(12.))
+            .flex()
+            .gap(px(12.));
+        if view.status != "success" && view.path.exists() {
+            card = card.child(img(view.path.clone()).w(px(200.)).h(px(200.)));
+        }
+        let retry_id = bot_id.to_string();
+        let close_id = bot_id.to_string();
+        card = card.child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(settings_note(status))
+                .children(view.message.clone().map(settings_note))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .child(
+                            settings_button("im-qr-retry", start_label).on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    if let Some(service) = im_service::handle() {
+                                        if wecom {
+                                            service.start_wecom_qr(&retry_id);
+                                        } else {
+                                            service.start_weixin_qr(&retry_id);
+                                        }
+                                    }
+                                    this.toast(i18n::t("正在刷新二维码…"), cx);
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .child(
+                            settings_button("im-qr-close", i18n::t("关闭")).on_click(cx.listener(
+                                move |_this, _event, _window, cx| {
+                                    if let Some(service) = im_service::handle() {
+                                        service.cancel_qr(&close_id);
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                ),
+        );
+        card.into_any_element()
+    }
+
+    /// 连接器：目录 + 启用状态 + 内联密钥（与主程序同一 `connectors.json` / 密钥库）。
+    /// 团队记忆独立成页（原先挂在「通用」底部，条目多时把通用页撑得很长）。
+    fn settings_page_team_memory(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut body = settings_page_body("团队记忆")
+            .child(settings_note(
+                i18n::t("团队共享的长期事实，每次会话都会注入。"),
+            ))
+            .child(settings_section(i18n::t("自动回顾")))
+            .child(settings_group(vec![
+                settings_row(
+                    i18n::t("群记忆自动回顾").to_string(),
+                    Some(
+                        i18n::t("群回合结束 5s 后由管理员模型整理频道记忆。")
+                            .to_string(),
+                    ),
+                )
+                .child(
+                    settings_button(
+                        SharedString::from("memory-review-toggle"),
+                        if self.memory_review_enabled {
+                            i18n::t("已开启")
+                        } else {
+                            i18n::t("已关闭")
+                        },
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.memory_review_enabled = !this.memory_review_enabled;
+                        match crate::memory_review::set_enabled(this.memory_review_enabled) {
+                            Ok(()) => this.toast(
+                                if this.memory_review_enabled {
+                                    i18n::t("已开启群记忆自动回顾")
+                                } else {
+                                    i18n::t("已关闭群记忆自动回顾")
+                                },
+                                cx,
+                            ),
+                            Err(message) => this.toast(message, cx),
+                        }
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("团队文件记忆")))
+            .child(self.team_memory_section(cx))
+            .child(settings_section(i18n::t("频道文件记忆")));
+        if self.roster.groups.is_empty() {
+            body = body.child(hint_row(i18n::t("名册里还没有频道")));
+        }
+        let mut memory_group_rows: Vec<gpui::AnyElement> = Vec::new();
+        for group in &self.roster.groups {
+            let group_id = group.id.clone();
+            let selected = self.memory_group.as_deref() == Some(group.id.as_str());
+            memory_group_rows.push(
+                settings_row(
+                    group.name.clone(),
+                    selected.then(|| i18n::t("正在查看").to_string()),
+                )
+                .child(
+                    settings_button(
+                        SharedString::from(format!("memory-group-{}", group.id)),
+                        if selected { i18n::t("收起") } else { i18n::t("查看") },
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        if this.memory_group.as_deref() == Some(group_id.as_str()) {
+                            this.memory_group = None;
+                        } else {
+                            this.memory_group = Some(group_id.clone());
+                        }
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+            );
+        }
+        if !memory_group_rows.is_empty() {
+            body = body.child(settings_group(memory_group_rows));
+        }
+        if let Some(group_id) = self.memory_group.clone() {
+            body = body.child(self.group_memory_section(&group_id, cx));
+        }
+        body.into_any_element()
+    }
+
+    fn settings_page_connectors(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let data_root = self.roster.data_root.clone();
+        let mut body = settings_page_body("连接器").child(settings_note(
+            i18n::t("连接器即 MCP 服务器，启用后随回合注入 createSession。"),
+        ));
+        let state = connectors::state(&data_root);
+        let configured = match secrets::list(&data_root) {
+            Ok(names) => names,
+            Err(error) => {
+                return body
+                    .child(settings_error(tri!("读取密钥库失败：{error}", "Failed to read the secret store: {error}")))
+                    .into_any_element();
+            }
+        };
+        let categories = [
+            ("dev", i18n::t("开发")),
+            ("docs", i18n::t("文档")),
+            ("work", i18n::t("协作")),
+            ("data", i18n::t("数据")),
+            ("search", i18n::t("搜索")),
+            ("design", i18n::t("设计")),
+        ];
+        for (category, label) in categories {
+            if !connectors_service::CATALOG
+                .iter()
+                .any(|spec| spec.category == category)
+            {
+                continue;
+            }
+            body = body.child(settings_section(label));
+            for spec in connectors_service::CATALOG
+                .iter()
+                .filter(|spec| spec.category == category)
+            {
+                let on = state.enabled.iter().any(|id| id == spec.id);
+                let missing = connectors::missing_secrets(spec, &configured);
+                let mut actions = div().flex().items_center().gap(px(6.));
+                if on {
+                    let (text, color) = if missing.is_empty() {
+                        (i18n::t("已启用"), theme::success())
+                    } else {
+                        (i18n::t("缺少密钥"), theme::danger())
+                    };
+                    actions = actions.child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(color)
+                            .child(text),
+                    );
+                }
+                let toggle_id = spec.id.to_string();
+                let toggle_root = data_root.clone();
+                actions = actions.child(
+                    switch(
+                        SharedString::from(format!("connector-toggle-{}", spec.id)),
+                        on,
+                    )
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        match connectors::set_enabled(&toggle_root, &toggle_id, !on) {
+                            Ok(_) => this.toast(
+                                if on {
+                                    i18n::t("已停用连接器").to_string()
+                                } else {
+                                    i18n::t("已启用连接器；缺密钥请填写").to_string()
+                                },
+                                cx,
+                            ),
+                            Err(message) => this.toast(message, cx),
+                        }
+                        cx.notify();
+                    })),
+                );
+                let mut connector_card: Vec<gpui::AnyElement> = Vec::new();
+                connector_card.push(
+                    settings_row(
+                        spec.name.to_string(),
+                        Some(format!("{} · {}", spec.about, spec.id)),
+                    )
+                    .child(actions)
+                    .into_any_element(),
+                );
+                if on && !spec.secrets.is_empty() {
+                    let mut secret_block = div()
+                        .rounded(px(theme::RADIUS_CARD))
+                        .border_1()
+                        .border_color(theme::edge())
+                        .bg(theme::card())
+                        .p(px(12.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(settings_note(
+                            i18n::t("密钥只写不读，保存后清空输入框。"),
+                        ));
+                    for secret in spec.secrets {
+                        let saved = configured.iter().any(|name| name == secret.name);
+                        let mut field = div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(170.))
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(SharedString::from(secret.label)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .h(px(30.))
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(theme::edge())
+                                    .bg(theme::bg())
+                                    .px(px(8.))
+                                    .children(
+                                        self.connector_secret_inputs
+                                            .get(secret.name)
+                                            .cloned(),
+                                    ),
+                            );
+                        if saved {
+                            field = field.child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::success())
+                                    .child(i18n::t("已保存")),
+                            );
+                        }
+                        secret_block = secret_block.child(field);
+                    }
+                    let save_root = data_root.clone();
+                    let save_names: Vec<&'static str> =
+                        spec.secrets.iter().map(|secret| secret.name).collect();
+                    let save_id = spec.id;
+                    secret_block = secret_block.child(
+                        div().flex().justify_end().child(
+                            settings_button(
+                                SharedString::from(format!("connector-save-{save_id}")),
+                                i18n::t("保存密钥"),
+                            )
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                let mut saved = 0;
+                                let mut error = None;
+                                for name in &save_names {
+                                    let Some(input) = this.connector_secret_inputs.get(name)
+                                    else {
+                                        continue;
+                                    };
+                                    let value = input.read(cx).content().trim().to_string();
+                                    if value.is_empty() {
+                                        continue;
+                                    }
+                                    match secrets::set(&save_root, name, &value) {
+                                        Ok(_) => {
+                                            saved += 1;
+                                            input.update(cx, |input, cx| {
+                                                input.clear(window, cx)
+                                            });
+                                        }
+                                        Err(message) => {
+                                            error = Some(message);
+                                            break;
+                                        }
+                                    }
+                                }
+                                match error {
+                                    Some(message) => this.toast(message, cx),
+                                    None if saved > 0 => {
+                                        this.toast(if i18n::is_en() { format!("Saved {}", i18n::n(saved, "secret", "secrets")) } else { format!("已保存 {saved} 个密钥") }, cx)
+                                    }
+                                    None => this.toast(i18n::t("没有填写新密钥"), cx),
+                                }
+                                cx.notify();
+                            })),
+                        ),
+                    );
+                    connector_card.push(secret_block.into_any_element());
+                }
+                body = body.child(settings_group(connector_card));
+            }
+        }
+        body.into_any_element()
+    }
+
+    /// 定时任务：跨 Bot 汇总 Mode automation（与壳同一个 tasks-index.sqlite）。
+    fn settings_page_schedules(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.automations_view.is_none() {
+            self.reload_automations();
+        }
+        let view = self.automations_view.as_ref().expect("just loaded");
+        let db_path = automations::db_path(&self.roster.data_root);
+        let mut body = settings_page_body("定时任务").child(settings_note(
+            i18n::t("汇总所有 Bot 的定时任务，由内置 20 秒调度器执行。"),
+        ));
+        if let Some(error) = &view.error {
+            return body
+                .child(settings_error(tri!("读取定时任务失败：{error}", "Failed to read scheduled tasks: {error}")))
+                .into_any_element();
+        }
+        if view.entries.is_empty() {
+            return body
+                .child(hint_row(
+                    i18n::t("还没有定时任务。直接让 Bot 用 CronCreate 创建；GPUI 调度器会执行。"),
+                ))
+                .into_any_element();
+        }
+        body = body.child(settings_section(count_tasks(view.entries.len())));
+        let mut task_rows: Vec<gpui::AnyElement> = Vec::new();
+        for entry in &view.entries {
+            let automation = &entry.automation;
+            let automation_id = automation.automation_id.clone();
+            let workspace_key = automation.workspace_key.clone();
+            let title = automation.title.clone();
+            let enabled = automation.enabled;
+            let live = automations::is_live(automation);
+            let owner = entry
+                .bot_name
+                .clone()
+                .unwrap_or_else(|| workspace_tail(&automation.workspace_path));
+            let schedule = automations::describe_schedule(automation);
+            let next = automation
+                .next_run_at
+                .map(|ms| {
+                    format!(
+                        "下次 {} {}",
+                        time::day_label(ms as u64),
+                        time::format_hm(ms as u64)
+                    )
+                })
+                .unwrap_or_else(|| i18n::t("无下次运行").to_string());
+            let mut detail = format!("{owner} · {schedule} · {next}");
+            if let Some(error) = automation.last_error.as_deref().map(str::trim)
+                && !error.is_empty()
+            {
+                detail.push_str(&format!(" · {error}"));
+            }
+            let status_color = match automations::status_kind(automation) {
+                automations::StatusKind::Active => theme::success(),
+                automations::StatusKind::Paused => theme::ink_secondary(),
+                automations::StatusKind::Completed => theme::ink_tertiary(),
+                automations::StatusKind::Failed => theme::danger(),
+            };
+            let mut actions = div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(status_color)
+                        .child(automations::status_label(automation)),
+                );
+            if live {
+                let toggle_id = automation_id.clone();
+                let toggle_key = workspace_key.clone();
+                let toggle_db = db_path.clone();
+                let next_on = !enabled;
+                actions = actions.child(
+                    settings_button(
+                        SharedString::from(format!("automation-toggle-{automation_id}")),
+                        if enabled { i18n::t("暂停") } else { i18n::t("启用") },
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        match automations::set_enabled(
+                            &toggle_db,
+                            &toggle_id,
+                            next_on,
+                            &toggle_key,
+                        ) {
+                            Ok(()) => this.toast(
+                                if next_on { i18n::t("已启用定时任务") } else { i18n::t("已暂停定时任务") },
+                                cx,
+                            ),
+                            Err(message) => this.toast(message, cx),
+                        }
+                        this.automations_view = None;
+                        cx.notify();
+                    })),
+                );
+                let run_id = automation_id.clone();
+                let run_key = workspace_key.clone();
+                let run_db = db_path.clone();
+                actions = actions.child(
+                    settings_button(
+                        SharedString::from(format!("automation-run-{automation_id}")),
+                        i18n::t("立即运行"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        match automations::run_now(&run_db, &run_id, &run_key) {
+                            Ok(automations::RunNowOutcome::Queued) => {
+                                this.toast(i18n::t("已排队；调度器会在约 20 秒内认领"), cx)
+                            }
+                            Ok(automations::RunNowOutcome::Duplicate) => {
+                                this.toast(i18n::t("该任务已有排队/运行中的立即运行"), cx)
+                            }
+                            Ok(automations::RunNowOutcome::NotFound) => {
+                                this.toast(i18n::t("任务已不存在，列表即将刷新"), cx)
+                            }
+                            Err(message) => this.toast(message, cx),
+                        }
+                        this.automations_view = None;
+                        cx.notify();
+                    })),
+                );
+            }
+            let history_id = automation_id.clone();
+            let history_key = workspace_key.clone();
+            let history_db = db_path.clone();
+            let history_title = title.clone();
+            actions = actions.child(
+                settings_button(
+                    SharedString::from(format!("automation-history-{automation_id}")),
+                    i18n::t("历史"),
+                )
+                .on_click(cx.listener(move |this, _event, window, cx| {
+                    match automations::runs(&history_db, &history_id, &history_key, 10) {
+                        Ok(runs) => {
+                            this.open_automation_history_dialog(
+                                AutomationHistoryState {
+                                    title: history_title.clone(),
+                                    runs,
+                                },
+                                window,
+                                cx,
+                            );
+                        }
+                        Err(message) => this.toast(message, cx),
+                    }
+                    cx.notify();
+                })),
+            );
+            let delete_target = AutomationDeleteTarget {
+                automation_id: automation_id.clone(),
+                workspace_key: workspace_key.clone(),
+                title: title.clone(),
+            };
+            actions = actions.child(
+                settings_button(
+                    SharedString::from(format!("automation-delete-{automation_id}")),
+                    i18n::t("删除"),
+                )
+                .on_click(cx.listener(move |this, _event, window, cx| {
+                    this.open_delete_automation_dialog(delete_target.clone(), window, cx);
+                })),
+            );
+            task_rows.push(
+                settings_row(title, Some(detail))
+                    .child(actions)
+                    .into_any_element(),
+            );
+        }
+        if !task_rows.is_empty() {
+            body = body.child(settings_group(task_rows));
+        }
+        body.into_any_element()
+    }
+
+    /// 密钥：本机插件密钥库（`v2/secrets.json`），值只写不读。
+    fn settings_page_secrets(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let data_root = self.roster.data_root.clone();
+        let mut body = settings_page_body("密钥").child(settings_note(
+            i18n::t("本机插件密钥库，值只写不读，供 ${secret:NAME} 引用。"),
+        ));
+        let names = match secrets::list(&data_root) {
+            Ok(names) => names,
+            Err(error) => {
+                return body
+                    .child(settings_error(tri!("读取密钥失败：{error}", "Failed to read secrets: {error}")))
+                    .into_any_element();
+            }
+        };
+        body = body.child(settings_section(tri!("已保存密钥（{}）", "Saved secrets ({})", names.len())));
+        if names.is_empty() {
+            body = body.child(hint_row(i18n::t("还没有保存密钥；在下方添加插件需要的密钥。")));
+        }
+        let mut secret_rows: Vec<gpui::AnyElement> = Vec::new();
+        for name in names {
+            let stored_name = name.clone();
+            let row = settings_row(stored_name.clone(), None);
+            if self.confirm_remove_secret.as_deref() == Some(stored_name.as_str()) {
+                let remove_root = data_root.clone();
+                let remove_name = stored_name.clone();
+                secret_rows.push(
+                    row.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(settings_note(i18n::t("移除？")))
+                            .child(
+                                settings_button(
+                                    SharedString::from(format!("secret-remove-{stored_name}")),
+                                    i18n::t("确认"),
+                                )
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    match secrets::remove(&remove_root, &remove_name) {
+                                        Ok(_) => this.toast(
+                                            tri!("已移除密钥：{remove_name}", "Removed secret: {remove_name}"),
+                                            cx,
+                                        ),
+                                        Err(message) => this.toast(message, cx),
+                                    }
+                                    this.confirm_remove_secret = None;
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                settings_button(
+                                    SharedString::from(format!("secret-cancel-{stored_name}")),
+                                    i18n::t("取消"),
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.confirm_remove_secret = None;
+                                    cx.notify();
+                                })),
+                            ),
+                    )
+                    .into_any_element(),
+                );
+            } else {
+                secret_rows.push(row.child(
+                    settings_button(
+                        SharedString::from(format!("secret-delete-{stored_name}")),
+                        i18n::t("删除"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.confirm_remove_secret = Some(stored_name.clone());
+                        cx.notify();
+                    })),
+                ).into_any_element());
+            }
+        }
+        if !secret_rows.is_empty() {
+            body = body.child(settings_group(secret_rows));
+        }
+        body = body
+            .child(settings_section(i18n::t("添加密钥")))
+            .child(dialog_field(
+                "secret-name-field",
+                i18n::t("名称"),
+                &self.secret_name_input,
+            ))
+            .child(dialog_field(
+                "secret-value-field",
+                i18n::t("值"),
+                &self.secret_value_input,
+            ))
+            .child(settings_note(
+                i18n::t("名称仅限字母、数字、下划线，最多 64 字符。"),
+            ));
+        let save_root = data_root;
+        body.child(div().flex().child(
+            settings_button("secret-save", i18n::t("保存密钥")).on_click(cx.listener(
+                move |this, _event, window, cx| {
+                    let name = this
+                        .secret_name_input
+                        .read(cx)
+                        .content()
+                        .trim()
+                        .to_string();
+                    let value = this.secret_value_input.read(cx).content().to_string();
+                    match secrets::set(&save_root, &name, &value) {
+                        Ok(_) => {
+                            this.secret_name_input
+                                .update(cx, |input, cx| input.clear(window, cx));
+                            this.secret_value_input
+                                .update(cx, |input, cx| input.clear(window, cx));
+                            this.toast(tri!("已保存密钥：{name}", "Saved secret: {name}"), cx);
+                        }
+                        Err(message) => this.toast(message, cx),
+                    }
+                    cx.notify();
+                },
+            )),
+        ))
+        .into_any_element()
+    }
+
+    /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
+    fn settings_page_capabilities(&self) -> gpui::AnyElement {
+        let mut body = settings_page_body("能力").child(settings_note(
+            i18n::t("壳真实广告的能力集，未接线项不会对 Agent 生效。"),
+        ));
+        let mut capability_rows: Vec<gpui::AnyElement> = Vec::new();
+        for row in capabilities::rows() {
+            let color = if row.wired {
+                theme::success()
+            } else {
+                theme::ink_tertiary()
+            };
+            capability_rows.push(
+                settings_row(i18n::owned(row.title.to_string()), Some(i18n::owned(row.hint.to_string())))
+                    .id(SharedString::from(format!("capability-{}", row.id)))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(color)
+                            .child(if row.wired { i18n::t("已接线") } else { i18n::t("未接线") }),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if !capability_rows.is_empty() {
+            body = body.child(settings_group(capability_rows));
+        }
+        body.into_any_element()
+    }
+
+    fn settings_page_usage(&self) -> gpui::AnyElement {
+        let chat = self.active_key().and_then(|key| self.chats.get(&key));
+        let session = chat
+            .and_then(|chat| chat.session_id.clone())
+            .map(|id| short_session(&id))
+            .unwrap_or_else(|| i18n::t("未建立会话").to_string());
+        let usage = chat.and_then(|chat| chat.usage);
+        let todo_count = chat.map(|chat| chat.todos.len()).unwrap_or(0);
+        let totals = session_db::usage_totals();
+        let mut body = settings_page_body("用量").child(settings_note(
+            i18n::t("只读统计，来自会话库的 turn_usage 与 todo。"),
+        ));
+        body = body
+            .child(settings_section(i18n::t("当前会话")))
+            .child(settings_group(vec![
+                kv_row(session, i18n::t("会话")).into_any_element(),
+                kv_row(
+                    usage
+                        .map(|usage| usage.turns.to_string())
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("回合"),
+                )
+                .into_any_element(),
+                kv_row(
+                    usage
+                        .map(|usage| session_db::format_tokens(usage.total_tokens))
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("总 tokens"),
+                )
+                .into_any_element(),
+                kv_row(
+                    usage
+                        .map(|usage| {
+                            format!(
+                                "{} / {}",
+                                session_db::format_tokens(usage.input_tokens),
+                                session_db::format_tokens(usage.output_tokens)
+                            )
+                        })
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("输入 / 输出"),
+                )
+                .into_any_element(),
+                kv_row(
+                    usage
+                        .and_then(|usage| usage.last_ttft_ms)
+                        .map(|ms| format!("{ms} ms"))
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("最近首 token"),
+                )
+                .into_any_element(),
+                kv_row(todo_count.to_string(), i18n::t("待办条数")).into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("全库累计")))
+            .child(settings_group(vec![
+                kv_row(
+                    totals
+                        .map(|totals| totals.turns.to_string())
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("回合"),
+                )
+                .into_any_element(),
+                kv_row(
+                    totals
+                        .map(|totals| session_db::format_tokens(totals.total_tokens))
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("总 tokens"),
+                )
+                .into_any_element(),
+            ]));
+        body.into_any_element()
+    }
+
+    fn settings_page_about(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut body = settings_page_body("关于")
+            .child(settings_section(i18n::t("版本")))
+            .child(settings_group(vec![
+                kv_row(update::current_version(), i18n::t("当前版本")).into_any_element(),
+                kv_row(
+                    "Rust + GPUI（gpui-kit 0.10 / gpui-pre 0.3.12）".to_string(),
+                    i18n::t("界面"),
+                )
+                .into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("更新")))
+            .child(settings_group(vec![
+                div()
+                    .w_full()
+                    .px(px(12.))
+                    .py(px(10.))
+                    .child(self.update_section(cx))
+                    .into_any_element(),
+            ]))
+            .child(settings_note(
+                i18n::t("下载后校验 SHA-256，退出后替换并在失败时回滚。"),
+            ));
+        body = body.child(settings_section(i18n::t("发布源"))).child(value_box(
+            update::RELEASES_PAGE.to_string(),
+            None,
+        ));
+        body.into_any_element()
+    }
+
+    fn update_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let target = self.update_target();
+        let status_text = if self.update_busy {
+            i18n::t("下载并校验更新…").to_string()
+        } else if self.update_checking {
+            i18n::t("检查中…").to_string()
+        } else {
+            match &self.update_check {
+                None => i18n::t("尚未检查").to_string(),
+                Some(update::Check::Done {
+                    latest,
+                    newer,
+                    target,
+                    ..
+                }) => {
+                    if *newer {
+                        if target.is_some() {
+                            tri!("有新版本 v{latest}（可下载安装）", "New version v{latest} is available")
+                        } else {
+                            tri!("有新版本 v{latest}（清单无 GPUI 平台包，请到发布页）", "New version v{latest} is available (no GPUI package in the manifest; use the release page)")
+                        }
+                    } else {
+                        tri!("已是最新（v{latest}）", "Up to date (v{latest})")
+                    }
+                }
+                Some(update::Check::Failed(error)) => tri!("检查失败：{error}", "Check failed: {error}"),
+            }
+        };
+        let status_color = match &self.update_check {
+            Some(update::Check::Done { newer: true, .. }) => theme::success(),
+            Some(update::Check::Failed(_)) => theme::danger(),
+            _ => theme::ink_secondary(),
+        };
+        let mut body = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(status_color)
+                            .child(SharedString::from(status_text)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(6.))
+                            .child(
+                                settings_button("update-check", i18n::t("检查更新")).on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.check_updates(cx);
+                                    },
+                                )),
+                            )
+                            .children(
+                                (target.is_some()
+                                    && !self.update_busy
+                                    && !self.confirm_update)
+                                    .then(|| {
+                                        settings_button("update-install", i18n::t("下载并安装")).on_click(
+                                            cx.listener(|this, _event, _window, cx| {
+                                                this.confirm_update = true;
+                                                cx.notify();
+                                            }),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                settings_button("update-open-page", i18n::t("打开发布页")).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        let _ = this;
+                                        if let Err(error) = std::process::Command::new("explorer")
+                                            .arg(update::RELEASES_PAGE)
+                                            .spawn()
+                                        {
+                                            eprintln!("[update] 打开发布页失败：{error}");
+                                        }
+                                        cx.notify();
+                                    }),
+                                ),
+                            ),
+                    ),
+            );
+        if self.confirm_update && let Some(target) = target {
+            body = body.child(
+                div()
+                    .w_full()
+                    .rounded(px(theme::RADIUS_CARD))
+                    .border_1()
+                    .border_color(theme::edge())
+                    .bg(theme::card())
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(settings_note(tri!(
+                        "确认下载并安装 v{}？应用会退出并重启；覆盖失败会自动回滚备份。",
+                        "Download and install v{}? The app will exit and restart; a failed overwrite rolls back automatically.",
+                        target.version
+                    )))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(6.))
+                            .child(
+                                settings_button("update-cancel", i18n::t("取消")).on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.confirm_update = false;
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                settings_button("update-confirm", i18n::t("确认更新")).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        this.start_update(cx);
+                                    }),
+                                ),
+                            ),
+                    ),
+            );
+        }
+        body
+    }
+
+    /// 宿主能力缺口 + 数据目录入口。
+    fn settings_page_more(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let rows = vec![
+            (
+                i18n::t("Provider 测试连接"),
+                i18n::t("协议没有统一探测接口，暂未实现"),
+            ),
+            (
+                i18n::t("连接器 OAuth"),
+                i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据"),
+            ),
+            (i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入")),
+            (
+                i18n::t("电脑操控远程桌面"),
+                i18n::t("computer-use 插件开关已接，远程桌面面板未接线"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, detail)| {
+            settings_row(name.to_string(), Some(detail.to_string())).into_any_element()
+        })
+        .collect();
+        settings_page_body("更多")
+            .child(settings_note(
+                i18n::t("以下能力仍受宿主限制。"),
+            ))
+            .child(settings_section(i18n::t("尚未覆盖")))
+            .child(settings_group(rows))
+            .child(settings_section(i18n::t("数据")))
+            .child(value_box(self.roster.data_root.display().to_string(), None))
+            .child(
+                div().flex().gap(px(6.)).child(
+                    settings_button("more-open-dir", i18n::t("打开数据目录")).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            let dir = this.roster.data_root.display().to_string();
+                            if let Err(error) = std::process::Command::new("explorer")
+                                .arg(&dir)
+                                .spawn()
+                            {
+                                this.toast(tri!("打开目录失败：{error}", "Failed to open the folder: {error}"), cx);
+                            }
+                        },
+                    )),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn settings_page_feedback(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let version = update::current_version();
+        let diagnostics = format!(
+            "Mode Bot {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.10 / gpui-pre 0.3.12)",
+        );
+        let body = settings_page_body("反馈")
+            .child(settings_note(
+                i18n::t("复制诊断信息，连同复现步骤发到发布页。"),
+            ))
+            .child(settings_section(i18n::t("诊断信息")))
+            .child(value_box(truncate_chars(&diagnostics, 300), None))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .child(
+                        settings_button("feedback-copy", i18n::t("复制诊断")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    diagnostics.clone(),
+                                ));
+                                this.toast(i18n::t("诊断信息已复制"), cx);
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        settings_button("feedback-open", i18n::t("打开发布页")).on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                let _ = this;
+                                if let Err(error) = std::process::Command::new("explorer")
+                                    .arg(update::RELEASES_PAGE)
+                                    .spawn()
+                                {
+                                    eprintln!("[feedback] 打开发布页失败：{error}");
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            );
+        body.into_any_element()
+    }
+    // ---- 团队记忆（S2：列表 + 新增/编辑/删除/撤销） ----
+
+    fn open_memory_dialog(
+        &mut self,
+        file: Option<String>,
+        scope: MemoryScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let existing = file.as_deref().and_then(|file| scope.read(file));
+        let (title_text, desc_text, body_text) = match existing {
+            Some(entry) => (entry.title, entry.description, entry.body),
+            None => (String::new(), String::new(), String::new()),
+        };
+        let title = cx.new(|cx| SimpleInput::new(i18n::t("标题（必填）"), theme::ink_tertiary, cx));
+        let description =
+            cx.new(|cx| SimpleInput::new(i18n::t("一句话描述（可选）"), theme::ink_tertiary, cx));
+        let body = cx.new(|cx| SimpleInput::new(i18n::t("正文"), theme::ink_tertiary, cx));
+        title.update(cx, |input, cx| input.set_content(title_text, cx));
+        description.update(cx, |input, cx| input.set_content(desc_text, cx));
+        body.update(cx, |input, cx| input.set_content(body_text, cx));
+        let handle = title.read(cx).focus_handle(cx);
+        let editing = file.is_some();
+        let label = scope.label();
+        let dialog_title = format!(
+            "{}{}",
+            if editing { i18n::t("编辑") } else { i18n::t("新增") },
+            label
+        );
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let title_field = title.clone();
+            let desc_field = description.clone();
+            let body_field = body.clone();
+            let title_ok = title.clone();
+            let desc_ok = description.clone();
+            let body_ok = body.clone();
+            let file = file.clone();
+            let scope = scope.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(dialog_title.clone())
+                .description(
+                    i18n::t("保存后会重建记忆索引并记录一条可撤销的历史；下一次对话即按新内容注入。"),
+                )
+                .width(px(500.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .child(dialog_field("memory-title", i18n::t("标题"), &title_field))
+                            .child(dialog_field("memory-desc", i18n::t("描述"), &desc_field))
+                            .child(dialog_field_tall("memory-body", i18n::t("正文"), &body_field, 132.)),
+                    )
+                })
+                .on_ok(move |_, _, cx| {
+                    let title = title_ok.read(cx).content().trim().to_string();
+                    let description = desc_ok.read(cx).content().trim().to_string();
+                    let body = body_ok.read(cx).content().to_string();
+                    if title.is_empty() {
+                        let _ = weak.update(cx, |this, cx| this.toast(i18n::t("标题不能为空"), cx));
+                        return false;
+                    }
+                    let result = scope.save(file.as_deref(), &title, &description, &body);
+                    let _ = weak.update(cx, |this, cx| match result {
+                        Ok(()) => this.toast(tri!("已保存{label}", "Saved {label}"), cx),
+                        Err(message) => this.toast(message, cx),
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 通用页的团队记忆区（列表 + 新增/撤销/编辑/删除）。
+    fn open_delete_memory_dialog(
+        &mut self,
+        file: String,
+        title: String,
+        scope: MemoryScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = scope.label();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let file = file.clone();
+            let scope = scope.clone();
+            alert
+                .title(tri!("删除这条{label}？", "Delete this {label}?"))
+                .description(tri!(
+                    "「{title}」
+删除后会同步更新记忆索引，可用「撤销」恢复（保留历史）。",
+                    "{title}
+Deleting also updates the memory index; use Undo to restore it (history is kept)."
+                ))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("删除"))
+                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        match scope.delete(&file) {
+                            Ok(()) => this.toast(tri!("已删除{label}", "Deleted {label}"), cx),
+                            Err(message) => this.toast(message, cx),
+                        }
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    fn team_memory_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let entries = data::team_memory_entries();
+        let mut body = div().w_full().flex().flex_col().gap(px(8.)).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(section_label(tri!("记忆条目（{} 条）", "Memory entries ({})", entries.len())))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .child(settings_button("memory-undo", i18n::t("撤销")).on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                match data::undo_team_memory() {
+                                    Ok(title) => this.toast(tri!("已撤销「{title}」", "Restored {title}"), cx),
+                                    Err(message) => this.toast(message, cx),
+                                }
+                                cx.notify();
+                            },
+                        )))
+                        .child(settings_button("memory-new", i18n::t("新增")).on_click(cx.listener(
+                            |this, _event, window, cx| {
+                                this.open_memory_dialog(None, MemoryScope::Team, window, cx);
+                            },
+                        ))),
+                ),
+        );
+        if entries.is_empty() {
+            body = body.child(hint_row(
+                i18n::t("还没有团队记忆；新增后会在下一次对话时注入（与 WebView 同一份）。"),
+            ));
+        }
+        let mut entry_rows: Vec<gpui::AnyElement> = Vec::new();
+        for entry in entries {
+            let file_for_edit = entry.file.clone();
+            let file_for_delete = entry.file.clone();
+            let title_for_delete = entry.title.clone();
+            let mut badges = String::new();
+            if entry.pin {
+                badges.push_str(i18n::t("置顶"));
+            }
+            if entry.expired {
+                if !badges.is_empty() {
+                    badges.push_str(" · ");
+                }
+                badges.push_str(i18n::t("已过期"));
+            }
+            let detail = if entry.description.trim().is_empty() {
+                if badges.is_empty() {
+                    entry.kind.clone()
+                } else {
+                    format!("{} · {badges}", entry.kind)
+                }
+            } else if badges.is_empty() {
+                entry.description.clone()
+            } else {
+                format!("{} · {badges}", entry.description)
+            };
+            entry_rows.push(
+                settings_row(entry.title.clone(), Some(detail))
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("memory-edit-{}", entry.file)),
+                            i18n::t("编辑"),
+                        )
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            this.open_memory_dialog(
+                                Some(file_for_edit.clone()),
+                                MemoryScope::Team,
+                                window,
+                                cx,
+                            );
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("memory-delete-{}", entry.file)),
+                            i18n::t("删除"),
+                        )
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            this.open_delete_memory_dialog(
+                                file_for_delete.clone(),
+                                title_for_delete.clone(),
+                                MemoryScope::Team,
+                                window,
+                                cx,
+                            );
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if !entry_rows.is_empty() {
+            body = body.child(settings_group(entry_rows));
+        }
+        body
+    }
+
+    /// 频道文件记忆区（自动回顾写入；挂在频道详情下）。
+    fn group_memory_section(&self, group_id: &str, cx: &mut Context<Self>) -> gpui::Div {
+        let scope = MemoryScope::Group(group_id.to_string());
+        let entries = data::group_memory_entries(group_id);
+        let mut body = div().w_full().flex().flex_col().gap(px(8.)).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(section_label(tri!("频道记忆（{} 条）", "Channel memory ({})", entries.len())))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .child(settings_button("group-memory-undo", i18n::t("撤销")).on_click(
+                            cx.listener({
+                                let scope = scope.clone();
+                                move |this, _event, _window, cx| {
+                                    match scope.undo() {
+                                        Ok(title) => {
+                                            this.toast(tri!("已撤销「{title}」", "Restored {title}"), cx)
+                                        }
+                                        Err(message) => this.toast(message, cx),
+                                    }
+                                    cx.notify();
+                                }
+                            }),
+                        ))
+                        .child(settings_button("group-memory-new", i18n::t("新增")).on_click(
+                            cx.listener({
+                                let scope = scope.clone();
+                                move |this, _event, window, cx| {
+                                    this.open_memory_dialog(None, scope.clone(), window, cx);
+                                }
+                            }),
+                        )),
+                ),
+        );
+        body = body.child(settings_note(
+            i18n::t("自动回顾写入，下一轮群聊会注入。"),
+        ));
+        if entries.is_empty() {
+            body = body.child(hint_row(
+                i18n::t("还没有频道记忆；回合结束后自动回顾会沉淀，也可以手动新增。"),
+            ));
+        }
+        let mut entry_rows: Vec<gpui::AnyElement> = Vec::new();
+        for entry in entries {
+            let file_for_edit = entry.file.clone();
+            let file_for_delete = entry.file.clone();
+            let title_for_delete = entry.title.clone();
+            let mut badges = String::new();
+            if entry.pin {
+                badges.push_str(i18n::t("置顶"));
+            }
+            if entry.expired {
+                if !badges.is_empty() {
+                    badges.push_str(" · ");
+                }
+                badges.push_str(i18n::t("已过期"));
+            }
+            let detail = if entry.description.trim().is_empty() {
+                if badges.is_empty() {
+                    entry.kind.clone()
+                } else {
+                    format!("{} · {badges}", entry.kind)
+                }
+            } else if badges.is_empty() {
+                entry.description.clone()
+            } else {
+                format!("{} · {badges}", entry.description)
+            };
+            entry_rows.push(
+                settings_row(entry.title.clone(), Some(detail))
+                    .child(
+                        settings_button(
+                            SharedString::from(format!(
+                                "group-memory-edit-{}",
+                                entry.file
+                            )),
+                            i18n::t("编辑"),
+                        )
+                        .on_click(cx.listener({
+                            let scope = scope.clone();
+                            move |this, _event, window, cx| {
+                                this.open_memory_dialog(
+                                    Some(file_for_edit.clone()),
+                                    scope.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!(
+                                "group-memory-delete-{}",
+                                entry.file
+                            )),
+                            i18n::t("删除"),
+                        )
+                        .on_click(cx.listener({
+                            let scope = scope.clone();
+                            move |this, _event, window, cx| {
+                                this.open_delete_memory_dialog(
+                                    file_for_delete.clone(),
+                                    title_for_delete.clone(),
+                                    scope.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if !entry_rows.is_empty() {
+            body = body.child(settings_group(entry_rows));
+        }
+        body
+    }
+
+    /// 插件开关二次确认：确认后才写 workspace 的 `.mode/config.json`。
+    fn apply_plugin_switch(&mut self, confirm: &PluginSwitchConfirm, cx: &mut Context<Self>) {
+        match data::set_plugin_switch(&confirm.directory, confirm.plugin, confirm.next_on) {
+            Ok(()) => {
+                let key = self.active_key();
+                if let Some(chat) = key.and_then(|key| self.chats.get_mut(&key))
+                    && let Some(control) = chat.control.as_mut()
+                {
+                    let (mut browser, mut computer) = control.switches.unwrap_or((false, false));
+                    if confirm.plugin == data::PLUGIN_BROWSER {
+                        browser = confirm.next_on;
+                    } else {
+                        computer = confirm.next_on;
+                    }
+                    control.switches = Some((browser, computer));
+                }
+                self.toast(
+                    if confirm.next_on {
+                        i18n::t("已启用插件")
+                    } else {
+                        i18n::t("已关闭插件")
+                    },
+                    cx,
+                );
+            }
+            Err(message) => self.toast(message, cx),
+        }
+    }
+
+    fn open_plugin_confirm_dialog(
+        &mut self,
+        confirm: PluginSwitchConfirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let action = if confirm.next_on { i18n::t("启用") } else { i18n::t("关闭") };
+        let label = confirm.label;
+        let path = std::path::Path::new(confirm.directory.trim())
+            .join(".mode")
+            .join("config.json")
+            .display()
+            .to_string();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = confirm.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(tri!("{action}{label}？", "{action} {label}?"))
+                .description(tri!(
+                    "会写入该 Bot 工作目录下的官方插件键，只影响这个 workspace；目标：{path}",
+                    "Writes the official plugin key in the bot working folder; only this workspace is affected. Target: {path}"
+                ))
+                .width(px(460.))
+                .centered()
+                .ok_text(tri!("{action}插件", "{action} plugin"))
+                .ok_variant(if confirm.next_on {
+                    gpui::component::button::ButtonVariant::Primary
+                } else {
+                    gpui::component::button::ButtonVariant::Danger
+                })
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let confirm = confirm.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.apply_plugin_switch(&confirm, cx);
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    /// 会话重命名对话框（只改试点 state.json 的显示名，不动产品会话库）。
+    fn open_rename_session_dialog(
+        &mut self,
+        session_id: String,
+        current_title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| SimpleInput::new(i18n::t("显示名"), theme::ink_tertiary, cx));
+        input.update(cx, |input, cx| input.set_content(current_title, cx));
+        let handle = input.read(cx).focus_handle(cx);
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let input = input.clone();
+            let input_ok = input.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let session_id = session_id.clone();
+            alert
+                .title(i18n::t("重命名会话"))
+                .description(i18n::t("只影响试点里的显示名（存在 state.json），不改产品会话库里的标题；留空保存 = 恢复默认短名。"))
+                .width(px(400.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("显示名")),
+                            )
+                            .child(div().h(px(36.)).child(input.clone())),
+                    )
+                })
+                .on_ok(move |_, _, cx| {
+                    let title = input_ok.read(cx).content().trim().to_string();
+                    let _ = weak.update(cx, |this, cx| {
+                        let changed = this.sessions.set_title(&session_id, &title);
+                        if changed {
+                            this.sessions.save();
+                        }
+                        if title.is_empty() {
+                            this.toast(i18n::t("已恢复默认名"), cx);
+                        } else {
+                            this.toast(i18n::t("已重命名会话"), cx);
+                        }
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 删除确认 Overlay。
+    fn delete_bot_and_reselect(&mut self, bot_id: &str, cx: &mut Context<Self>) {
+        if let Err(message) = data::delete_bot(bot_id) {
+            eprintln!("[delete] {message}");
+        }
+        self.sessions.remove_slots_for_bot(bot_id);
+        self.sessions.save();
+        self.chats.remove(&bot_key(bot_id));
+        self.roster = Roster::load();
+        let still_there = matches!(
+            self.selection,
+            Some(Selection::Bot(index)) if self.roster.bots.get(index).is_some()
+        );
+        if !still_there && !matches!(self.selection, Some(Selection::Group(_))) {
+            if !self.roster.bots.is_empty() {
+                self.selection = Some(Selection::Bot(0));
+                self.ensure_bot(0);
+            } else {
+                self.selection = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_delete_bot_dialog(
+        &mut self,
+        bot_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .roster
+            .bot_by_id(&bot_id)
+            .map(|bot| bot.name.clone())
+            .unwrap_or_else(|| bot_id.clone());
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let bot_id = bot_id.clone();
+            alert
+                .title(i18n::t("删除 Bot"))
+                .description(format!(
+                    "确定删除「{name}」吗？名册条目与会话映射会被移除；历史会话仍保留在会话库里。"
+                ))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("删除"))
+                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.delete_bot_and_reselect(&bot_id, cx);
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    fn detail_menu_entries(&self) -> Vec<(String, bool, DetailMenuAction)> {
+        match self.selection {
+            Some(Selection::Bot(index)) => {
+                let Some(bot) = self.roster.bots.get(index) else {
+                    return Vec::new();
+                };
+                let key = bot_key(&bot.id);
+                let muted = self.muted.contains(&key);
+                let mut entries = vec![
+                    (
+                        if bot.pinned { i18n::t("取消置顶") } else { i18n::t("置顶") }.to_string(),
+                        false,
+                        DetailMenuAction::TogglePinBot(bot.id.clone(), bot.pinned),
+                    ),
+                    (
+                        if muted { i18n::t("取消免打扰") } else { i18n::t("免打扰") }.to_string(),
+                        false,
+                        DetailMenuAction::ToggleMute(key.clone(), muted),
+                    ),
+                    (i18n::t("隐藏").to_string(), false, DetailMenuAction::HideBot(bot.id.clone())),
+                    (
+                        i18n::t("创建副本").to_string(),
+                        false,
+                        DetailMenuAction::DuplicateBot(bot.id.clone()),
+                    ),
+                    (i18n::t("编辑").to_string(), false, DetailMenuAction::EditBot(bot.id.clone())),
+                    (i18n::t("删除").to_string(), true, DetailMenuAction::DeleteBot(bot.id.clone())),
+                ];
+                if self.chats.get(&key).is_some_and(|chat| {
+                    chat.messages.iter().any(|message| {
+                        message.kind == MsgKind::Text && !message.text.trim().is_empty()
+                    })
+                }) {
+                    entries.push((
+                        i18n::t("复制会话为 Markdown").to_string(),
+                        false,
+                        DetailMenuAction::ShareConversation(key.clone()),
+                    ));
+                }
+                if self
+                    .chats
+                    .get(&key)
+                    .and_then(|chat| chat.session_id.as_ref())
+                    .is_some()
+                {
+                    entries.push((
+                        i18n::t("复制会话 ID").to_string(),
+                        false,
+                        DetailMenuAction::CopySessionId(key.clone()),
+                    ));
+                }
+                for section in &self.sidebar_sections.sections {
+                    entries.push((
+                        tri!("分组 · {}", "Section · {}", section.name),
+                        false,
+                        DetailMenuAction::AssignSection(key.clone(), section.id.clone()),
+                    ));
+                }
+                if self.sidebar_sections.membership.contains_key(&key) {
+                    entries.push((
+                        i18n::t("移出分组").to_string(),
+                        false,
+                        DetailMenuAction::UnassignSection(key),
+                    ));
+                }
+                entries
+            }
+            Some(Selection::Group(index)) => {
+                let Some(group) = self.roster.groups.get(index) else {
+                    return Vec::new();
+                };
+                let key = group_key(&group.id);
+                let muted = self.muted.contains(&key);
+                let mut entries = vec![
+                    (
+                        if group.pinned { i18n::t("取消置顶") } else { i18n::t("置顶") }.to_string(),
+                        false,
+                        DetailMenuAction::TogglePinGroup(group.id.clone(), group.pinned),
+                    ),
+                    (
+                        if muted { i18n::t("取消免打扰") } else { i18n::t("免打扰") }.to_string(),
+                        false,
+                        DetailMenuAction::ToggleMute(key.clone(), muted),
+                    ),
+                    (i18n::t("隐藏").to_string(), false, DetailMenuAction::HideGroup(group.id.clone())),
+                    (
+                        i18n::t("编辑频道").to_string(),
+                        false,
+                        DetailMenuAction::EditGroup(group.id.clone()),
+                    ),
+                    (
+                        i18n::t("群目标").to_string(),
+                        false,
+                        DetailMenuAction::GroupGoal(group.id.clone()),
+                    ),
+                    (
+                        i18n::t("群任务").to_string(),
+                        false,
+                        DetailMenuAction::GroupTasks(group.id.clone()),
+                    ),
+                    (
+                        if group.archived { i18n::t("取消归档") } else { i18n::t("归档") }.to_string(),
+                        false,
+                        DetailMenuAction::ToggleArchiveGroup(group.id.clone(), group.archived),
+                    ),
+                    (
+                        i18n::t("删除频道").to_string(),
+                        true,
+                        DetailMenuAction::DeleteGroup(group.id.clone()),
+                    ),
+                ];
+                if self.chats.get(&key).is_some_and(|chat| {
+                    chat.messages.iter().any(|message| {
+                        message.kind == MsgKind::Text && !message.text.trim().is_empty()
+                    })
+                }) {
+                    entries.push((
+                        i18n::t("复制频道记录为 Markdown").to_string(),
+                        false,
+                        DetailMenuAction::ShareConversation(key.clone()),
+                    ));
+                }
+                for section in &self.sidebar_sections.sections {
+                    entries.push((
+                        tri!("分组 · {}", "Section · {}", section.name),
+                        false,
+                        DetailMenuAction::AssignSection(key.clone(), section.id.clone()),
+                    ));
+                }
+                if self.sidebar_sections.membership.contains_key(&key) {
+                    entries.push((
+                        i18n::t("移出分组").to_string(),
+                        false,
+                        DetailMenuAction::UnassignSection(key),
+                    ));
+                }
+                entries
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn detail_menu_icon(action: &DetailMenuAction) -> icons::Icon {
+        match action {
+            DetailMenuAction::TogglePinBot(..) | DetailMenuAction::TogglePinGroup(..) => {
+                icons::Icon::Pin
+            }
+            DetailMenuAction::HideBot(_) | DetailMenuAction::HideGroup(_) => icons::Icon::EyeOff,
+            DetailMenuAction::DuplicateBot(_) => icons::Icon::Plus,
+            DetailMenuAction::EditBot(_) | DetailMenuAction::EditGroup(_) => icons::Icon::Pencil,
+            DetailMenuAction::DeleteBot(_) | DetailMenuAction::DeleteGroup(_) => icons::Icon::Trash,
+            DetailMenuAction::ToggleArchiveGroup(..) => icons::Icon::Archive,
+            DetailMenuAction::GroupGoal(_) => icons::Icon::Star,
+            DetailMenuAction::GroupTasks(_) => icons::Icon::ListChecks,
+            DetailMenuAction::AssignSection(..) => icons::Icon::Folder,
+            DetailMenuAction::UnassignSection(_) => icons::Icon::X,
+            DetailMenuAction::ToggleMute(..) => icons::Icon::BellOff,
+            DetailMenuAction::ShareConversation(_) => icons::Icon::MessageSquare,
+            DetailMenuAction::CopySessionId(_) => icons::Icon::Key,
+        }
+    }
+
+    fn apply_detail_menu_action(
+        &mut self,
+        action: DetailMenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            DetailMenuAction::TogglePinBot(id, pinned) => {
+                if let Err(message) = data::set_bot_flags(&id, Some(!pinned), None) {
+                    eprintln!("[menu] 置顶失败：{message}");
+                }
+                self.roster = Roster::load();
+                self.reselect_after_roster_change(Some(&id), None);
+                self.toast(if pinned { i18n::t("已取消置顶") } else { i18n::t("已置顶") }, cx);
+            }
+            DetailMenuAction::HideBot(id) => {
+                if let Err(message) = data::set_bot_flags(&id, None, Some(true)) {
+                    eprintln!("[menu] 隐藏失败：{message}");
+                }
+                self.roster = Roster::load();
+                self.reselect_after_roster_change(None, None);
+            }
+            DetailMenuAction::DuplicateBot(id) => {
+                match data::duplicate_bot(&id) {
+                    Ok(bot) => {
+                        self.roster = Roster::load();
+                        if let Some(index) = self
+                            .roster
+                            .bots
+                            .iter()
+                            .position(|item| item.id == bot.id)
+                        {
+                            self.select_bot(index, cx);
+                        }
+                        self.toast(i18n::t("已创建副本"), cx);
+                    }
+                    Err(message) => self.toast(message, cx),
+                }
+            }
+            DetailMenuAction::EditBot(id) => self.open_edit_dialog(id, cx),
+            DetailMenuAction::DeleteBot(id) => {
+                self.open_delete_bot_dialog(id, window, cx);
+            }
+            DetailMenuAction::TogglePinGroup(id, pinned) => {
+                if let Err(message) = data::set_group_flags(&id, Some(!pinned), None) {
+                    eprintln!("[menu] 置顶失败：{message}");
+                }
+                self.roster = Roster::load();
+                self.reselect_after_roster_change(None, Some(&id));
+                self.toast(if pinned { i18n::t("已取消置顶") } else { i18n::t("已置顶") }, cx);
+            }
+            DetailMenuAction::HideGroup(id) => {
+                if let Err(message) = data::set_group_flags(&id, None, Some(true)) {
+                    eprintln!("[menu] 隐藏失败：{message}");
+                }
+                self.roster = Roster::load();
+                self.reselect_after_roster_change(None, None);
+            }
+            DetailMenuAction::EditGroup(id) => self.open_edit_group_dialog(id, cx),
+            DetailMenuAction::GroupGoal(id) => {
+                self.pending_group_goal_dialog = Some(id);
+                cx.notify();
+            }
+            DetailMenuAction::GroupTasks(id) => {
+                self.pending_group_tasks_dialog = Some(id);
+                cx.notify();
+            }
+            DetailMenuAction::AssignSection(member_key, section_id) => {
+                self.assign_sidebar_section(&member_key, Some(&section_id));
+                cx.notify();
+            }
+            DetailMenuAction::UnassignSection(member_key) => {
+                self.assign_sidebar_section(&member_key, None);
+                cx.notify();
+            }
+            DetailMenuAction::ToggleArchiveGroup(id, archived) => {
+                if let Err(message) = data::set_group_archived(&id, !archived) {
+                    eprintln!("[menu] 归档失败：{message}");
+                }
+                self.roster = Roster::load();
+                self.reselect_after_roster_change(None, Some(&id));
+                self.toast(if archived { i18n::t("已取消归档") } else { i18n::t("已归档") }, cx);
+            }
+            DetailMenuAction::DeleteGroup(id) => {
+                self.open_delete_group_dialog(id, window, cx);
+            }
+            DetailMenuAction::ToggleMute(key, muted) => {
+                if muted {
+                    self.muted.remove(&key);
+                } else {
+                    self.muted.insert(key);
+                }
+                save_ui_prefs(&self.muted, self.topmost, &self.pinned_settings);
+                self.toast(if muted { i18n::t("已取消免打扰") } else { i18n::t("已开启免打扰") }, cx);
+            }
+            DetailMenuAction::ShareConversation(key) => {
+                let title = key
+                    .strip_prefix("bot:")
+                    .and_then(|id| self.roster.bot_by_id(id))
+                    .map(|bot| bot.name.clone())
+                    .or_else(|| {
+                        key.strip_prefix("group:")
+                            .and_then(|id| {
+                                self.roster
+                                    .groups
+                                    .iter()
+                                    .find(|group| group.id == id)
+                            })
+                            .map(|group| group.name.clone())
+                    })
+                    .unwrap_or_else(|| "Mode Bot".to_string());
+                if let Some(chat) = self.chats.get(&key) {
+                    let mut lines = Vec::new();
+                    for message in &chat.messages {
+                        if message.kind != MsgKind::Text || message.text.trim().is_empty() {
+                            continue;
+                        }
+                        let who = match message.role {
+                            Role::User => i18n::t("你").to_string(),
+                            Role::Assistant => message
+                                .member
+                                .clone()
+                                .unwrap_or_else(|| title.clone()),
+                        };
+                        lines.push(format!("**{who}：** {}", message.text.trim()));
+                    }
+                    if !lines.is_empty() {
+                        let markdown = format!("# {title}\n\n{}", lines.join("\n\n"));
+                        cx.write_to_clipboard(ClipboardItem::new_string(markdown));
+                        self.toast(i18n::t("已复制会话 Markdown"), cx);
+                    }
+                }
+            }
+            DetailMenuAction::CopySessionId(key) => {
+                if let Some(session_id) = self
+                    .chats
+                    .get(&key)
+                    .and_then(|chat| chat.session_id.clone())
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(session_id));
+                    self.toast(i18n::t("已复制会话 ID"), cx);
+                }
+            }
+        }
+        self.close_detail_menu(window, cx);
+    }
+
+    /// 关菜单并把焦点还给输入框（gpui 只把按键派发给有焦点的元素；菜单的焦点
+    /// 句柄随浮层一起消失，不还焦点的话关掉菜单后打字会全部静默丢失）。
+    /// 刚打开了带文本框的对话框时不抢焦点，等用户点进字段或关掉对话框再处理。
+    fn close_detail_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.detail_menu_open = false;
+        self.menu_selected = 0;
+        if self.pending_bot_dialog.is_none()
+            && self.pending_group_dialog.is_none()
+            && self.pending_allowlist_dialog.is_none()
+            && self.pending_model_dialog.is_none()
+            && self.pending_group_goal_dialog.is_none()
+            && self.pending_group_tasks_dialog.is_none()
+        {
+            let handle = self.input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// 右栏「⋯」菜单（鼠标与 ↑/↓/Enter 键盘共用同一套条目）。
+    /// 打开设置并落到指定页（底栏菜单的深链入口）。
+    fn open_settings_at(&mut self, tab: usize) {
+        self.settings_open = true;
+        self.settings_tab = tab.min(SETTINGS_PAGES.len().saturating_sub(1));
+        self.automations_view = None;
+        self.pending_bot_dialog = None;
+        self.detail_menu_open = false;
+        self.footer_menu_open = false;
+    }
+
+    /// 侧栏分组 CRUD（本机 UI 偏好；失败只影响下次启动）。
+    fn create_sidebar_section(&mut self, name: &str) -> String {
+        let id = format!("sec-{}", time::now_ms());
+        self.sidebar_sections.sections.push(SidebarSection {
+            id: id.clone(),
+            name: name.trim().to_string(),
+            collapsed: false,
+            color: None,
+        });
+        save_sidebar_sections(&self.sidebar_sections);
+        id
+    }
+
+    fn rename_sidebar_section(&mut self, id: &str, name: &str) {
+        if let Some(section) = self.sidebar_sections.sections.iter_mut().find(|s| s.id == id) {
+            section.name = name.trim().to_string();
+        }
+        save_sidebar_sections(&self.sidebar_sections);
+    }
+
+    fn delete_sidebar_section(&mut self, id: &str) {
+        self.sidebar_sections.sections.retain(|section| section.id != id);
+        self.sidebar_sections
+            .membership
+            .retain(|_, section_id| section_id != id);
+        save_sidebar_sections(&self.sidebar_sections);
+    }
+
+    fn toggle_sidebar_section(&mut self, id: &str) {
+        if let Some(section) = self.sidebar_sections.sections.iter_mut().find(|s| s.id == id) {
+            section.collapsed = !section.collapsed;
+        }
+        save_sidebar_sections(&self.sidebar_sections);
+    }
+
+    fn cycle_sidebar_section_color(&mut self, id: &str) {
+        if let Some(section) = self.sidebar_sections.sections.iter_mut().find(|s| s.id == id) {
+            let next = match section.color.as_deref() {
+                None => Some("blue"),
+                Some("blue") => Some("orange"),
+                Some("orange") => Some("green"),
+                Some("green") => Some("violet"),
+                Some("violet") => Some("rose"),
+                _ => None,
+            };
+            section.color = next.map(str::to_string);
+        }
+        save_sidebar_sections(&self.sidebar_sections);
+    }
+
+    fn move_sidebar_section(&mut self, id: &str, delta: isize) {
+        let Some(index) = self
+            .sidebar_sections
+            .sections
+            .iter()
+            .position(|section| section.id == id)
+        else {
+            return;
+        };
+        let target = index as isize + delta;
+        if target < 0 || target as usize >= self.sidebar_sections.sections.len() {
+            return;
+        }
+        self.sidebar_sections.sections.swap(index, target as usize);
+        save_sidebar_sections(&self.sidebar_sections);
+    }
+
+    fn assign_sidebar_section(&mut self, member_key: &str, section_id: Option<&str>) {
+        match section_id {
+            Some(section_id) => {
+                self.sidebar_sections
+                    .membership
+                    .insert(member_key.to_string(), section_id.to_string());
+            }
+            None => {
+                self.sidebar_sections.membership.remove(member_key);
+            }
+        }
+        save_sidebar_sections(&self.sidebar_sections);
+    }
+
+    /// 「添加到侧栏 / 从侧栏移除」：固定的是设置页下标，按用户添加顺序展示。
+    fn toggle_pinned_setting(&mut self, tab: usize, cx: &mut Context<Self>) {
+        if tab >= SETTINGS_PAGES.len() {
+            return;
+        }
+        if let Some(index) = self.pinned_settings.iter().position(|item| *item == tab) {
+            self.pinned_settings.remove(index);
+            self.toast(i18n::t("已从侧栏移除"), cx);
+        } else if self.pinned_settings.len() >= MAX_PINNED_SETTINGS {
+            self.toast(
+                tri!("侧栏最多固定 {MAX_PINNED_SETTINGS} 个设置页", "You can pin at most {MAX_PINNED_SETTINGS} settings pages"),
+                cx,
+            );
+            return;
+        } else {
+            self.pinned_settings.push(tab);
+            self.toast(i18n::t("已添加到侧栏"), cx);
+        }
+        save_ui_prefs(&self.muted, self.topmost, &self.pinned_settings);
+        cx.notify();
+    }
+
+    /// 侧栏底栏齿轮菜单（原版 7 项：安装更新 / 用量 / 模型服务商 / 连接器 / 定时任务 /
+    /// 系统设置 / 检查更新）。
+    /// 左导轨「我」的资料卡：与微信一致，点头像弹出一张小卡片，点外部关闭。
+    fn me_card_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.me_card_open {
+            return None;
+        }
+        let version = env!("CARGO_PKG_VERSION");
+        let data_root = data::data_root().display().to_string();
+        let bots = self.roster.bots.len();
+        let groups = self.roster.groups.len();
+        let info_row = |label: &'static str, value: String| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(wecom_theme::time_label())
+                        .child(i18n::t(label)),
+                )
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(wecom_theme::chat_title())
+                        .child(value),
+                )
+        };
+        Some(
+            div()
+                .id("me-card-catcher")
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| {
+                        cx.stop_propagation();
+                        this.me_card_open = false;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(60.))
+                        .top(px(40.))
+                        .w(px(300.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(wecom_theme::composer_border())
+                        .bg(wecom_theme::panel_card_bg())
+                        .p(px(16.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .shadow({
+                            let mut shadows = vec![theme::ring_4()];
+                            shadows.extend(theme::shadow_3());
+                            shadows
+                        })
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|_this, _event, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(12.))
+                                .child(
+                                    div()
+                                        .size(px(56.))
+                                        .flex_shrink_0()
+                                        .rounded_full()
+                                        .bg(wecom_theme::avatar_color("me"))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .font_family(wecom_theme::FONT_FAMILY)
+                                        .text_size(px(22.))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(wecom_theme::nav_text_active())
+                                        .child(i18n::t("我")),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .font_family(wecom_theme::FONT_FAMILY)
+                                                .text_size(px(17.))
+                                                .line_height(px(24.))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(wecom_theme::chat_title())
+                                                .child(i18n::t("我")),
+                                        )
+                                        .child(
+                                            div()
+                                                .font_family(wecom_theme::FONT_FAMILY)
+                                                .text_size(px(12.))
+                                                .line_height(px(18.))
+                                                .text_color(wecom_theme::panel_text())
+                                                .child(i18n::t("本机 · Mode Bot")),
+                                        ),
+                                ),
+                        )
+                        .child(div().h(px(1.)).w_full().bg(wecom_theme::panel_divider()))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(info_row(i18n::t("版本"), format!("v{version}")))
+                                .child(info_row(
+                                    i18n::t("名册"),
+                                    if i18n::is_en() { format!("{} · {}", i18n::n(bots, "bot", "bots"), i18n::n(groups, "channel", "channels")) } else { format!("{bots} 个 Bot · {groups} 个频道") },
+                                ))
+                                .child(info_row(i18n::t("数据根"), data_root)),
+                        )
+                        .child(div().h(px(1.)).w_full().bg(wecom_theme::panel_divider()))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    settings_button("me-card-settings", i18n::t("设置")).on_click(
+                                        cx.listener(|this, _event, _window, cx| {
+                                            cx.stop_propagation();
+                                            this.me_card_open = false;
+                                            this.open_settings_at(0);
+                                            cx.notify();
+                                        }),
+                                    ),
+                                )
+                                .child(
+                                    settings_button("me-card-about", i18n::t("关于")).on_click(
+                                        cx.listener(|this, _event, _window, cx| {
+                                            cx.stop_propagation();
+                                            this.me_card_open = false;
+                                            this.open_settings_at(13);
+                                            cx.notify();
+                                        }),
+                                    ),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn footer_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.footer_menu_open {
+            return None;
+        }
+        let mut entries: Vec<(String, icons::Icon, FooterMenuAction)> = Vec::new();
+        if self.update_target().is_some() {
+            entries.push((
+                i18n::t("安装更新").to_string(),
+                icons::Icon::Download,
+                FooterMenuAction::InstallUpdate,
+            ));
+        }
+        entries.push((
+            i18n::t("用量").to_string(),
+            icons::Icon::Chart,
+            FooterMenuAction::Settings(12),
+        ));
+        entries.push((
+            i18n::t("模型服务商").to_string(),
+            icons::Icon::Cpu,
+            FooterMenuAction::Settings(1),
+        ));
+        entries.push((
+            i18n::t("连接器").to_string(),
+            icons::Icon::Plug,
+            FooterMenuAction::Settings(7),
+        ));
+        entries.push((
+            i18n::t("定时任务").to_string(),
+            icons::Icon::Calendar,
+            FooterMenuAction::Settings(9),
+        ));
+        entries.push((
+            i18n::t("系统设置").to_string(),
+            icons::Icon::Settings,
+            FooterMenuAction::Settings(0),
+        ));
+        entries.push((
+            i18n::t("检查更新").to_string(),
+            icons::Icon::Refresh,
+            FooterMenuAction::CheckUpdates,
+        ));
+        let wechat = wecom_theme::active();
+        let items: Vec<gpui::AnyElement> = entries
+            .into_iter()
+            .map(|(label, icon, action)| {
+                div()
+                    .id(SharedString::from(format!("footer-menu-{label}")))
+                    .min_h(px(30.))
+                    .rounded(px(if wechat { 6. } else { theme::RADIUS_CHIP }))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .cursor_pointer()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
+                    } else {
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(if wechat {
+                        wecom_theme::chat_title()
+                    } else {
+                        theme::ink()
+                    })
+                    .hover(move |style| {
+                        style.bg(if wechat {
+                            wecom_theme::list_hover()
+                        } else {
+                            theme::hover()
+                        })
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            cx.stop_propagation();
+                            this.footer_menu_open = false;
+                            match action {
+                                FooterMenuAction::InstallUpdate => this.start_update(cx),
+                                FooterMenuAction::Settings(tab) => this.open_settings_at(tab),
+                                FooterMenuAction::CheckUpdates => this.check_updates(cx),
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(icons::icon(
+                        icon,
+                        15.,
+                        if wechat {
+                            wecom_theme::panel_text()
+                        } else {
+                            theme::ink_secondary()
+                        },
+                    ))
+                    .child(SharedString::from(label))
+                    .into_any_element()
+            })
+            .collect();
+        let mut shadows = vec![theme::ring_4()];
+        shadows.extend(theme::shadow_3());
+        Some(
+            div()
+                .id("footer-menu-catcher")
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| {
+                        cx.stop_propagation();
+                        this.footer_menu_open = false;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(8.))
+                        .bottom(px(52.))
+                        .w(px(200.))
+                        .rounded(px(if wechat { 8. } else { theme::RADIUS_MENU }))
+                        .border_1()
+                        .border_color(if wechat {
+                            wecom_theme::composer_border()
+                        } else {
+                            theme::edge()
+                        })
+                        .bg(if wechat {
+                            wecom_theme::panel_card_bg()
+                        } else {
+                            theme::menu()
+                        })
+                        .p(px(6.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .shadow(shadows)
+                        .children(items),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn detail_menu_overlay(
+        &mut self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.detail_menu_open {
+            return None;
+        }
+        let entries = self.detail_menu_entries();
+        if entries.is_empty() {
+            return None;
+        }
+        let selected = self.menu_selected.min(entries.len().saturating_sub(1));
+        let wechat = wecom_theme::active();
+        let items: Vec<gpui::AnyElement> = entries
+            .iter()
+            .enumerate()
+            .map(|(index, (label, danger, action))| {
+                let action = action.clone();
+                let danger = *danger;
+                let icon = Self::detail_menu_icon(&action);
+                div()
+                    .id(SharedString::from(format!("menu-item-{index}")))
+                    .h(px(30.))
+                    .rounded(px(6.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .cursor_pointer()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
+                    } else {
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(13.))
+                    .bg(if index == selected {
+                        if wechat {
+                            wecom_theme::list_hover()
+                        } else {
+                            theme::hover()
+                        }
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .text_color(if danger {
+                        theme::danger()
+                    } else if index == selected {
+                        if wechat {
+                            wecom_theme::chat_title()
+                        } else {
+                            theme::ink()
+                        }
+                    } else if wechat {
+                        wecom_theme::panel_text()
+                    } else {
+                        theme::ink_secondary()
+                    })
+                    .hover(move |style| {
+                        style
+                            .bg(if wechat {
+                                wecom_theme::list_hover()
+                            } else {
+                                theme::hover()
+                            })
+                            .text_color(if danger {
+                                theme::danger()
+                            } else if wechat {
+                                wecom_theme::chat_title()
+                            } else {
+                                theme::ink()
+                            })
+                    })
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, _event, window, cx| {
+                            // 挡住下层同点位元素：菜单点击只做菜单自己的事。
+                            cx.stop_propagation();
+                            this.apply_detail_menu_action(action.clone(), window, cx);
+                        }),
+                    )
+                    .child(icons::icon(
+                        icon,
+                        15.,
+                        if danger {
+                            theme::danger()
+                        } else if wechat {
+                            wecom_theme::panel_text()
+                        } else {
+                            theme::ink_secondary()
+                        },
+                    ))
+                    .child(label.clone())
+                    .into_any_element()
+            })
+            .collect();
+        let focus = self.menu_focus.clone();
+        Some(
+            div()
+                .id("menu-catcher")
+                .absolute()
+                .inset_0()
+                .cursor_default()
+                .track_focus(&focus)
+                .key_context("DetailMenu")
+                .on_action(cx.listener(Self::on_detail_menu_prev))
+                .on_action(cx.listener(Self::on_detail_menu_next))
+                .on_action(cx.listener(Self::on_detail_menu_confirm))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _event, window, cx| {
+                        cx.stop_propagation();
+                        this.close_detail_menu(window, cx);
+                    }),
+                )
+                .child(
+                    // 进场与对话框同一套弹簧淡入（DS「有进就有出」的最小实现）。
+                    div()
+                        .absolute()
+                        .right(px(14.))
+                        .w(px(200.))
+                        .rounded(px(if wechat { 8. } else { theme::RADIUS_MENU }))
+                        .border_1()
+                        .border_color(if wechat {
+                            wecom_theme::composer_border()
+                        } else {
+                            theme::edge()
+                        })
+                        .bg(if wechat {
+                            wecom_theme::panel_card_bg()
+                        } else {
+                            theme::menu()
+                        })
+                        .p(px(6.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .shadow({
+                            let mut shadows = vec![theme::ring_4()];
+                            shadows.extend(theme::shadow_3());
+                            shadows
+                        })
+                        .children(items)
+                        .with_animation(
+                            "menu-enter",
+                            gpui::Animation::new(theme::motion_base()).with_easing(theme::spring_ease),
+                            |element, delta| {
+                                let delta = delta.clamp(0., 1.);
+                                element
+                                    .opacity(delta)
+                                    .top(px(TITLEBAR_HEIGHT + 46. - 4. * (1. - delta)))
+                            },
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn on_detail_menu_prev(
+        &mut self,
+        _: &DetailMenuPrev,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.detail_menu_entries().len();
+        if count == 0 {
+            return;
+        }
+        self.menu_selected = (self.menu_selected + count - 1) % count;
+        cx.notify();
+    }
+
+    fn on_detail_menu_next(
+        &mut self,
+        _: &DetailMenuNext,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.detail_menu_entries().len();
+        if count == 0 {
+            return;
+        }
+        self.menu_selected = (self.menu_selected + 1) % count;
+        cx.notify();
+    }
+
+    fn on_detail_menu_confirm(
+        &mut self,
+        _: &DetailMenuConfirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = self.detail_menu_entries();
+        let Some((_, _, action)) = entries.get(self.menu_selected).cloned() else {
+            return;
+        };
+        self.apply_detail_menu_action(action, window, cx);
+    }
+
+    /// 命令面板：输入过滤 + ↑↓ 选择 + Enter 执行。
+    fn palette_overlay(&mut self, window: &Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let palette = self.palette.as_ref()?;
+        let input = palette.input.clone();
+        let selected = palette.selected;
+        let entries = self.filtered_palette(cx);
+        let viewport_height = f32::from(window.viewport_size().height);
+
+        let mut body = div().w_full().flex().flex_col().gap(px(6.)).child(
+            div()
+                .id("palette-input")
+                .key_context("Palette")
+                .h(px(32.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::bg())
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(12.))
+                .text_color(theme::ink())
+                .child(input.clone()),
+        );
+        if entries.is_empty() {
+            body = body.child(hint_row(i18n::t("没有匹配的命令")));
+        }
+        for (index, (label, hint, command)) in entries.iter().enumerate() {
+            let active = index == selected;
+            let command = command.clone();
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("palette-entry-{}", index)))
+                    .h(px(30.))
+                    .rounded(px(6.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .bg(if active { theme::raised() } else { theme::panel() })
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.palette = None;
+                        this.run_palette_command(command.clone(), cx);
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .text_color(if active { theme::ink() } else { theme::ink_secondary() })
+                            .child(SharedString::from(label.clone())),
+                    )
+                    .children((!hint.is_empty()).then(|| {
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_tertiary())
+                            .child(SharedString::from(hint.clone()))
+                    })),
+            );
+        }
+        body = body.child(
+            div()
+                .pt(px(4.))
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .text_color(theme::ink_tertiary())
+                .child(i18n::t("Tab / Shift+Tab 选择 · Enter 执行 · Esc 关闭")),
+        );
+
+        let card = dialog_card(Some("model-close-card"), 460.)
+            .max_h(px((viewport_height - 96.).max(320.)))
+            .child(
+                div()
+                    .id("palette-body")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .child(body),
+            );
+        Some(overlay_center(card))
+    }
+
+    /// 会话全文搜索：输入即查（只读会话库），命中按会话去重。
+    fn find_dialog_overlay(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let dialog = self.find_dialog.as_ref()?;
+        let input = dialog.input.clone();
+        let results = dialog.results.clone();
+        let viewport_height = f32::from(window.viewport_size().height);
+        let query_len = input.read(cx).content().trim().chars().count();
+
+        let mut body = div().w_full().flex().flex_col().gap(px(8.)).child(
+            div()
+                .id("find-input")
+                .key_context("Find")
+                .h(px(32.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::bg())
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(12.))
+                .text_color(theme::ink())
+                .child(input.clone()),
+        );
+        if query_len < 2 {
+            body = body.child(hint_row(i18n::t("输入至少 2 个字开始搜索")));
+        } else if results.is_empty() {
+            body = body.child(hint_row(i18n::t("没有命中")));
+        } else {
+            let selected = self.find_selected.min(results.len().saturating_sub(1));
+            for (index, hit) in results.iter().enumerate() {
+                let owner = self.find_owner_of_session(&hit.session_id);
+                let owner_label = match owner {
+                    Some(Selection::Bot(index)) => self
+                        .roster
+                        .bots
+                        .get(index)
+                        .map(|bot| bot.name.clone())
+                        .unwrap_or_default(),
+                    Some(Selection::Group(index)) => self
+                        .roster
+                        .groups
+                        .get(index)
+                        .map(|group| tri!("{}（频道）", "{} (channel)", group.name))
+                        .unwrap_or_default(),
+                    None => i18n::t("未知归属").to_string(),
+                };
+                let clickable = owner.is_some();
+                let mut row = div()
+                    .id(SharedString::from(format!("find-hit-{}", hit.session_id)))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme::edge())
+                    .bg(if index == selected {
+                        theme::hover()
+                    } else {
+                        theme::card()
+                    })
+                    .p(px(8.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::accent())
+                                    .child(SharedString::from(owner_label)),
+                            )
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::ink_tertiary())
+                                    .child(SharedString::from(format!(
+                                        "{} · {}",
+                                        time::day_label(hit.at),
+                                        time::format_hm(hit.at)
+                                    ))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(theme::ink_secondary())
+                            .child(SharedString::from(hit.snippet.clone())),
+                    );
+                if clickable {
+                    row = row
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme::hover()))
+                        .on_click(cx.listener({
+                            let hit = hit.clone();
+                            move |this, _event, _window, cx| {
+                                this.jump_to_hit(&hit, cx);
+                            }
+                        }));
+                }
+                body = body.child(row);
+            }
+        }
+
+        let card = dialog_card(Some("allowlist-close-card"), 520.)
+            .max_h(px((viewport_height - 96.).max(320.)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(16.))
+                            .line_height(px(24.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::ink())
+                            .child(i18n::t("搜索历史消息")),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_tertiary())
+                            .child(i18n::t("Esc 关闭")),
+                    ),
+            )
+            .child(
+                div()
+                    .id("find-body")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .child(body),
+            );
+        Some(overlay_center(card))
+    }
+
+    /// 模型选择：列出已配置 provider 下的模型 + 「跟随默认」。
+    /// 选择模型：kit AlertDialog + 列表；点条目立即落盘并关闭。
+    fn open_model_dialog(
+        &mut self,
+        bot_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self
+            .roster
+            .bot_by_id(&bot_id)
+            .and_then(|bot| bot.model.clone());
+        let options = data::available_models();
+        let viewport_height = f32::from(window.viewport_size().height);
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let bot_id = bot_id.clone();
+            let current = current.clone();
+            let options = options.clone();
+            alert
+                .title(i18n::t("选择模型"))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("关闭"))
+                .show_cancel(false)
+                .content(move |content, _, _| {
+                    let is_default = current.is_none();
+                    let default_click = {
+                        let weak = weak.clone();
+                        let bot_id = bot_id.clone();
+                        move |_event: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.apply_model_choice(&bot_id, None, cx);
+                            });
+                            window.close_dialog(cx);
+                            Self::defer_focus_restore(weak.clone(), window, cx);
+                        }
+                    };
+                    let mut body = div().w_full().flex().flex_col().gap(px(10.)).child(
+                        div()
+                            .id("model-default")
+                            .h(px(30.))
+                            .rounded(px(6.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(default_click)
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink())
+                                    .child(i18n::t("跟随 Agent 默认")),
+                            )
+                            .children(is_default.then(current_marker)),
+                    );
+                    if options.is_empty() {
+                        body = body.child(hint_row(
+                            i18n::t("没读到 provider_config.json；先在数据根 v2 下配置 provider，或保持跟随默认"),
+                        ));
+                    } else {
+                        let mut last_provider = String::new();
+                        for option in &options {
+                            if option.provider_id != last_provider {
+                                last_provider = option.provider_id.clone();
+                                body = body.child(section_label(&option.provider_name));
+                            }
+                            let selected = current.as_ref().is_some_and(|model| {
+                                model.provider_id == option.provider_id
+                                    && model.model_id == option.model_id
+                            });
+                            let model = data::ModelSpec {
+                                provider_id: option.provider_id.clone(),
+                                model_id: option.model_id.clone(),
+                                reasoning_level: None,
+                            };
+                            let click = {
+                                let weak = weak.clone();
+                                let bot_id = bot_id.clone();
+                                let model = model.clone();
+                                move |_event: &gpui::ClickEvent,
+                                      window: &mut Window,
+                                      cx: &mut App| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.apply_model_choice(
+                                            &bot_id,
+                                            Some(model.clone()),
+                                            cx,
+                                        );
+                                    });
+                                    window.close_dialog(cx);
+                                    Self::defer_focus_restore(weak.clone(), window, cx);
+                                }
+                            };
+                            body = body.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "model-{}-{}",
+                                        option.provider_id, option.model_id
+                                    )))
+                                    .h(px(30.))
+                                    .rounded(px(6.))
+                                    .px(px(8.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(click)
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(12.))
+                                            .text_color(theme::ink())
+                                            .child(SharedString::from(option.model_id.clone())),
+                                    )
+                                    .children(selected.then(current_marker)),
+                            );
+                        }
+                    }
+                    content.child(
+                        div()
+                            .id("model-dialog-body")
+                            .max_h(px((viewport_height - 200.).max(240.)))
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(6.))
+                            .child(body),
+                    )
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    /// 新建 Bot 的默认模型（偏好）：与单 Bot 模型选择同构，点条目写 prefs.json。
+    fn open_new_bot_model_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.new_bot_model.clone();
+        let options = data::available_models();
+        let viewport_height = f32::from(window.viewport_size().height);
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let current = current.clone();
+            let options = options.clone();
+            alert
+                .title(i18n::t("新建 Bot 默认模型"))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("关闭"))
+                .show_cancel(false)
+                .content(move |content, _, _| {
+                    let is_default = current.is_none();
+                    let default_click = {
+                        let weak = weak.clone();
+                        move |_event: &gpui::ClickEvent,
+                              window: &mut Window,
+                              cx: &mut App| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.new_bot_model = None;
+                                save_new_bot_model(None);
+                                this.toast(i18n::t("新 Bot 将沿用第一个 Bot 的模型"), cx);
+                                cx.notify();
+                            });
+                            window.close_dialog(cx);
+                            Self::defer_focus_restore(weak.clone(), window, cx);
+                        }
+                    };
+                    let mut body = div().w_full().flex().flex_col().gap(px(10.)).child(
+                        div()
+                            .id("new-bot-model-default")
+                            .h(px(30.))
+                            .rounded(px(6.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(default_click)
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink())
+                                    .child(i18n::t("沿用第一个 Bot 的模型")),
+                            )
+                            .children(is_default.then(current_marker)),
+                    );
+                    if options.is_empty() {
+                        body = body.child(hint_row(
+                            i18n::t("没读到 provider_config.json；先在数据根 v2 下配置 provider"),
+                        ));
+                    } else {
+                        let mut last_provider = String::new();
+                        for option in &options {
+                            if option.provider_id != last_provider {
+                                last_provider = option.provider_id.clone();
+                                body = body.child(section_label(&option.provider_name));
+                            }
+                            let selected = current.as_ref().is_some_and(|model| {
+                                model.provider_id == option.provider_id
+                                    && model.model_id == option.model_id
+                            });
+                            let model = data::ModelSpec {
+                                provider_id: option.provider_id.clone(),
+                                model_id: option.model_id.clone(),
+                                reasoning_level: Some("max".to_string()),
+                            };
+                            let click = {
+                                let weak = weak.clone();
+                                let model = model.clone();
+                                move |_event: &gpui::ClickEvent,
+                                      window: &mut Window,
+                                      cx: &mut App| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        this.new_bot_model = Some(model.clone());
+                                        save_new_bot_model(Some(&model));
+                                        this.toast(i18n::t("已设为新 Bot 默认模型"), cx);
+                                        cx.notify();
+                                    });
+                                    window.close_dialog(cx);
+                                    Self::defer_focus_restore(weak.clone(), window, cx);
+                                }
+                            };
+                            body = body.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "new-bot-model-{}-{}",
+                                        option.provider_id, option.model_id
+                                    )))
+                                    .h(px(30.))
+                                    .rounded(px(6.))
+                                    .px(px(8.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(click)
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(12.))
+                                            .text_color(theme::ink())
+                                            .child(SharedString::from(option.model_id.clone())),
+                                    )
+                                    .children(selected.then(current_marker)),
+                            );
+                        }
+                    }
+                    content.child(
+                        div()
+                            .id("new-bot-model-dialog-body")
+                            .max_h(px((viewport_height - 200.).max(240.)))
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(6.))
+                            .child(body),
+                    )
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    /// 落模型选择并刷新名册（`None` = 跟随默认）。新会话才生效，旧会话保持原模型。
+    fn apply_model_choice(
+        &mut self,
+        bot_id: &str,
+        model: Option<data::ModelSpec>,
+        cx: &mut Context<Self>,
+    ) {
+        // CLI 对部分模型要求显式 reasoning level（缺了会「建会话失败」）。选中具体模型时
+        // 沿用该 Bot 原有档位；没有就落产品默认的 max——比留空导致建会话失败好。
+        let model = model.map(|mut model| {
+            if model.reasoning_level.is_none() {
+                model.reasoning_level = self
+                    .roster
+                    .bot_by_id(bot_id)
+                    .and_then(|bot| bot.model.as_ref())
+                    .and_then(|current| current.reasoning_level.clone())
+                    .or_else(|| Some("max".to_string()));
+            }
+            model
+        });
+        if let Err(message) = data::set_bot_model(bot_id, model.as_ref()) {
+            eprintln!("[model] 保存失败：{message}");
+        }
+        let keep = selected_ids(self);
+        self.roster = Roster::load();
+        self.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+        cx.notify();
+    }
+
+    /// Provider API Key：kit AlertDialog + 单输入；保存后只写 JSON，不回读值。
+    fn open_provider_key_dialog(
+        &mut self,
+        provider_id: String,
+        provider_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| SimpleInput::new("sk-…", theme::ink_tertiary, cx));
+        let form = cx.new(|_| ProviderKeyState {
+            input,
+            error: None,
+        });
+        let handle = form.read(cx).input.read(cx).focus_handle(cx);
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let provider_id = provider_id.clone();
+            alert
+                .title(tri!("改 API Key · {provider_name}", "Change API key · {provider_name}"))
+                .width(px(460.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let key = form_ok.read(cx).input.read(cx).content();
+                    match data::set_provider_api_key(&provider_id, key) {
+                        Ok(()) => {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.toast(i18n::t("已更新 API Key"), cx);
+                            });
+                            true
+                        }
+                        Err(message) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// Provider API 地址：kit AlertDialog + 单输入，只改 config.api.baseUrl。
+    fn open_provider_url_dialog(
+        &mut self,
+        provider_id: String,
+        provider_name: String,
+        base_url: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| SimpleInput::new("https://…", theme::ink_tertiary, cx));
+        input.update(cx, |input, cx| input.set_content(base_url, cx));
+        let handle = input.read(cx).focus_handle(cx);
+        let form = cx.new(|_| ProviderUrlState {
+            input,
+            error: None,
+        });
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let provider_id = provider_id.clone();
+            alert
+                .title(tri!("改 API 地址 · {provider_name}", "Change API address · {provider_name}"))
+                .width(px(500.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let url = form_ok.read(cx).input.read(cx).content().to_string();
+                    match data::set_provider_base_url(&provider_id, &url) {
+                        Ok(()) => {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.toast(i18n::t("已更新 API 地址"), cx);
+                            });
+                            true
+                        }
+                        Err(message) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 删除 provider（规则/排序/模型规则一起清）。
+    fn open_delete_provider_dialog(
+        &mut self,
+        provider_id: String,
+        provider_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let provider_id = provider_id.clone();
+            alert
+                .title(tri!("删除 Provider · {provider_name}", "Delete provider · {provider_name}"))
+                .description(
+                    i18n::t("会移除该 provider 的规则、排序与模型启用项；已选它的 Bot 需要重新选模型。"),
+                )
+                .width(px(480.))
+                .centered()
+                .ok_text(i18n::t("删除"))
+                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    match data::delete_provider(&provider_id) {
+                        Ok(()) => {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.toast(i18n::t("已删除 Provider"), cx);
+                                cx.notify();
+                            });
+                            true
+                        }
+                        Err(message) => {
+                            let _ = weak.update(cx, |this, cx| this.toast(message, cx));
+                            false
+                        }
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    /// 从模板新增 provider。
+    fn open_add_provider_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let templates = data::provider_templates();
+        let (first_id, first_name) = templates
+            .first()
+            .map(|template| (template.template_id.clone(), template.name.clone()))
+            .unwrap_or_default();
+        let provider_id =
+            cx.new(|cx| SimpleInput::new("provider id", theme::ink_tertiary, cx));
+        let provider_name =
+            cx.new(|cx| SimpleInput::new(i18n::t("显示名称"), theme::ink_tertiary, cx));
+        let api_key = cx.new(|cx| SimpleInput::new("sk-…", theme::ink_tertiary, cx));
+        provider_id.update(cx, |input, cx| input.set_content(first_id, cx));
+        provider_name.update(cx, |input, cx| input.set_content(first_name, cx));
+        let handle = provider_id.read(cx).focus_handle(cx);
+        let form = cx.new(|_| ProviderAddState {
+            templates,
+            selected: 0,
+            provider_id,
+            provider_name,
+            api_key,
+            error: None,
+        });
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(i18n::t("新增 Provider"))
+                .width(px(520.))
+                .centered()
+                .ok_text(i18n::t("创建"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let (template_id, provider_id, provider_name, api_key) = {
+                        let form = form_ok.read(cx);
+                        let template_id = form
+                            .templates
+                            .get(form.selected)
+                            .map(|template| template.template_id.clone())
+                            .unwrap_or_default();
+                        (
+                            template_id,
+                            form.provider_id.read(cx).content().trim().to_string(),
+                            form.provider_name.read(cx).content().trim().to_string(),
+                            form.api_key.read(cx).content().to_string(),
+                        )
+                    };
+                    match data::add_provider_from_template(
+                        &template_id,
+                        &provider_id,
+                        &provider_name,
+                        &api_key,
+                    ) {
+                        Ok(()) => {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.toast(i18n::t("已新增 Provider"), cx);
+                                cx.notify();
+                            });
+                            true
+                        }
+                        Err(message) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 新建/重命名侧栏分组。
+    fn open_section_dialog(
+        &mut self,
+        request: SectionDialogRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (editing_id, title, text) = match request {
+            SectionDialogRequest::New => (None, i18n::t("新建分组"), String::new()),
+            SectionDialogRequest::Rename(id) => {
+                let name = self
+                    .sidebar_sections
+                    .sections
+                    .iter()
+                    .find(|section| section.id == id)
+                    .map(|section| section.name.clone())
+                    .unwrap_or_default();
+                (Some(id), i18n::t("重命名分组"), name)
+            }
+        };
+        let input = cx.new(|cx| SimpleInput::new("分组名称", theme::ink_tertiary, cx));
+        input.update(cx, |input, cx| input.set_content(text, cx));
+        let handle = input.read(cx).focus_handle(cx);
+        let form = cx.new(|_| SectionFormState {
+            editing_id,
+            input,
+            error: None,
+        });
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(title)
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_ok(move |_, _, cx| {
+                    let name = form_ok.read(cx).input.read(cx).content().trim().to_string();
+                    if name.is_empty() {
+                        form_ok.update(cx, |form, cx| {
+                            form.error = Some(i18n::t("分组名称不能为空").to_string());
+                            cx.notify();
+                        });
+                        return false;
+                    }
+                    let editing_id = form_ok.read(cx).editing_id.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        match &editing_id {
+                            Some(id) => this.rename_sidebar_section(id, &name),
+                            None => {
+                                this.create_sidebar_section(&name);
+                            }
+                        }
+                        cx.notify();
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 审批白名单：kit AlertDialog + 实体列表（增删先在表单内改，保存时一次写盘）。
+    fn open_allowlist_dialog(
+        &mut self,
+        bot_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = self
+            .roster
+            .bot_by_id(&bot_id)
+            .map(|bot| bot.approval_allowlist.clone())
+            .unwrap_or_default();
+        let input = cx.new(|cx| SimpleInput::new(i18n::t("如 Write / Edit"), theme::ink_tertiary, cx));
+        let form = cx.new(|_| AllowlistFormState {
+            bot_id: bot_id.clone(),
+            entries,
+            input,
+            error: None,
+        });
+        let handle = form.read(cx).input.read(cx).focus_handle(cx);
+        let form_content = form.clone();
+        let form_ok = form.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let form_content = form_content.clone();
+            let form_ok = form_ok.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(i18n::t("审批白名单"))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("保存"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| content.child(form_content.clone()))
+                .on_close(move |event, window, cx| restore(event, window, cx))
+                .on_ok(move |_, _, cx| {
+                    let (bot_id, entries) = {
+                        let form = form_ok.read(cx);
+                        (form.bot_id.clone(), form.entries.clone())
+                    };
+                    let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
+                        data::set_bot_allowlist(&bot_id, entries)?;
+                        let keep = selected_ids(this);
+                        this.roster = Roster::load();
+                        this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+                        this.toast(i18n::t("白名单已保存"), cx);
+                        cx.notify();
+                        Ok(())
+                    });
+                    match outcome {
+                        Ok(Ok(())) => true,
+                        Ok(Err(message)) => {
+                            form_ok.update(cx, |form, cx| {
+                                form.error = Some(message);
+                                cx.notify();
+                            });
+                            false
+                        }
+                        Err(_) => false,
+                    }
+                })
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    fn delete_group_and_reselect(&mut self, group_id: &str, cx: &mut Context<Self>) {
+        if let Err(message) = data::delete_group(group_id) {
+            eprintln!("[delete] {message}");
+        }
+        self.chats.remove(&group_key(group_id));
+        self.roster = Roster::load();
+        self.reselect_after_roster_change(None, None);
+        cx.notify();
+    }
+
+    fn open_delete_group_dialog(
+        &mut self,
+        group_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .roster
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| group.name.clone())
+            .unwrap_or_else(|| short_id(&group_id));
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let group_id = group_id.clone();
+            alert
+                .title(i18n::t("删除频道"))
+                .description(format!(
+                    "确定删除「{name}」吗？只移除频道条目，成员的会话与历史仍在会话库里。"
+                ))
+                .width(px(420.))
+                .centered()
+                .ok_text(i18n::t("删除"))
+                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.delete_group_and_reselect(&group_id, cx);
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    /// 运行历史：kit AlertDialog + 只读列表（打开时已取好快照）。
+    fn open_automation_history_dialog(
+        &mut self,
+        state: AutomationHistoryState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let viewport_height = f32::from(window.viewport_size().height);
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let restore = restore.clone();
+            let title = state.title.clone();
+            let runs = state.runs.clone();
+            alert
+                .title(tri!("运行历史 · {title}", "Run history · {title}"))
+                .width(px(560.))
+                .centered()
+                .ok_text(i18n::t("关闭"))
+                .show_cancel(false)
+                .content(move |content, _, _| {
+                    let mut body = div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(settings_note(
+                            i18n::t("最近 10 条运行记录；「已排队」表示等待调度器认领。"),
+                        ));
+                    if runs.is_empty() {
+                        body = body.child(hint_row(i18n::t("还没有运行记录")));
+                    }
+                    for run in &runs {
+                        let at = run.scheduled_at.unwrap_or(run.created_at).max(0) as u64;
+                        let trigger = match run.trigger.as_str() {
+                            "manual" => i18n::t("手动"),
+                            "scheduled" => i18n::t("定时"),
+                            other => other,
+                        };
+                        let dispatch = match run.dispatch_status.as_str() {
+                            "claimed" => i18n::t("已排队").to_string(),
+                            "dispatched" => i18n::t("已派发").to_string(),
+                            "failed" | "failed_to_dispatch" => i18n::t("派发失败").to_string(),
+                            "skipped" => i18n::t("已跳过").to_string(),
+                            other => other.to_string(),
+                        };
+                        let outcome = run.outcome.as_deref().map(|outcome| match outcome {
+                            "succeeded" => i18n::t("成功").to_string(),
+                            "failed" => i18n::t("失败").to_string(),
+                            "stopped" => i18n::t("已停止").to_string(),
+                            "running" => i18n::t("运行中").to_string(),
+                            other => other.to_string(),
+                        });
+                        let mut detail = format!("{trigger} · {dispatch}");
+                        if let Some(outcome) = &outcome {
+                            detail.push_str(&format!(" · {outcome}"));
+                        }
+                        if let Some(error) = run.error.as_deref().map(str::trim)
+                            && !error.is_empty()
+                        {
+                            detail.push_str(&format!(" · {error}"));
+                        }
+                        let color = match run.outcome.as_deref() {
+                            Some("succeeded") => theme::success(),
+                            Some("failed" | "stopped") => theme::danger(),
+                            Some("running") => theme::ink_secondary(),
+                            _ if run.dispatch_status == "skipped" => theme::ink_tertiary(),
+                            _ => theme::ink_secondary(),
+                        };
+                        let status_text = outcome.unwrap_or(dispatch);
+                        body = body.child(
+                            settings_row(
+                                format!("{} {}", time::day_label(at), time::format_hm(at)),
+                                Some(detail),
+                            )
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(color)
+                                    .child(status_text),
+                            ),
+                        );
+                    }
+                    content.child(
+                        div()
+                            .id("automation-history-body")
+                            .max_h(px((viewport_height - 200.).max(240.)))
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(6.))
+                            .child(body),
+                    )
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    fn delete_automation(&mut self, target: &AutomationDeleteTarget, cx: &mut Context<Self>) {
+        let db_path = automations::db_path(&self.roster.data_root);
+        match automations::delete(&db_path, &target.automation_id, &target.workspace_key) {
+            Ok(true) => self.toast(i18n::t("已删除定时任务"), cx),
+            Ok(false) => self.toast(i18n::t("任务已不存在"), cx),
+            Err(message) => self.toast(message, cx),
+        }
+        self.automations_view = None;
+        cx.notify();
+    }
+
+    fn open_delete_automation_dialog(
+        &mut self,
+        target: AutomationDeleteTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = target.title.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let target = target.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(i18n::t("删除定时任务"))
+                .description(format!(
+                    "确定删除「{title}」吗？只移除任务定义；运行历史仍留在任务索引里但本页不再显示，已排队的「立即运行」也会失效。正在执行的回合不会被取消。"
+                ))
+                .width(px(480.))
+                .centered()
+                .ok_text(i18n::t("删除"))
+                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    let target = target.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.delete_automation(&target, cx);
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    fn status_color(&self) -> Rgba {        let (_, error) = self.chat_status();
+        if error {
+            theme::danger()
+        } else {
+            theme::ink_tertiary()
+        }
+    }
+
+    fn titlebar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_open = self.right_panel_open;
+        let maximize_icon = if window.is_maximized() {
+            icons::Icon::WindowRestore
+        } else {
+            icons::Icon::WindowMaximize
+        };
+        div()
+            .h(px(TITLEBAR_HEIGHT))
+            .flex_shrink_0()
+            .w_full()
+            .flex()
+            .items_center()
+            .bg(theme::panel())
+            .text_color(theme::ink_secondary())
+            .child(
+                div()
+                    // Windows 平台没有实现 start_window_move；交给系统命中测试处理拖拽/双击。
+                    .window_control_area(WindowControlArea::Drag)
+                    .id("titlebar-drag")
+                    .flex_1()
+                    .h_full(),
+            )
+            .child(
+                div()
+                    .id("titlebar-panel")
+                    .mr(px(8.))
+                    .size(px(28.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.right_panel_open = !this.right_panel_open;
+                        cx.notify();
+                    }))
+                    .child(icons::icon(
+                        icons::Icon::PanelRight,
+                        15.,
+                        if panel_open {
+                            theme::ink()
+                        } else {
+                            theme::ink_secondary()
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(self.window_button("win-min", icons::Icon::Minus, false, |_window| {
+                        window_style::minimize();
+                    }))
+                    .child(self.window_button("win-max", maximize_icon, false, |window| {
+                        if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+                            eprintln!("[win] maximize click (is_maximized={})", window.is_maximized());
+                        }
+                        // 先记住窗口态几何；还原后的尺寸由 bounds observer 再次记录。
+                        if let Some(geometry) = current_geometry(window) {
+                            window_state::remember(geometry);
+                        }
+                        window_style::toggle_maximize();
+                    }))
+                    .child(self.window_button("win-close", icons::Icon::X, true, |window| {
+                        close_or_hide(window);
+                    })),
+            )
+    }
+
+    fn window_button(
+        &self,
+        id: &'static str,
+        glyph: icons::Icon,
+        danger: bool,
+        action: impl Fn(&mut Window) + 'static,
+    ) -> impl IntoElement {
+        let base = div()
+            .id(id)
+            .w(px(44.))
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer();
+        let base = if danger {
+            base.hover(|style| style.bg(theme::danger()))
+        } else {
+            base.hover(|style| style.bg(theme::hover()))
+        };
+        base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
+            .child(icons::icon(
+                glyph,
+                14.,
+                if danger {
+                    theme::accent_ink()
+                } else {
+                    theme::ink_secondary()
+                },
+            ))
+    }
+
+    fn sidebar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let bots = &self.roster.bots;
+        let groups = &self.roster.groups;
+        let selection = self.selection;
+        // 搜索：按名字/角色/说明过滤名册；频道按名字过滤。
+        let query = self.search_input.read(cx).content().trim().to_lowercase();
+        let query_active = self.search_open && !query.is_empty();
+        let bots_visible: Vec<usize> = bots
+            .iter()
+            .enumerate()
+            .filter(|(_, bot)| {
+                !query_active
+                    || bot.name.to_lowercase().contains(&query)
+                    || bot.role.to_lowercase().contains(&query)
+                    || bot.description.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let groups_visible: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| {
+                !query_active || group.name.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect();
+
+        let mut bot_rows = div().flex().flex_col().gap(px(2.));
+        if bots.is_empty() {
+            bot_rows = bot_rows.child(hint_row(i18n::t("暂无 Bot")));
+        } else if bots_visible.is_empty() {
+            bot_rows = bot_rows.child(hint_row(i18n::t("无匹配 Bot")));
+        }
+        for index in &bots_visible {
+            let index = *index;
+            let bot = &bots[index];
+            let active = selection == Some(Selection::Bot(index));
+            bot_rows = bot_rows.child(
+                nav_row(("bot-row", index), active)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.select_bot(index, cx);
+                    }))
+                    .child(
+                        div()
+                            .relative()
+                            .child(avatar::bot_avatar(&bot.id, 36.))
+                            .children(sidebar_status_badge(
+                                chat_runtime_status(self.chats.get(&bot_key(&bot.id))),
+                            )),
+                    )
+                    .child(div().flex_1().min_w(px(0.)).child(two_line(
+                        bot.name.clone(),
+                        if bot.role.is_empty() {
+                            i18n::t("未设角色").to_string()
+                        } else {
+                            bot.role.clone()
+                        },
+                        active,
+                        bot.pinned,
+                    )))
+                    .children(self.unread_badge(&bot_key(&bot.id))),
+            );
+        }
+
+        let mut group_rows = div().flex().flex_col().gap(px(2.));
+        if groups.is_empty() {
+            group_rows = group_rows.child(hint_row(i18n::t("暂无频道")));
+        } else if groups_visible.is_empty() {
+            group_rows = group_rows.child(hint_row(i18n::t("无匹配频道")));
+        }
+        for index in &groups_visible {
+            let index = *index;
+            let group = &groups[index];
+            let active = selection == Some(Selection::Group(index));
+            let subtitle = count_members(group.member_ids.len());
+            group_rows = group_rows.child(
+                nav_row(("group-row", index), active)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.select_group(index, cx);
+                    }))
+                    .child(
+                        div()
+                            .relative()
+                            .child(avatar::channel_avatar(&group.id, 36.))
+                            .children(sidebar_status_badge(
+                                chat_runtime_status(self.chats.get(&group_key(&group.id))),
+                            )),
+                    )
+                    .child(div().flex_1().min_w(px(0.)).child(two_line(group.name.clone(), subtitle, active, group.pinned)))
+                    .children(self.unread_badge(&group_key(&group.id))),
+            );
+        }
+
+        div()
+            .w(px(SIDEBAR_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(theme::panel())
+            .pt(px(12.))
+            .pb(px(8.))
+            .px(px(8.))
+            .child(
+                div()
+                    .pb(px(4.))
+                    .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(14.))
+                            .line_height(px(20.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::ink())
+                            .child("Mode Bot"),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("side-search")
+                            .size(px(36.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_color(if self.search_open {
+                                theme::ink()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.search_open = !this.search_open;
+                                if !this.search_open {
+                                    let search = this.search_input.clone();
+                                    search.update(cx, |input, cx| {
+                                        input.set_content("", cx);
+                                    });
+                                }
+                                cx.notify();
+                            }))
+                            .child(icons::icon(icons::Icon::Search, 16., theme::ink_secondary())),
+                    )
+                    .child(
+                        div()
+                            .id("side-new")
+                            .track_focus(&self.tab_focus["side-new"])
+                            .key_context("TabStop")
+                            .when(self.tab_focus["side-new"].is_focused(window), |el| {
+                                el.bg(theme::accent_soft())
+                            })
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, _window, cx| {
+                                this.open_new_dialog(cx);
+                            }))
+                            .size(px(36.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_color(theme::ink_secondary())
+                            .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.open_new_dialog(cx);
+                            }))
+                            .child(icons::icon(icons::Icon::Plus, 16., theme::ink_secondary())),
+                    ),
+            )
+            .children(self.search_open.then(|| {
+                let focused = self.search_input.read(cx).focus_handle(cx).is_focused(window);
+                div()
+                    .id("search-field")
+                    .key_context("Search")
+                    .h(px(32.))
+                    .mt(px(6.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if focused { theme::accent() } else { theme::edge() })
+                    .bg(theme::card())
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .text_color(theme::ink())
+                    .child(self.search_input.clone())
+            }))
+            // 名册可滚动：Bot/频道多了以后不能靠 flex_1 空白把条目挤出窗口。
+            .child(
+                div()
+                    .id("sidebar-list")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .children(self.main_bot_card(cx))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .pt(px(8.))
+                            .pb(px(2.))
+                            .child(section_label(i18n::t("机器人"))),
+                    )
+                    .child(bot_rows)
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .pt(px(12.))
+                            .pb(px(2.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(section_label(i18n::t("频道")))
+                            .child(
+                                div()
+                                    .id("group-new")
+                                    .size(px(18.))
+                                    .rounded(px(4.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .text_color(theme::ink_tertiary())
+                                    .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.open_new_group_dialog(cx);
+                                    }))
+                                    .child(icons::icon(icons::Icon::Plus, 12., theme::ink_tertiary())),
+                            ),
+                    )
+                    .child(group_rows),
+            )
+            .child(
+                div().pt(px(4.)).flex().child(
+                    div()
+                        .id("sidebar-gear")
+                        .size(px(36.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(theme::edge())
+                        .bg(theme::raised())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme::raised_hover()).text_color(theme::ink()))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.footer_menu_open = !this.footer_menu_open;
+                            cx.notify();
+                        }))
+                        .child(icons::icon(
+                            icons::Icon::Settings,
+                            16.,
+                            theme::ink_secondary(),
+                        )),
+                ),
+            )
+    }
+
+
+    /// 弹一条轻提示：入队，由 render 用 gpui-kit Notification 推送。
+    fn toast(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.pending_notifications.push(text.into());
+        cx.notify();
+    }
+
+
+    /// 侧栏主 Bot 大卡（DS：95px 宽、头像 60、名字 13/600 + 身份 chip）。
+    /// 优先 `isMain`，其次团队管理员；都没有就不出现。
+    fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let index = self
+            .roster
+            .bots
+            .iter()
+            .position(|bot| bot.is_main)
+            .or_else(|| self.roster.bots.iter().position(|bot| bot.is_chief))?;
+        let bot = self.roster.bots.get(index)?;
+        let name = bot.name.clone();
+        let tag = if bot.role.trim().is_empty() {
+            "Bot".to_string()
+        } else {
+            bot.role.clone()
+        };
+        let unread = self
+            .chats
+            .get(&bot_key(&bot.id))
+            .map(|chat| chat.unread)
+            .unwrap_or(0);
+        let waiting = self
+            .chats
+            .get(&bot_key(&bot.id))
+            .is_some_and(|chat| !chat.permissions.is_empty() || !chat.questions.is_empty());
+        let badge: Option<gpui::AnyElement> = if bot.pinned {
+            Some(
+                div()
+                    .absolute()
+                    .right(px(-2.))
+                    .bottom(px(-2.))
+                    .size(px(16.))
+                    .rounded_full()
+                    .bg(theme::chief())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icons::icon(icons::Icon::Crown, 10., theme::accent_ink()))
+                    .into_any_element(),
+            )
+        } else if waiting {
+            Some(
+                div()
+                    .absolute()
+                    .right(px(-2.))
+                    .bottom(px(-2.))
+                    .size(px(12.))
+                    .rounded_full()
+                    .bg(theme::accent())
+                    .border_2()
+                    .border_color(theme::panel())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::accent_ink())
+                            .child("?"),
+                    )
+                    .into_any_element(),
+            )
+        } else if unread > 0 {
+            Some(
+                div()
+                    .absolute()
+                    .right(px(-2.))
+                    .bottom(px(-2.))
+                    .child(avatar::unread_dot(10.))
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+        Some(
+            div()
+                .id("main-bot-card")
+                .w(px(95.))
+                .flex_shrink_0()
+                .mx_auto()
+                .rounded(px(theme::RADIUS_CARD))
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.select_bot(index, cx);
+                }))
+                .px(px(8.))
+                .pb(px(4.))
+                .pt(px(6.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .relative()
+                        .child(avatar::bot_avatar(&bot.id, 60.))
+                        .children(badge),
+                )
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(13.))
+                        .line_height(px(18.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme::ink())
+                        .truncate()
+                        .child(SharedString::from(name)),
+                )
+                .child(
+                    div()
+                        .rounded(px(theme::RADIUS_CHIP))
+                        .border_1()
+                        .border_color(theme::edge())
+                        .bg(theme::raised())
+                        .px(px(6.))
+                        .py(px(2.))
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(theme::ink_secondary())
+                        .child(tag),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// 侧栏行尾的未读点（原版：8px 强调色圆点，不堆数字）。
+    fn unread_badge(&self, key: &str) -> Option<gpui::AnyElement> {
+        let count = self.chats.get(key).map(|chat| chat.unread).unwrap_or(0);
+        if count == 0 {
+            return None;
+        }
+        // 原版只有 8px 圆点（数字仍保留在会话的未读计数里，不在侧栏堆字）。
+        Some(div().ml(px(4.)).child(avatar::unread_dot(8.)).into_any_element())
+    }
+
+    /// 把当前输入框内容存进当前会话的草稿槽（切会话前调用）。
+    fn stash_draft(&mut self, cx: &Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let text = self.input.read(cx).content().to_string();
+        if text.trim().is_empty() {
+            self.drafts.remove(&key);
+        } else {
+            self.drafts.insert(key, text);
+        }
+    }
+
+    /// 切到某个会话时恢复它的草稿（没有就清空输入框）。
+    fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
+        let text = self.drafts.get(key).cloned().unwrap_or_default();
+        let input = self.input.clone();
+        input.update(cx, |input, cx| input.set_content(text, cx));
+    }
+
+    fn chat_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (name, avatar_id, is_group) = if let Some(bot) = self.selected_bot() {
+            (bot.name.clone(), bot.id.clone(), false)
+        } else if let Some(group) = self.selected_group() {
+            (group.name.clone(), group.id.clone(), true)
+        } else {
+            ("Mode Bot".to_string(), "mode-bot".to_string(), false)
+        };
+        let panel_open = self.right_panel_open;
+        let capsule_focus = self.tab_focus["header-capsule"].clone();
+        let capsule_focused = capsule_focus.is_focused(window);
+
+        div()
+            .h(px(59.))
+            .flex_shrink_0()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme::bg())
+            .child(
+                // DS §10.10 顶部胶囊：39 高、24px 头像、点击开合右侧面板；
+                // 悬停弹出箭头（标准是宽 0→18 + 模糊淡入，这里保留 18px 占位只做淡入，
+                // 避免胶囊宽度跳动）。
+                div()
+                    .id("header-capsule")
+                    .group("header-capsule")
+                    .track_focus(&capsule_focus)
+                    .key_context("TabStop")
+                    .when(capsule_focused, |el| el.border_color(theme::accent()))
+                    .on_action(cx.listener(|this, _: &ActivateTabStop, _window, cx| {
+                        this.right_panel_open = !this.right_panel_open;
+                        cx.notify();
+                    }))
+                    .h(px(39.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme::ink_line())
+                    .bg(theme::composer())
+                    .pl(px(8.))
+                    .pr(px(14.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .shadow(theme::shadow_1())
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::raised()))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.right_panel_open = !this.right_panel_open;
+                        cx.notify();
+                    }))
+                    .child(if is_group {
+                        avatar::channel_avatar(&avatar_id, 24.).into_any_element()
+                    } else {
+                        avatar::bot_avatar(&avatar_id, 24.).into_any_element()
+                    })
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .line_height(px(20.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme::ink())
+                            .truncate()
+                            .child(SharedString::from(name)),
+                    )
+                    .child(
+                        div()
+                            .id("header-capsule-arrow")
+                            .w(px(18.))
+                            .h(px(18.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .opacity(0.)
+                            .group_hover("header-capsule", |style| style.opacity(1.))
+                            .child(icons::icon(
+                                if panel_open {
+                                    icons::Icon::ChevronLeft
+                                } else {
+                                    icons::Icon::ChevronRight
+                                },
+                                14.,
+                                theme::ink_tertiary(),
+                            )),
+                    ),
+            )
+    }
+
+    fn bot_index(&self) -> usize {
+        match self.selection {
+            Some(Selection::Bot(index)) => index,
+            _ => 0,
+        }
+    }
+
+    fn transcript(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 消息列宽按视口算（百分比宽度在 overflow 容器里会退化成内容宽，导致气泡不贴边）。
+        let viewport_width = f32::from(window.viewport_size().width);
+        let panel_width = if self.right_panel_open { PANEL_WIDTH } else { 0.0 };
+        let column_width = (viewport_width - SIDEBAR_WIDTH - panel_width - 40.0).clamp(200.0, 960.0);
+        let bubble_max =
+            (column_width * (self.message_width as f32 / 100.0)).min(BUBBLE_MAX_WIDTH);
+        let list = div()
+            .id("pilot-transcript")
+            .flex_1()
+            .min_h(px(0.))
+            .px(px(20.))
+            .py(px(12.))
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .scrollbar_width(px(6.));
+
+        let group = self.selected_group().cloned();
+        if let Some(group) = group.as_ref() {
+            let chat = self
+                .active_key()
+                .and_then(|key| self.chats.get_mut(key.as_str()));
+            let Some(chat) = chat else {
+                return list
+                    .items_center()
+                    .justify_center()
+                    .child(group_placeholder(group, &self.roster));
+            };
+            if chat.messages.is_empty() {
+                let admin = group
+                    .admin_id
+                    .as_deref()
+                    .and_then(|id| self.roster.bot_by_id(id))
+                    .map(|bot| bot.name.clone())
+                    .unwrap_or_else(|| i18n::t("管理员").to_string());
+                return list.items_center().justify_center().child(empty_state_badged(
+                    Some(avatar::channel_avatar(&group.id, 44.).into_any_element()),
+                    tri!("与 {} 的频道", "Channel with {}", group.name),
+                    tri!("发消息开始群聊：{admin} 默认接话；用 @成员名 点名其他人。", "Send a message to start the group chat: {admin} replies by default; @mention others to call on them."),
+                ));
+            }
+            let group_chat_window = chat.transcript_limit;
+            let mention_names: Vec<String> = group
+                .member_ids
+                .iter()
+                .filter_map(|id| self.roster.bot_by_id(id).map(|bot| bot.name.clone()))
+                .collect();
+            let messages = std::mem::take(&mut chat.messages);
+            let mut column = div()
+                .w(px(column_width))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .gap(px(10.));
+            let chat_key = group_key(&group.id);
+            let start = messages.len().saturating_sub(group_chat_window);
+            if start > 0 {
+                column = column.child(load_earlier_row(&chat_key, start, cx));
+            }
+            let mut last_day: Option<String> = None;
+            for (index, message) in messages.iter().enumerate().skip(start) {
+                if message.kind == MsgKind::Tool {
+                    column = column.child(tool_card(message));
+                    continue;
+                }
+                if message.kind == MsgKind::Reasoning {
+                    continue;
+                }
+                if message.role == Role::User && is_group_prompt(&message.text) {
+                    continue;
+                }
+                if message.at > 0 {
+                    let day = time::format_day(message.at);
+                    if last_day.as_deref() != Some(day.as_str()) {
+                        column = column.child(day_separator(message.at));
+                        last_day = Some(day);
+                    }
+                }
+                let is_user = message.role == Role::User;
+                let text = if message.text.is_empty() && message.streaming {
+                    "…".to_string()
+                } else {
+                    message.text.clone()
+                };
+                // DS 规范：气泡 14/24、最宽约 80% 列宽；Bot/用户气泡都不描边。
+                let bubble = div()
+                    .rounded(px(theme::RADIUS_BUBBLE))
+                    .px(px(14.))
+                    .py(px(8.))
+                    .font_family(theme::FONT_FAMILY);
+                let bubble = if is_user {
+                    bubble
+                        .text_size(px(14.))
+                        .line_height(px(24.))
+                        .child(user_text_with_mentions(&text, &mention_names))
+                        .children(message_attachments(&message.attachments))
+                } else {
+                    // 助手侧交给 gpui-kit 的 Markdown TextView（GFM/表格/代码块/选择复制）。
+                    bubble
+                        .text_color(theme::ink())
+                        .child(kit_markdown_el(
+                            format!("classic-group-md-{index}"),
+                            &message.text,
+                            false,
+                        ))
+                };
+                let author = message
+                    .member
+                    .clone()
+                    .unwrap_or_else(|| if message.role == Role::User { i18n::t("你").to_string() } else { group.name.clone() });
+                let author_color = message.member.as_ref().and_then(|name| {
+                    self.roster
+                        .bots
+                        .iter()
+                        .enumerate()
+                        .find(|(_, bot)| &bot.name == name)
+                        .map(|(_, bot)| theme::member_color(&bot.id))
+                });
+                let author_id = message
+                    .member
+                    .as_ref()
+                    .and_then(|name| {
+                        self.roster
+                            .bots
+                            .iter()
+                            .find(|bot| &bot.name == name)
+                            .map(|bot| bot.id.clone())
+                    })
+                    .unwrap_or_else(|| author.clone());
+                let row = message_row(
+                    message,
+                    bubble,
+                    bubble_max,
+                    Some(message_actions(
+                        &chat_key,
+                        index,
+                        author.clone(),
+                        message.text.clone(),
+                        cx,
+                    )),
+                    author,
+                    author_id,
+                    author_color,
+                    SharedString::from(format!("msg-g-{}", index)),
+                );
+                column = column.child(row);
+            }
+            chat.messages = messages;
+            return list.child(column);
+        }
+
+        let key = self.active_key();
+        let bot = self.selected_bot().cloned();
+        // 私聊消息的作者色：先算好，避免和下面 chats 的可变借用打架。
+        let private_mention_names: Vec<String> = bot
+            .as_ref()
+            .map(|bot| vec![bot.name.clone()])
+            .unwrap_or_default();
+        let private_author_color = self
+            .roster
+            .bots
+            .get(self.bot_index())
+            .map(|bot| theme::member_color(&bot.id));
+        let Some(chat) = key
+            .as_ref()
+            .and_then(|key| self.chats.get_mut(key))
+        else {
+            // 名册真空（无选中条目）才报「没有可用的 Bot」；有选中但会话未建
+            // （如新会话后 Ready 未回）是中性等待态，别误报。
+            if bot.is_none() && self.selected_group().is_none() {
+                let detail = match &self.roster.error {
+                    Some(error) => {
+                        tri!("{}。数据根：{}。", "{}. Data root: {}.", error, self.roster.data_root.display())
+                    }
+                    None => tri!(
+                        "名册为空。数据根：{}。在 Mode Bot 里创建 Bot 后重新打开试点即可。",
+                        "The roster is empty. Data root: {}. Create a bot in Mode Bot and reopen the pilot.",
+                        self.roster.data_root.display()
+                    ),
+                };
+                return list
+                    .items_center()
+                    .justify_center()
+                    .child(empty_state(i18n::t("没有可用的 Bot"), detail));
+            }
+            // 会话还在建立：用骨架占位（DS §10.9：不用转圈）。
+            return list.justify_center().child(skeleton_rows());
+        };
+        if let Some(bot) = &bot
+            && chat.messages.is_empty() && chat.ready {
+                // 首屏欢迎区（照原版 ChatArea）：时间、Bot 头像/名字/角色、欢迎泡、提示与三条建议。
+                let now = time::now_ms();
+                let role = bot.role.clone();
+                let welcome = tri!(
+                    "你好，我是{}。直接把活儿派给我，或去频道里和大家一起推进。",
+                    "Hi, I am {}. Give me work directly, or head to a channel and we will push it together.",
+                    bot.name
+                );
+                let bubble_max = ((column_width - 38.) * (self.message_width as f32 / 100.0))
+                    .min(BUBBLE_MAX_WIDTH);
+                let suggestions = [
+                    i18n::t("先做一次发布前走查"),
+                    i18n::t("把这次需求拆成可执行任务"),
+                    i18n::t("总结一下最近的进展"),
+                ];
+                let mut chips = div().mt(px(12.)).flex().flex_wrap().gap(px(8.));
+                for (index, text) in suggestions.into_iter().enumerate() {
+                    chips = chips.child(
+                        div()
+                            .id(SharedString::from(format!("welcome-suggestion-{index}")))
+                            .h(px(28.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::composer())
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(theme::ink_secondary())
+                            .hover(|style| style.bg(theme::raised()).text_color(theme::ink()))
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                this.input
+                                    .update(cx, |input, cx| input.set_content(text, cx));
+                                let handle = this.input.read(cx).focus_handle(cx);
+                                handle.focus(window, cx);
+                                cx.notify();
+                            }))
+                            .child(SharedString::from(text)),
+                    );
+                }
+                return list.child(
+                    div()
+                        .w(px(column_width))
+                        .mx_auto()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .w_full()
+                                .mb(px(16.))
+                                .text_center()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .text_color(theme::ink_tertiary())
+                                .child(SharedString::from(tri!(
+                                    "今天 {}",
+                                    "Today {}",
+                                    time::format_hm(now)
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .gap(px(10.))
+                                .child(avatar::bot_avatar(&bot.id, 28.))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(8.))
+                                                .child(
+                                                    div()
+                                                        .font_family(theme::FONT_FAMILY)
+                                                        .text_size(px(13.))
+                                                        .line_height(px(18.))
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .text_color(theme::ink())
+                                                        .child(SharedString::from(bot.name.clone())),
+                                                )
+                                                .children((!role.is_empty()).then(|| {
+                                                    div()
+                                                        .font_family(theme::FONT_FAMILY)
+                                                        .text_size(px(11.))
+                                                        .line_height(px(16.))
+                                                        .text_color(theme::ink_tertiary())
+                                                        .child(SharedString::from(role.clone()))
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt(px(4.))
+                                                .max_w(px(bubble_max))
+                                                .rounded(px(theme::RADIUS_BUBBLE))
+                                                .bg(theme::bubble_assistant())
+                                                .px(px(14.))
+                                                .py(px(8.))
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(14.))
+                                                .line_height(px(24.))
+                                                .text_color(theme::ink())
+                                                .child(SharedString::from(welcome)),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt(px(8.))
+                                                .px(px(4.))
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(11.))
+                                                .line_height(px(16.))
+                                                .text_color(theme::ink_tertiary())
+                                                .child(i18n::t("今天想先推进哪件事？")),
+                                        )
+                                        .child(chips),
+                                ),
+                        ),
+                );
+            }
+        if bot.is_some() && chat.messages.is_empty() && !chat.ready {
+                // 已有会话条目但首帧历史未回：骨架占位，别显示空欢迎区。
+                return list.justify_center().child(skeleton_rows());
+            }
+
+        let chat_window = chat.transcript_limit;
+        let messages = std::mem::take(&mut chat.messages);
+        let mut column = div()
+            .w(px(column_width))
+            .mx_auto()
+            .flex()
+            .flex_col()
+            .gap(px(10.));
+        let chat_key = key.clone().unwrap_or_default();
+        let start = messages.len().saturating_sub(chat_window);
+        if start > 0 {
+            column = column.child(load_earlier_row(&chat_key, start, cx));
+        }
+        let mut last_day: Option<String> = None;
+        for (index, message) in messages.iter().enumerate().skip(start) {
+            if message.kind == MsgKind::Tool {
+                column = column.child(tool_card(message));
+                continue;
+            }
+            if message.kind == MsgKind::Reasoning {
+                continue;
+            }
+            if message.at > 0 {
+                let day = time::format_day(message.at);
+                if last_day.as_deref() != Some(day.as_str()) {
+                    column = column.child(day_separator(message.at));
+                    last_day = Some(day);
+                }
+            }
+            let is_user = message.role == Role::User;
+            // 取消可能发生在首个 token 之前：收尾后占位气泡没有内容，不再渲染。
+            if !is_user && message.text.is_empty() && !message.streaming {
+                continue;
+            }
+            let text = if message.text.is_empty() && message.streaming {
+                "…".to_string()
+            } else {
+                message.text.clone()
+            };
+            let bubble = div()
+                .rounded(px(theme::RADIUS_BUBBLE))
+                .px(px(14.))
+                .py(px(8.))
+                .font_family(theme::FONT_FAMILY);
+            let bubble = if is_user {
+                bubble
+                    .text_size(px(14.))
+                    .line_height(px(24.))
+                    .child(user_text_with_mentions(&text, &private_mention_names))
+                    .children(message_attachments(&message.attachments))
+                } else {
+                    // 助手侧交给 gpui-kit 的 Markdown TextView（GFM/表格/代码块/选择复制）。
+                    bubble
+                        .text_color(theme::ink())
+                        .child(kit_markdown_el(
+                            format!("classic-private-md-{index}"),
+                            &message.text,
+                            false,
+                        ))
+                };
+            let styled = match message.role {
+                Role::User => bubble.bg(theme::bubble_user()).text_color(theme::bubble_user_ink()),
+                Role::Assistant => bubble.bg(theme::bubble_assistant()),
+            };
+            let author = if message.role == Role::User {
+                i18n::t("你").to_string()
+            } else {
+                bot.as_ref().map(|bot| bot.name.clone()).unwrap_or_default()
+            };
+            let author_color = private_author_color;
+            let author_id = if message.role == Role::User {
+                "you".to_string()
+            } else {
+                bot.as_ref().map(|bot| bot.id.clone()).unwrap_or_default()
+            };
+            let row = message_row(
+                message,
+                styled,
+                bubble_max,
+                Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)),
+                author,
+                author_id,
+                author_color,
+                SharedString::from(format!("msg-p-{}", index)),
+            );
+            column = column.child(row);
+        }
+        chat.messages = messages;
+        list.child(column)
+    }
+
+    /// 当前会话（Bot）是否由 Mode Agent 执行——附件只在 v4 链路上可用。
+    fn current_engine_is_mode(&self) -> bool {
+        if self.selected_group().is_some() {
+            return true;
+        }
+        let selected = self
+            .selected_bot()
+            .and_then(|bot| self.sessions.engine_of(&bot.id));
+        backend::engine_is_mode(selected)
+    }
+
+    /// 选文件并读入待发附件（仅 v4 会话面；单文件 ≤ 20MiB）。
+    fn stage_attachments(&mut self, cx: &mut Context<Self>) {
+        if !self.attachments_allowed(cx) {
+            return;
+        }
+        // 原生对话框会跑自己的消息循环，不能占着 gpui 的 App 借用同步调用
+        // （RefCell already borrowed panic）。放后台线程，选完回 UI 线程入队。
+        cx.spawn(async move |this, cx| {
+            let paths = cx
+                .background_executor()
+                .spawn(async move { file_dialog::pick_files() })
+                .await;
+            if paths.is_empty() {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.stage_attachment_paths(paths, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 附件前置检查（文件选择与拖拽共用）。
+    fn attachments_allowed(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.current_engine_is_mode() {
+            self.toast(i18n::t("当前智能体引擎暂不支持附件"), cx);
+            return false;
+        }
+        let Some(key) = self.active_key() else {
+            return false;
+        };
+        self.chats.contains_key(&key)
+    }
+
+    /// 把本地路径读成附件；图片额外记一个预览路径（缩略图用）。
+    fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>) {
+        if !self.attachments_allowed(cx) {
+            return;
+        }
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let mut staged = Vec::new();
+        let mut first_error = None;
+        for path in paths {
+            match std::fs::read(&path) {
+                Ok(bytes) if bytes.len() > 20 * 1024 * 1024 => {
+                    first_error.get_or_insert_with(|| tri!("{path} 超过 20MiB", "{path} exceeds 20 MiB"));
+                }
+                Ok(bytes) => {
+                    let name = std::path::Path::new(&path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.clone());
+                    let mime = file_dialog::mime_for(&path).to_string();
+                    let preview = mime
+                        .starts_with("image/")
+                        .then(|| std::path::PathBuf::from(&path));
+                    staged.push((
+                        backend::AttachmentUpload {
+                            file_name: name,
+                            mime,
+                            bytes,
+                        },
+                        preview,
+                    ));
+                }
+                Err(error) => {
+                    first_error.get_or_insert_with(|| tri!("{path} 读取失败（{error}）", "Failed to read {path} ({error})"));
+                }
+            }
+        }
+        if let Some(chat) = self.chats.get_mut(&key) {
+            for (upload, preview) in staged {
+                chat.pending_attachments.push(upload);
+                chat.pending_attachment_previews.push(preview);
+            }
+        }
+        if let Some(message) = first_error {
+            self.toast(message, cx);
+        }
+        cx.notify();
+    }
+
+    /// 截图/复制图片后点剪刀：从剪贴板取图片，写临时 PNG 作预览，再作为附件发送。
+    fn paste_clipboard_image(&mut self, cx: &mut Context<Self>) {
+        if !self.attachments_allowed(cx) {
+            return;
+        }
+        let Some(item) = cx.read_from_clipboard() else {
+            self.toast(i18n::t("剪贴板里没有图片"), cx);
+            return;
+        };
+        let Some(image) = item.entries.into_iter().find_map(|entry| match entry {
+            gpui::ClipboardEntry::Image(image) => Some(image),
+            _ => None,
+        }) else {
+            self.toast(i18n::t("剪贴板里没有图片（先截图或复制图片）"), cx);
+            return;
+        };
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        if image.bytes.len() > 20 * 1024 * 1024 {
+            self.toast(i18n::t("剪贴板图片超过 20MiB"), cx);
+            return;
+        }
+        // Windows 剪贴板给的是 BMP；部分模型读不了 BMP（实测红色图被读成白色），
+        // 统一转 PNG 再上传，预览文件也用同一份。
+        let (bytes, extension, mime) = if image.format.mime_type() == "image/bmp" {
+            match transcode_image_to_png(&image.bytes) {
+                Some(png) => (png, "png", "image/png"),
+                None => (image.bytes, "bmp", "image/bmp"),
+            }
+        } else {
+            (image.bytes, image.format.extension(), image.format.mime_type())
+        };
+        let preview_dir = std::env::temp_dir().join("mode-bot-gpui-attachments");
+        let _ = std::fs::create_dir_all(&preview_dir);
+        let preview_path = preview_dir.join(format!(
+            "paste-{}.{}",
+            time::now_ms(),
+            extension
+        ));
+        let preview = match std::fs::write(&preview_path, &bytes) {
+            Ok(()) => Some(preview_path),
+            Err(_) => None,
+        };
+        if let Some(chat) = self.chats.get_mut(&key) {
+            chat.pending_attachments.push(backend::AttachmentUpload {
+                file_name: format!("screenshot-{}.{}", time::now_ms(), extension),
+                mime: mime.to_string(),
+                bytes,
+            });
+            chat.pending_attachment_previews.push(preview);
+        }
+        cx.notify();
+    }
+
+    fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        if let Some(chat) = self.chats.get_mut(&key) {
+            if index < chat.pending_attachments.len() {
+                chat.pending_attachments.remove(index);
+            }
+            if index < chat.pending_attachment_previews.len() {
+                chat.pending_attachment_previews.remove(index);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 待发附件 chips（输入卡上方；没有附件时不渲染）。
+    fn attachment_chips(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let chat = self.chats.get(&key)?;
+        if chat.pending_attachments.is_empty() {
+            return None;
+        }
+        let mut row = div()
+            .w_full()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.));
+        for (index, attachment) in chat.pending_attachments.iter().enumerate() {
+            let preview = chat
+                .pending_attachment_previews
+                .get(index)
+                .cloned()
+                .flatten();
+            let remove = div()
+                .id(SharedString::from(format!("attach-remove-{index}")))
+                .size(px(18.))
+                .rounded(px(4.))
+                .bg(theme::card())
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.remove_attachment(index, cx);
+                }))
+                .child(icons::icon(icons::Icon::X, 10., theme::ink_tertiary()));
+            if let Some(path) = preview {
+                row = row.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("attach-preview-{index}")))
+                                .size(px(52.))
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .overflow_hidden()
+                                .cursor_pointer()
+                                .on_click(cx.listener({
+                                    let path = path.clone();
+                                    move |this, _event, _window, cx| {
+                                        this.image_preview = Some(path.clone());
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(
+                                    img(path)
+                                        .size_full()
+                                        .object_fit(gpui::ObjectFit::Cover),
+                                ),
+                        )
+                        .child(remove),
+                );
+            } else {
+                row = row.child(
+                    div()
+                        .h(px(26.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme::edge())
+                        .bg(theme::card())
+                        .pl(px(8.))
+                        .pr(px(4.))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(icons::icon(icons::Icon::Paperclip, 12., theme::ink_tertiary()))
+                        .child(
+                            div()
+                                .max_w(px(220.))
+                                .truncate()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(theme::ink_secondary())
+                                .child(SharedString::from(attachment.file_name.clone())),
+                        )
+                        .child(remove),
+                );
+            }
+        }
+        Some(row.into_any_element())
+    }
+
+    /// 发送失败条：错误文案 + 重试（重发 `last_sent`，不改草稿历史）。
+    fn error_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let chat = self.chats.get(&key)?;
+        if !chat.error {
+            return None;
+        }
+        let status = chat.status.clone();
+        let retry_key = key.clone();
+        Some(
+            div()
+                .w_full()
+                .rounded(px(theme::RADIUS_MENU))
+                .border_1()
+                .border_color(theme::danger())
+                .bg(theme::card())
+                .px(px(12.))
+                .py(px(8.))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(theme::ink_secondary())
+                        .truncate()
+                        .child(SharedString::from(status)),
+                )
+                .child(
+                    div()
+                        .id("composer-retry")
+                        .h(px(28.))
+                        .rounded_full()
+                        .bg(theme::hover())
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme::raised()))
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            let text = this
+                                .chats
+                                .get(&retry_key)
+                                .and_then(|chat| chat.last_sent.clone());
+                            if let Some(text) = text {
+                                this.input
+                                    .update(cx, |input, cx| input.set_content(text, cx));
+                                this.send_current(window, cx);
+                            }
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme::ink())
+                                .child(i18n::t("重试")),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn composer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 焦点环：输入卡聚焦时描边换成 ink 30%（DS `[data-composer-card]:focus-within`；
+        // accent 描边留给真正的输入框，卡壳只用中性描边，否则浅色下蓝框太重）。
+        let input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
+        let input_border = if input_focused {
+            theme::ink_line()
+        } else {
+            theme::edge()
+        };
+        let plus_focus = self.tab_focus["composer-plus"].clone();
+        let attach_focus = self.tab_focus["composer-attach"].clone();
+        let attach_focused = attach_focus.is_focused(window);
+        let send_focus = self.tab_focus["composer-send"].clone();
+        let plus_focused = plus_focus.is_focused(window);
+        let send_focused = send_focus.is_focused(window);
+        let is_bot = self.selected_bot().is_some();
+        let is_group = self.selected_group().is_some();
+        let chat = self.active_key().and_then(|key| self.chats.get(&key));
+        let ready = chat.is_some_and(|chat| chat.ready);
+        let streaming = chat.is_some_and(|chat| chat.streaming);
+        let pending_approval = chat
+            .is_some_and(|chat| !chat.permissions.is_empty() || !chat.questions.is_empty());
+        let has_attachments = chat.is_some_and(|chat| !chat.pending_attachments.is_empty());
+        let multiline = self.input.read(cx).content().contains('\n');
+        let send_enabled = (is_bot || is_group)
+            && ready
+            && !streaming
+            && !pending_approval
+            && !chat.is_some_and(|chat| chat.elicitations.iter().any(|pending| !pending.sent))
+            && (!self.input.read(cx).content().trim().is_empty() || has_attachments);
+        if !is_bot && !is_group {
+            return div()
+                .w_full()
+                .max_w(px(1008.))
+                .mx_auto()
+                .px(px(24.))
+                .pb(px(20.))
+                .flex_shrink_0()
+                .min_h(px(44.))
+                .rounded(px(theme::RADIUS_FIELD))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::composer_card())
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .text_color(theme::ink_tertiary())
+                        .child(i18n::t("频道会话需要 v4 群聊编排，试点暂不支持发送")),
+                );
+        }
+        let quote = chat.and_then(|chat| chat.quote.clone());
+        let composer_key = self.active_key().unwrap_or_default();
+        let hint = if !ready {
+            i18n::t("正在建立会话…")
+        } else if chat.is_some_and(|chat| !chat.questions.is_empty()) {
+            i18n::t("请先回答上方提问")
+        } else if chat.is_some_and(|chat| chat.elicitations.iter().any(|pending| !pending.sent)) {
+            i18n::t("请先填写上方表单")
+        } else if pending_approval {
+            i18n::t("请先处理上方审批")
+        } else if is_group {
+            i18n::t("Enter 发送 · @成员名 点名 · 管理员默认接话")
+        } else {
+            i18n::t("Enter 发送 · Shift+Enter 换行")
+        };
+
+        div()
+            .w_full()
+            .max_w(px(1008.))
+            .mx_auto()
+            .px(px(24.))
+            .pb(px(20.))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .children(quote.map(|(author, body)| {
+                let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+                let short: String = flat.chars().take(80).collect();
+                let key = composer_key.clone();
+                div()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme::edge())
+                    .bg(theme::raised())
+                    .px(px(10.))
+                    .py(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_secondary())
+                            .truncate()
+                            .child(SharedString::from(tri!("引用 {author}：{short}", "Quoted {author}: {short}"))),
+                    )
+                    .child(
+                        div()
+                            .id("quote-clear")
+                            .size(px(18.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_color(theme::ink_tertiary())
+                            .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Some(chat) = this.chats.get_mut(&key) {
+                                    chat.quote = None;
+                                }
+                                cx.notify();
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::X,
+                                12.,
+                                theme::ink_tertiary(),
+                            )),
+                    )
+            }))
+            .children(self.mention_panel(cx))
+            .children(self.attachment_chips(cx))
+            .children(self.error_bar(cx))
+            .child(
+                div()
+                    .min_h(px(44.))
+                    .rounded(px(composer_radius(multiline, has_attachments)))
+                    .bg(theme::composer_card())
+                    .border_1()
+                    .border_color(input_border)
+                    .shadow({
+                        let mut shadows = vec![theme::ring_4()];
+                        shadows.extend(theme::shadow_1());
+                        shadows
+                    })
+                    .flex()
+                    .items_end()
+                    .gap(px(8.))
+                    .p(px(8.))
+                    .child(
+                        div()
+                            .id("composer-plus")
+                            .track_focus(&plus_focus)
+                            .key_context("TabStop")
+                            .when(plus_focused, |el| el.bg(theme::accent_soft()))
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
+                                this.on_palette_shortcut(&PaletteShortcut, window, cx);
+                            }))
+                            .size(px(28.))
+                            .mb(px(8.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::subtle())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_color(theme::ink_tertiary())
+                            .hover(|style| style.bg(theme::subtle_hover()).text_color(theme::ink()))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                // 与 Ctrl+P 同一条路径：胶囊左侧的「+」直接开命令面板。
+                                this.on_palette_shortcut(&PaletteShortcut, window, cx);
+                            }))
+                            .child(icons::icon(icons::Icon::Plus, 16., theme::ink_secondary())),
+                    )
+                    .children(self.current_engine_is_mode().then(|| {
+                        div()
+                            .id("composer-attach")
+                            .track_focus(&attach_focus)
+                            .key_context("TabStop")
+                            .when(attach_focused, |el| el.bg(theme::accent_soft()))
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, _window, cx| {
+                                this.stage_attachments(cx);
+                            }))
+                            .size(px(28.))
+                            .mb(px(8.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::subtle())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_color(theme::ink_tertiary())
+                            .hover(|style| style.bg(theme::subtle_hover()).text_color(theme::ink()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.stage_attachments(cx);
+                            }))
+                            .child(icons::icon(icons::Icon::Paperclip, 15., theme::ink_secondary()))
+                    }))
+                    .child(
+                        div()
+                            .id("composer-input")
+                            .key_context("Composer")
+                            .flex_1()
+                            .min_w(px(0.))
+                            .max_h(px(140.))
+                            .overflow_hidden()
+                            .py(px(8.))
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(14.))
+                            .line_height(px(22.))
+                            .text_color(theme::ink())
+                            .child(self.input.clone()),
+                    )
+                    .child(
+                        div()
+                            .id(if streaming {
+                                "pilot-stop"
+                            } else {
+                                "pilot-send"
+                            })
+                            .track_focus(&send_focus)
+                            .key_context("TabStop")
+                            .when(send_focused, |el| el.border_1().border_color(theme::accent()))
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
+                                if this.active_key().is_some_and(|key| {
+                                    this.chats.get(&key).is_some_and(|chat| chat.streaming)
+                                }) {
+                                    this.stop_streaming(cx);
+                                    return;
+                                }
+                                this.send_current(window, cx);
+                            }))
+                            .size(px(28.))
+                            .mb(px(8.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(if streaming {
+                                theme::danger()
+                            } else {
+                                theme::accent()
+                            })
+                            .opacity(if streaming || send_enabled { 1.0 } else { 0.35 })
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                if this.active_key().is_some_and(|key| {
+                                    this.chats.get(&key).is_some_and(|chat| chat.streaming)
+                                }) {
+                                    this.stop_streaming(cx);
+                                    return;
+                                }
+                                this.send_current(window, cx);
+                            }))
+                            .child(icons::icon(
+                                if streaming {
+                                    icons::Icon::Stop
+                                } else {
+                                    icons::Icon::ArrowUp
+                                },
+                                14.,
+                                theme::accent_ink(),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_tertiary())
+                    .child(hint),
+            )
+    }
+
+    fn right_panel(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let bot = self.selected_bot().cloned();
+        let group = self.selected_group().cloned();
+        let (name, subtitle, avatar_id, is_group) = if let Some(bot) = &bot {
+            (
+                bot.name.clone(),
+                if bot.role.is_empty() {
+                    "Bot".to_string()
+                } else {
+                    bot.role.clone()
+                },
+                bot.id.clone(),
+                false,
+            )
+        } else if let Some(group) = &group {
+            (
+                group.name.clone(),
+                count_members(group.member_ids.len()),
+                group.id.clone(),
+                true,
+            )
+        } else {
+            (
+                i18n::t("未选择").to_string(),
+                String::new(),
+                "mode-bot".to_string(),
+                false,
+            )
+        };
+        let tabs = [i18n::t("详情"), i18n::t("浏览器"), i18n::t("电脑操控")];
+        let (status, _) = self.chat_status();
+        let gear_focus = self.tab_focus["panel-gear"].clone();
+        let more_focus = self.tab_focus["panel-more"].clone();
+        let tab_focus: Vec<gpui::FocusHandle> = ["panel-tab-0", "panel-tab-1", "panel-tab-2"]
+            .into_iter()
+            .map(|name| self.tab_focus[name].clone())
+            .collect();
+
+        let detail: Option<gpui::AnyElement> = if self.active_tab != 0 {
+            Some(self.control_card(self.active_tab, cx).into_any_element())
+        } else if let Some(bot) = &bot {
+            let new_chat_button = div()
+                .flex()
+                .justify_end()
+                .child(
+                    div()
+                        .id("detail-new-session")
+                        .h(px(28.))
+                        .rounded_full()
+                        .bg(theme::hover())
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .text_color(theme::ink_secondary())
+                        .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                        .on_click(cx.listener({
+                            let bot_id = bot.id.clone();
+                            let directory = bot.directory.clone();
+                            let identity = bot.identity();
+                            let model = bot.model.clone();
+                            move |this, _event, _window, cx| {
+                                // 旧会话移入历史列表；新会话成为主槽位
+                                let key = bot_key(&bot_id);
+                                if let Some(chat) = this.chats.get(&key)
+                                    && let Some(old_id) = &chat.session_id
+                                {
+                                    this.sessions.push_history(&bot_id, old_id);
+                                }
+                                this.chats.remove(&key);
+                                let workspace = if directory.trim().is_empty() {
+                                    backend::fallback_workspace().to_string_lossy().into_owned()
+                                } else {
+                                    directory.clone()
+                                };
+                                let engine = this
+                                    .sessions
+                                    .engine_of(&bot_id)
+                                    .map(str::to_string);
+                                this.backend.new_session(
+                                    key,
+                                    workspace,
+                                    identity.clone(),
+                                    model.clone(),
+                                    engine,
+                                );
+                                cx.notify();
+                            }
+                        }))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme::ink())
+                                .child(i18n::t("新会话")),
+                        ),
+                );
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(new_chat_button)
+                    .child(bot_details(
+                        bot,
+                        self.chats.get(&bot_key(&bot.id)),
+                        &self.sessions.history_of(&bot.id),
+                        &self.sessions,
+                        cx,
+                    ))
+                    .into_any_element(),
+            )
+        } else if let Some(group) = &group {
+            let group_id = group.id.clone();
+            Some(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(group_details(group, &self.roster))
+                    .child(self.group_memory_section(&group_id, cx))
+                    .into_any_element(),
+            )
+        } else {
+            Some(
+                div()
+                    .w_full()
+                    .pt(px(24.))
+                    .child(empty_state(
+                        i18n::t("空名册"),
+                        self.roster.data_root.display().to_string(),
+                    ))
+                    .into_any_element(),
+            )
+        };
+
+        div()
+            .w(px(PANEL_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .bg(theme::panel())
+            .px(px(16.))
+            .pt(px(20.))
+            .pb(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(4.))
+                    .child(
+                        icon_button("panel-settings", icons::Icon::Settings)
+                            .track_focus(&gear_focus)
+                            .key_context("TabStop")
+                            .when(gear_focus.is_focused(window), |el| {
+                                el.bg(theme::accent_soft())
+                            })
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
+                                this.settings_open = true;
+                                this.automations_view = None;
+                                this.pending_bot_dialog = None;
+                                this.settings_focus.clone().focus(window, cx);
+                                cx.notify();
+                            }))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.settings_open = true;
+                                this.automations_view = None;
+                                this.pending_bot_dialog = None;
+                                this.settings_focus.clone().focus(window, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        icon_button("panel-more", icons::Icon::Ellipsis)
+                            .track_focus(&more_focus)
+                            .key_context("TabStop")
+                            .when(more_focus.is_focused(window), |el| {
+                                el.bg(theme::accent_soft())
+                            })
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
+                                if this.selection.is_some() {
+                                    this.detail_menu_open = !this.detail_menu_open;
+                                    this.menu_selected = 0;
+                                    if this.detail_menu_open {
+                                        this.menu_focus.clone().focus(window, cx);
+                                    }
+                                }
+                                cx.notify();
+                            }))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                // 无选中条目时菜单没有作用目标，不展开。
+                                if this.selection.is_some() {
+                                    this.detail_menu_open = !this.detail_menu_open;
+                                    this.menu_selected = 0;
+                                    // 菜单要拿焦点：否则 ↑/↓ 被输入框吞掉、Enter 直接发出消息。
+                                    if this.detail_menu_open {
+                                        this.menu_focus.clone().focus(window, cx);
+                                    }
+                                }
+                                cx.notify();
+                            })),
+                    )
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(if is_group {
+                        avatar::channel_avatar(&avatar_id, 64.).into_any_element()
+                    } else {
+                        avatar::bot_avatar(&avatar_id, 64.).into_any_element()
+                    })
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(17.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme::ink())
+                            .child(SharedString::from(name)),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(theme::ink_tertiary())
+                            .child(SharedString::from(subtitle)),
+                    )
+                    // 身份标签放头部：属于「这是谁」，也不再占右栏详情的高度。
+                    .children({
+                        let mut tags: Vec<&'static str> = Vec::new();
+                        if let Some(bot) = &bot {
+                            if bot.is_chief {
+                                tags.push(i18n::t("团队管理员"));
+                            }
+                            if bot.identity_sync {
+                                tags.push(i18n::t("身份同步"));
+                            }
+                        }
+                        (!tags.is_empty()).then(|| {
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .justify_center()
+                                .gap(px(4.))
+                                .children(tags.into_iter().map(|label| {
+                                    div()
+                                        .rounded(px(5.))
+                                        .bg(theme::raised())
+                                        .px(px(6.))
+                                        .py(px(1.))
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(11.))
+                                        .text_color(theme::ink_tertiary())
+                                        .child(label)
+                                }))
+                        })
+                    }),
+            )
+            .child(
+                // DS `.bt-tabs` / `.bt-tab`：胶囊 tab，13/20、4×8 内边距、间距 2，
+                // 选中态用 hover 底（不描边、不加下划线）。
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(2.))
+                    .children(tabs.iter().enumerate().map(|(index, label)| {
+                        let active = self.active_tab == index;
+                        let focus = tab_focus[index].clone();
+                        let focused = focus.is_focused(window);
+                        div()
+                            .id(("panel-tab", index))
+                            .track_focus(&focus)
+                            .key_context("TabStop")
+                            .when(focused, |el| el.bg(theme::accent_soft()))
+                            .on_action(cx.listener(move |this, _: &ActivateTabStop, _window, cx| {
+                                this.active_tab = index;
+                                cx.notify();
+                            }))
+                            .rounded_full()
+                            .px(px(8.))
+                            .py(px(4.))
+                            .cursor_pointer()
+                            .bg(if active {
+                                theme::raised()
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .when(active, |el| el.shadow(theme::shadow_1()))
+                            .hover(|style| style.bg(theme::hover()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.active_tab = index;
+                            cx.notify();
+                        }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(13.))
+                                    .line_height(px(20.))
+                                    .text_color(if active {
+                                        theme::ink()
+                                    } else {
+                                        theme::ink_secondary()
+                                    })
+                                    .child(i18n::t(label)),
+                            )
+                    })),
+            )
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(self.status_color())
+                    .truncate()
+                    .child(SharedString::from(status)),
+            )
+            .child(
+                // 不加 overflow（`overflow_hidden` / `overflow_y_scroll` 在本 gpui
+                // 版本会让容器内子元素点不动——历史行与审批档位实测）。内容按一屏
+                // 设计；超出部分落到窗口外，不会压住上面的状态行。
+                div()
+                    .id("pilot-detail")
+                    .flex_1()
+                    .min_h(px(0.))
+                    // 滚动而不是裁切：右栏内容在最小窗口（900×600）放不下，用户要能滚。
+                    // 2026-11-14 复核：`overflow_y_scroll` 不影响子元素命中（此前「overflow
+                    // 导致点不动」是 CUA 坐标测量偏差），滚轮在窗口激活时正常。
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .children(detail),
+            )
+    }
+}
+
+/// 快捷键打点（`BOT_PILOT_DEBUG=1` 时输出到 stderr，真机验收用）。
+fn debug_action(name: &str) {
+    if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+        eprintln!("[action] {name}");
+    }
+}
+
+/// 审批选项文案中文化：CLI 给的是 `allow_once` / `allow_project` / `deny` 这类
+/// 机器可读标签，直接上屏是英文。按「标签关键词优先、kind 兜底」映射，认不出时保留原文。
+fn approval_option_label(kind: &str, label: &str) -> String {
+    let probe = format!("{} {}", label.to_ascii_lowercase(), kind.to_ascii_lowercase());
+    let has = |needle: &str| probe.contains(needle);
+    if has("deny") || has("reject") || has("cancel") {
+        i18n::t("拒绝").to_string()
+    } else if has("always") || has("project") || has("session") {
+        i18n::t("始终允许").to_string()
+    } else if has("once") {
+        i18n::t("允许一次").to_string()
+    } else if has("allow") {
+        i18n::t("允许").to_string()
+    } else {
+        label.to_string()
+    }
+}
+
+/// 审批档位说明（与 WebView 的 desc 文案对齐）。
+fn approval_note(level: &str) -> &'static str {
+    match level {
+        "auto" => i18n::t("只读工具自动放行；写操作仍会询问。"),
+        "full" => i18n::t("工作区内自动执行；Bash/MCP 仍会询问。"),
+        _ => i18n::t("每个工具调用都先询问。"),
+    }
+}
+
+/// 卡头成员归属标签（复用群气泡标签样式：10px 次级文字）。
+fn member_label(member: &Option<String>) -> Option<gpui::AnyElement> {
+    let name = member.as_deref()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .font_family(theme::FONT_FAMILY)
+            .text_size(px(11.))
+            .text_color(theme::ink_tertiary())
+            .child(SharedString::from(tri!("来自 {name}", "From {name}")))
+            .into_any_element(),
+    )
+}
+
+/// 当前选中的条目 id（名册重载前捕获，重载后按 id 恢复选中）。
+fn selected_ids(app: &PilotApp) -> (Option<String>, Option<String>) {
+    match app.selection {
+        Some(Selection::Bot(index)) => (
+            app.roster.bots.get(index).map(|bot| bot.id.clone()),
+            None,
+        ),
+        Some(Selection::Group(index)) => (
+            None,
+            app.roster
+                .groups
+                .get(index)
+                .map(|group| group.id.clone()),
+        ),
+        None => (None, None),
+    }
+}
+
+fn bot_details(
+    bot: &Bot,
+    chat: Option<&ChatState>,
+    histories: &[String],
+    sessions: &state::SessionStore,
+    cx: &mut Context<PilotApp>,
+) -> impl IntoElement {
+    let model = bot
+        .model
+        .as_ref()
+        .map(model_label)
+        .unwrap_or_else(|| i18n::t("跟随 Bot 默认").to_string());
+    let live_session = chat.and_then(|chat| chat.session_id.clone());
+    let session = live_session
+        .as_ref()
+        .map(|id| short_session(id))
+        .or_else(|| bot.last_session_id.as_ref().map(|id| short_session(id)));
+    let session_note = if live_session.is_some() {
+        i18n::t("本次会话")
+    } else if session.is_some() {
+        i18n::t("上次会话")
+    } else {
+        i18n::t("暂无会话记录")
+    };
+    let directory = if bot.directory.is_empty() {
+        i18n::t("未绑定目录（回落到试点默认）").to_string()
+    } else {
+        bot.directory.clone()
+    };
+
+    let mut rows = div().flex().flex_col().gap(px(8.)).child(section_label(i18n::t("模型")));
+    rows = rows.child(
+        div()
+            .id("model-pick")
+            .h(px(32.))
+            .w_full()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme::edge())
+            .bg(theme::card())
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.))
+            .cursor_pointer()
+            .hover(|style| style.bg(theme::hover()))
+            .on_click(cx.listener({
+                let bot_id = bot.id.clone();
+                move |this, _event, _window, cx| {
+                    this.pending_model_dialog = Some(bot_id.clone());
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .text_color(theme::ink())
+                    .truncate()
+                    .child(SharedString::from(model)),
+            )
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .text_color(theme::ink_tertiary())
+                    .child(i18n::t("更换")),
+            ),
+    );
+    // 审批策略：三档与 WebView `ApprovalPolicySelect` 同语义，点选即写回名册。
+    rows = rows.child(section_label(i18n::t("审批策略")));
+    {
+        let bot_id = bot.id.clone();
+        let current = bot.approval_level.clone();
+        let mut pills = div().flex().flex_wrap().gap(px(5.));
+        for (level, label) in [
+            ("ask", i18n::t("每次询问")),
+            ("auto", i18n::t("自动只读")),
+            ("full", i18n::t("工作区自动")),
+        ] {
+            let active = current == level;
+            let bot_id = bot_id.clone();
+            pills = pills.child(
+                div()
+                    .id(SharedString::from(format!("approval-{}-{}", bot.id, level)))
+                    .h(px(24.))
+                    .rounded(px(theme::RADIUS_SEGMENT))
+                    .border_1()
+                    .border_color(if active { theme::accent() } else { theme::edge() })
+                    .bg(if active { theme::raised() } else { theme::card() })
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        if let Err(message) = data::set_bot_approval_level(&bot_id, level) {
+                            eprintln!("[approval] 保存失败：{message}");
+                        }
+                        let keep = selected_ids(this);
+                        this.roster = Roster::load();
+                        this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .text_color(if active { theme::ink() } else { theme::ink_secondary() })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+        rows = rows.child(pills);
+        rows = rows.child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .line_height(px(16.))
+                .text_color(theme::ink_tertiary())
+                .child(approval_note(&bot.approval_level)),
+        );
+        let allowlist_count = bot.approval_allowlist.len();
+        rows = rows.child(
+            div()
+                .id("allowlist-open")
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .cursor_pointer()
+                .on_click(cx.listener({
+                    let bot_id = bot.id.clone();
+                    move |this, _event, _window, cx| {
+                        this.pending_allowlist_dialog = Some(bot_id.clone());
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(theme::ink_tertiary())
+                        .child(SharedString::from(if allowlist_count == 0 {
+                            i18n::t("白名单：无 · 编辑").to_string()
+                        } else {
+                            tri!("白名单：{allowlist_count} 项 · 编辑", "Allowlist: {allowlist_count} items · Edit")
+                        })),
+                ),
+        );
+    }
+    rows = rows.child(section_label(i18n::t("最近会话")));
+    rows = rows.child(if let Some(session) = session {
+        let label = sessions
+            .title(&session)
+            .map(str::to_string)
+            .unwrap_or_else(|| session.clone());
+        kv_row(label, session_note).into_any_element()
+    } else {
+        hint_row(session_note).into_any_element()
+    });
+    // 历史会话列表：点行切换 resume 到对应会话（当前主会话不重复出现）。
+    // 最多展示 3 条：右栏一屏放得下（gpui 的右栏滚动在本版本不生效，超出的条目在
+    // WebView 设置 → Bot 页仍可见）。
+    const HISTORY_ROWS: usize = 2;
+    let visible: Vec<&String> = histories
+        .iter()
+        .filter(|id| live_session.as_deref() != Some(id.as_str()))
+        .collect();
+    let overflow = visible.len().saturating_sub(HISTORY_ROWS);
+    for history_id in visible.into_iter().take(HISTORY_ROWS) {
+        if live_session.as_deref() == Some(history_id.as_str()) {
+            continue;
+        }
+        let session_id = history_id.clone();
+        let bot_id = bot.id.clone();
+        let workspace = if bot.directory.trim().is_empty() {
+            backend::fallback_workspace().to_string_lossy().into_owned()
+        } else {
+            bot.directory.clone()
+        };
+        let identity = bot.identity();
+        let model = bot.model.clone();
+        let label = sessions
+            .title(history_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| short_session(history_id));
+        let rename_id = history_id.clone();
+        rows = rows.child(
+            div()
+                .id(SharedString::from(format!("hist-{}", history_id)))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    let key = bot_key(&bot_id);
+                    // 旧主会话移入历史（目标会话已在历史里，切完由渲染层过滤）。
+                    if let Some(chat) = this.chats.get(&key)
+                        && let Some(current) = chat.session_id.clone()
+                        && current != session_id
+                    {
+                        this.sessions.push_history(&bot_id, &current);
+                        this.sessions.save();
+                    }
+                    if let Some(chat) = this.chats.get_mut(&key) {
+                        // 清空流式与消息：transcript 由 History 事件重灌；control 保留。
+                        chat.messages.clear();
+                        chat.streaming_index = None;
+                        chat.tool_index.clear();
+                        chat.member_stream.clear();
+                        chat.streaming = false;
+                        chat.permissions.clear();
+                        chat.questions.clear();
+                        chat.elicitations.clear();
+                        chat.session_id = None;
+                        chat.ready = false;
+                        chat.status = i18n::t("切换会话…").to_string();
+                    }
+                    this.backend.switch_session(
+                        key,
+                        workspace.clone(),
+                        identity.clone(),
+                        model.clone(),
+                        bot_id.clone(),
+                        session_id.clone(),
+                        this.sessions.engine_of(&bot_id).map(str::to_string),
+                    );
+                    this.scroll.scroll_to_bottom();
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(6.))
+                        .py(px(4.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(theme::ink_secondary())
+                                .truncate()
+                                .child(SharedString::from(label)),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("hist-rename-{}", history_id)))
+                                .px(px(4.))
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(10.))
+                                .text_color(theme::ink_tertiary())
+                                .cursor_pointer()
+                                .hover(|style| style.text_color(theme::ink()))
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    cx.stop_propagation();
+                                    let current = this
+                                        .sessions
+                                        .title(&rename_id)
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    this.open_rename_session_dialog(
+                                        rename_id.clone(),
+                                        current,
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                                .child(i18n::t("改名")),
+                        )
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(10.))
+                                .text_color(theme::ink_tertiary())
+                                .child(i18n::t("点击切换")),
+                        ),
+                )
+                .into_any_element(),
+        );
+    }
+    if overflow > 0 {
+        rows = rows.child(hint_row(&tri!("还有 {overflow} 条较早会话（WebView 侧可见）", "{overflow} earlier chats (visible in WebView)")));
+    }
+    rows = rows.child(section_label(i18n::t("工作目录")));
+    rows = rows.child(kv_row(directory, i18n::t("目录")));
+    // 待办与用量：只读自会话库（CLI 写入），所以有数据才显示。
+    if let Some(chat) = chat {
+        if !chat.todos.is_empty() {
+            rows = rows.child(section_label(i18n::t("待办")));
+            const TODO_ROWS: usize = 4;
+            for item in chat.todos.iter().take(TODO_ROWS) {
+                let (glyph, color) = match item.status.as_str() {
+                    "completed" => ("✓", theme::success()),
+                    "in_progress" => ("●", theme::accent()),
+                    _ => ("○", theme::ink_tertiary()),
+                };
+                rows = rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(color)
+                                .child(glyph),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(if item.status == "completed" {
+                                    theme::ink_tertiary()
+                                } else {
+                                    theme::ink_secondary()
+                                })
+                                .truncate()
+                                .child(SharedString::from(item.content.clone())),
+                        )
+                        .children((item.priority == "high").then(|| {
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(theme::danger())
+                                .child(i18n::t("高"))
+                        })),
+                );
+            }
+            if chat.todos.len() > TODO_ROWS {
+                rows = rows.child(hint_row(&tri!(
+                    "还有 {} 条（会话库里完整可见）",
+                    "{} more (fully visible in the chat database)",
+                    chat.todos.len() - TODO_ROWS
+                )));
+            }
+        }
+        if let Some(usage) = chat.usage {
+            rows = rows.child(section_label(i18n::t("用量")));
+            rows = rows.child(kv_row(
+                tri!(
+                    "{} 回合 · {} tokens",
+                    "{} turns · {} tokens",
+                    usage.turns,
+                    session_db::format_tokens(usage.total_tokens)
+                ),
+                i18n::t("本会话"),
+            ));
+            if let Some(ttft) = usage.last_ttft_ms {
+                rows = rows.child(kv_row(format!("{ttft} ms"), i18n::t("首 token")));
+            }
+        }
+    }
+
+    // 说明不再占右栏高度：它在「⋯ → 编辑」对话框里可读，右栏只放操作所需信息。
+    rows
+}
+
+fn group_details(group: &Group, roster: &Roster) -> impl IntoElement {
+    let members = group
+        .member_ids
+        .iter()
+        .map(|id| {
+            roster
+                .bot_by_id(id)
+                .map(|bot| bot.name.clone())
+                .unwrap_or_else(|| short_id(id))
+        })
+        .collect::<Vec<_>>();
+    let admin = group
+        .admin_id
+        .as_deref()
+        .and_then(|id| roster.bot_by_id(id))
+        .map(|bot| bot.name.clone())
+        .unwrap_or_else(|| i18n::t("未设").to_string());
+    // 与 Bot 详情同一套行式排版：成员/管理员/策略各一行，长文本才用块。
+    let mut rows = div().flex().flex_col().gap(px(8.));
+    rows = rows.child(section_label(i18n::t("频道资料")));
+    rows = rows.child(kv_row(
+        format!("{} · {}", count_members(members.len()), members.join(", ")),
+        i18n::t("成员"),
+    ));
+    rows = rows.child(kv_row(admin, i18n::t("管理员")));
+    rows = rows.child(kv_row(responder_label(&group.responder_policy), i18n::t("回应策略")));
+    if !group.instructions.is_empty() {
+        rows = rows.child(section_label(i18n::t("频道指令")));
+        rows = rows.child(text_block(group.instructions.clone()));
+    }
+    if !group.memory.is_empty() {
+        rows = rows.child(section_label(i18n::t("团队记忆")));
+        rows = rows.child(text_block(group.memory.clone()));
+    }
+    rows
+}
+
+fn group_placeholder(group: &Group, roster: &Roster) -> impl IntoElement {
+    let members = group
+        .member_ids
+        .iter()
+        .map(|id| {
+            roster
+                .bot_by_id(id)
+                .map(|bot| bot.name.clone())
+                .unwrap_or_else(|| short_id(id))
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    empty_state_badged(
+        Some(avatar::channel_avatar(&group.id, 44.).into_any_element()),
+        format!("{} · {}", group.name, count_members(group.member_ids.len())),
+        tri!("成员：{members}。发消息开始频道对话；用 @成员名 点名。", "Members: {members}. Send a message to start the channel chat; @mention someone to call on them."),
+    )
+}
+
+fn responder_label(policy: &str) -> String {
+    match policy {
+        "mentions-first" => i18n::t("先 @ 后回应").to_string(),
+        "all" => i18n::t("全部回应").to_string(),
+        "" => i18n::t("默认").to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn model_label(model: &ModelSpec) -> String {
+    match &model.reasoning_level {
+        Some(level) if !level.is_empty() => format!("{} · {}", model.label(), level),
+        _ => model.label(),
+    }
+}
+
+/// 后台时弹托盘气泡（前台不打扰）。
+fn notify_background(enabled: bool, title: &str, body: &str) {
+    if !enabled {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        if !tray::main_foreground() {
+            tray::notify(title, body);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (title, body);
+    }
+}
+
+/// 关闭按钮：有托盘时隐藏到托盘，退出走托盘菜单（保存窗口态在隐藏前）。
+fn close_or_hide(window: &mut Window) {
+    window_state::save_now();
+    #[cfg(windows)]
+    {
+        let _ = window;
+        tray::hide_main_window();
+    }
+    #[cfg(not(windows))]
+    window.remove_window();
+}
+
+fn short_session(id: &str) -> String {
+    truncate_chars(id, 13)
+}
+
+fn count_members(n: usize) -> String {
+    if i18n::is_en() {
+        i18n::n(n, "member", "members")
+    } else {
+        format!("{n} 位成员")
+    }
+}
+
+fn count_bots(n: usize) -> String {
+    if i18n::is_en() {
+        i18n::n(n, "bot", "bots")
+    } else {
+        format!("共 {n} 个机器人")
+    }
+}
+
+fn count_tasks(n: usize) -> String {
+    if i18n::is_en() {
+        i18n::n(n, "task", "tasks")
+    } else {
+        format!("共 {n} 个任务")
+    }
+}
+
+fn count_channels(n: usize) -> String {
+    if i18n::is_en() {
+        i18n::n(n, "channel", "channels")
+    } else {
+        format!("共 {n} 个频道")
+    }
+}
+
+fn short_id(id: &str) -> String {
+    truncate_chars(id, 8)
+}
+
+/// 输入卡圆角：单行 22（胶囊），多行/带附件收 18（原版规则）。
+fn composer_radius(multiline: bool, has_attachments: bool) -> f32 {
+    if multiline || has_attachments {
+        theme::RADIUS_COMPOSER_MULTI
+    } else {
+        theme::RADIUS_COMPOSER
+    }
+}
+
+/// 把引用拼成 markdown 引用块再发（CLI 侧就是普通文本，渲染时自然显示成引用）。
+/// 引用内容压成单行、最多 200 字，避免把上下文撑爆。
+/// 频道编排会注入一段 `群聊：… 用户刚说：…` 的合成 prompt；它属于系统上下文，
+/// 不应该作为用户气泡出现在会话里。
+fn is_group_prompt(text: &str) -> bool {
+    let text = text.trim_start();
+    // 新版 prompt 带 Markdown 标题壳：`# 群聊：发布小组`。
+    let text = text.strip_prefix('#').map(str::trim_start).unwrap_or(text);
+    if !text.contains("用户刚说：") {
+        return false;
+    }
+    // v4 的群 prompt 有两种壳：旧版 `群聊：…`，新版以「你是这个群的管理员…」开头；
+    // 新版还带群规则/面向用户的回复要求，用结构标记判定，避免误伤用户正文。
+    text.starts_with("群聊：")
+        || (text.starts_with("你是这个群")
+            && (text.contains("群规则：") || text.contains("请直接写你在群里的回复")))
+}
+
+fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
+    match row {
+        WecomRow::LoadEarlier { hidden, .. } => (*hidden as u64).wrapping_add(1),
+        WecomRow::Date(label) => label.len() as u64 + 10,
+        WecomRow::User {
+            text,
+            attachments,
+            attachment_meta,
+        } => (text.len() as u64)
+            .wrapping_mul(31)
+            .wrapping_add(attachments.len() as u64)
+            .wrapping_add(attachment_meta.len() as u64)
+            + 20,
+        WecomRow::Assistant {
+            text,
+            author,
+            author_id,
+        } => (text.len() as u64)
+            .wrapping_mul(131)
+            .wrapping_add(author.len() as u64)
+            .wrapping_add(author_id.len() as u64)
+            + 30,
+        WecomRow::Tool(message) => {
+            (message.tool_title.len() as u64)
+                .wrapping_mul(17)
+                .wrapping_add(message.tool_state.len() as u64)
+                + 40
+        }
+        WecomRow::Reasoning {
+            text,
+            expanded,
+            streaming,
+            ..
+        } => {
+            (text.len() as u64)
+                .wrapping_mul(53)
+                .wrapping_add(u64::from(*expanded))
+                .wrapping_add(u64::from(*streaming).wrapping_mul(7))
+                + 50
+        }
+    }
+}
+
+/// 行内容指纹：行数不变时流式文本会增长，用它触发 `remeasure`。
+fn wecom_list_rows_fingerprint(rows: &[WecomListRow]) -> u64 {
+    let mut hash = rows.len() as u64;
+    for row in rows {
+        let mut mix = |value: usize| {
+            hash = hash
+                .wrapping_mul(1_099_511_628_211)
+                .wrapping_add(value as u64);
+        };
+        match row {
+            WecomListRow::Section {
+                name,
+                color,
+                collapsed,
+                count,
+                ..
+            } => {
+                mix(name.len());
+                mix(color.as_deref().unwrap_or_default().len());
+                mix(usize::from(*collapsed));
+                mix(*count);
+            }
+            WecomListRow::Entry(entry) => {
+                mix(entry.name.len());
+                mix(entry.preview.len());
+                mix(entry.unread);
+                mix(entry.at as usize);
+                mix(entry.active as usize);
+                mix(entry.pinned as usize);
+                mix(entry.muted as usize);
+                mix(entry.member_ids.len());
+                mix(entry.status.len());
+            }
+        }
+    }
+    hash
+}
+
+fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> gpui::AnyElement {
+    match row {
+        WecomListRow::Entry(entry) => wecom_list_row(entry, weak),
+        WecomListRow::Section {
+            id,
+            name,
+            color,
+            collapsed,
+            count,
+        } => {
+            let id = id.clone();
+            let toggle_id = id.clone();
+            let weak = weak.clone();
+            div()
+                .id(SharedString::from(format!("section-{id}")))
+                .h(px(30.))
+                .w_full()
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .cursor_pointer()
+                .hover(|style| style.bg(wecom_theme::list_hover()))
+                .on_click(move |_event, _window, cx| {
+                    let id = toggle_id.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.toggle_sidebar_section(&id);
+                        cx.notify();
+                    });
+                })
+                .child(
+                    div()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(sidebar_section_dot(color.as_deref())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .text_color(wecom_theme::list_title())
+                        .child(SharedString::from(name.clone())),
+                )
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .text_color(wecom_theme::list_preview())
+                        .child(SharedString::from(count.to_string())),
+                )
+                .child(icons::icon(
+                    if *collapsed {
+                        icons::Icon::ChevronRight
+                    } else {
+                        icons::Icon::ChevronLeft
+                    },
+                    12.,
+                    wecom_theme::list_preview(),
+                ))
+                .into_any_element()
+        }
+    }
+}
+
+fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui::AnyElement {
+    let now = time::now_ms();
+    let time_label = if entry.at == 0 {
+        String::new()
+    } else if time::format_day(entry.at) == time::format_day(now) {
+        time::format_hm(entry.at)
+    } else {
+        let day = time::day_label(entry.at);
+        if day == i18n::t("昨天") {
+            format!("{} {}", day, time::format_hm(entry.at))
+        } else {
+            day
+        }
+    };
+    let active = entry.active;
+    let title_color = if active {
+        wecom_theme::list_title_selected()
+    } else {
+        wecom_theme::list_title()
+    };
+    let preview_color = if active {
+        wecom_theme::list_preview_selected()
+    } else {
+        wecom_theme::list_preview()
+    };
+    let time_color = if active {
+        wecom_theme::list_time_selected()
+    } else {
+        wecom_theme::list_time()
+    };
+    let avatar = if entry.is_group && !entry.member_ids.is_empty() {
+        PilotApp::wecom_group_avatar(&entry.member_ids, 40.).into_any_element()
+    } else if entry.is_group {
+        PilotApp::wecom_channel_avatar(&entry.id, 40.).into_any_element()
+    } else {
+        PilotApp::wecom_avatar(&entry.id, &entry.name, 40.).into_any_element()
+    };
+    let row_id = SharedString::from(format!(
+        "wechat-row-{}-{}",
+        if entry.is_group { "g" } else { "b" },
+        entry.index
+    ));
+    let (is_group, index) = (entry.is_group, entry.index);
+    let weak = weak.clone();
+    div()
+        .id(row_id)
+        .h(px(wecom_theme::LIST_ROW_HEIGHT))
+        .w_full()
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .cursor_pointer()
+        .when(active, |el| el.bg(wecom_theme::selected_gradient()))
+        .when(!active, |el| {
+            el.hover(|style| style.bg(wecom_theme::list_hover()))
+        })
+        .on_click(move |_event, _window, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                if is_group {
+                    this.select_group(index, cx);
+                } else {
+                    this.select_bot(index, cx);
+                }
+            });
+        })
+        .child(
+            div()
+                .relative()
+                .child(avatar)
+                .children((entry.unread > 0).then(|| {
+                    div()
+                        .absolute()
+                        .top(px(-2.))
+                        .right(px(-2.))
+                        .size(px(8.))
+                        .rounded_full()
+                        .bg(wecom_theme::nav_badge_bg())
+                        .border_2()
+                        .border_color(if active {
+                            wecom_theme::send_enabled()
+                        } else {
+                            wecom_theme::list_hover()
+                        })
+                })),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .children(status_dot_color(entry.status).map(|color| {
+                            div().size(px(6.)).rounded_full().bg(color)
+                        }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(14.))
+                                .line_height(px(20.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(title_color)
+                                .child(SharedString::from(entry.name.clone())),
+                        ),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(preview_color)
+                        .child(SharedString::from(entry.preview.clone())),
+                ),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .items_end()
+                .gap(px(3.))
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .line_height(px(14.))
+                        .text_color(time_color)
+                        .child(SharedString::from(time_label)),
+                )
+                .when(entry.muted, |el| {
+                    el.child(icons::icon(icons::Icon::BellOff, 12., time_color))
+                }),
+        )
+        .into_any_element()
+}
+
+fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
+    let mut hash = rows.len() as u64;
+    let mut mix = |value: usize| {
+        hash = hash
+            .wrapping_mul(1_099_511_628_211)
+            .wrapping_add(value as u64);
+    };
+    for row in rows {
+        match row {
+            WecomRow::LoadEarlier { hidden, .. } => mix(*hidden),
+            WecomRow::Date(label) => mix(label.len()),
+            WecomRow::User {
+                text,
+                attachments,
+                attachment_meta,
+            } => {
+                mix(text.len());
+                mix(attachments.len());
+                mix(attachment_meta.len());
+            }
+            WecomRow::Assistant {
+                text,
+                author,
+                author_id,
+            } => {
+                mix(text.len());
+                mix(author.len());
+                mix(author_id.len());
+            }
+            WecomRow::Tool(message) => {
+                mix(message.tool_title.len());
+                mix(message.tool_state.len());
+            }
+            WecomRow::Reasoning {
+                text,
+                expanded,
+                streaming,
+                ..
+            } => {
+                mix(text.len());
+                mix(usize::from(*expanded));
+                mix(usize::from(*streaming));
+            }
+        }
+    }
+    hash
+}
+
+/// 渲染 `MessageScroller` 的一行（纯函数；不依赖 `Context<PilotApp>`）。
+fn wecom_row_el(
+    row: &WecomRow,
+    index: usize,
+    is_group: bool,
+    mention_names: &[String],
+    weak: &gpui::WeakEntity<PilotApp>,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    match row {
+        WecomRow::LoadEarlier { key, hidden } => {
+            let key = key.clone();
+            let hidden = *hidden;
+            let weak = weak.clone();
+            div()
+                .id("wechat-load-earlier")
+                .w_full()
+                .flex()
+                .justify_center()
+                .py(px(4.))
+                .cursor_pointer()
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .line_height(px(16.))
+                .text_color(wecom_theme::time_label())
+                .hover(|style| style.text_color(wecom_theme::chat_title()))
+                .on_click(move |_event, _window, cx| {
+                    let key = key.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        if let Some(chat) = this.chats.get_mut(&key) {
+                            chat.transcript_limit =
+                                chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
+                        }
+                        cx.notify();
+                    });
+                })
+                .child(SharedString::from(if i18n::is_en() { format!("Show {}", i18n::n(hidden, "earlier message", "earlier messages")) } else { format!("显示更早的 {hidden} 条") }))
+                .into_any_element()
+        }
+        WecomRow::Date(label) => div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .py(px(2.))
+            .font_family(wecom_theme::FONT_FAMILY)
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(wecom_theme::time_label())
+            .child(SharedString::from(label.clone()))
+            .into_any_element(),
+        WecomRow::User {
+            text,
+            attachments,
+            attachment_meta,
+        } => div()
+            .w_full()
+            .flex()
+            .justify_end()
+            .items_start()
+            .child(
+                div()
+                    .max_w(px(560.))
+                    .rounded(px(6.))
+                    .bg(wecom_theme::bubble_out())
+                    .px(px(10.))
+                    .py(px(6.))
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(14.))
+                    .line_height(px(22.))
+                    .text_color(wecom_theme::bubble_out_text())
+                    .child(user_text_with_mentions(text, mention_names))
+                    .children(history_attachment_view(
+                        attachments,
+                        attachment_meta,
+                        weak,
+                        cx,
+                    )),
+            )
+            .child(wechat_bubble_tail())
+            .into_any_element(),
+        WecomRow::Assistant {
+            text,
+            author,
+            author_id,
+        } => {
+            let mut cell = div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(4.));
+            if is_group {
+                cell = cell.child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(wecom_theme::sender_label())
+                        .child(SharedString::from(author.clone())),
+                );
+            }
+            cell = cell.child(
+                div()
+                    .max_w(px(560.))
+                    .rounded(px(6.))
+                    .bg(wecom_theme::bubble_in())
+                    .px(px(10.))
+                    .py(px(6.))
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(14.))
+                    .line_height(px(22.))
+                    .text_color(wecom_theme::bubble_text())
+                    .child(kit_markdown_el(format!("wechat-md-{index}"), text, true)),
+            );
+            let mut row = div().w_full().flex().items_start().gap(px(8.));
+            if is_group {
+                row = row.child(PilotApp::wecom_avatar(author_id, author, 36.));
+            }
+            row.child(cell).into_any_element()
+        }
+        WecomRow::Reasoning {
+            key,
+            text,
+            member,
+            streaming,
+            expanded,
+        } => {
+            let key = key.clone();
+            let expanded = *expanded;
+            let streaming = *streaming;
+            let chars = text.chars().count();
+            let toggle_key = key.clone();
+            let weak = weak.clone();
+            let mut header = div()
+                .id(SharedString::from(format!("reason-toggle-{key}")))
+                .w_full()
+                .max_w(px(560.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(2.))
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.85))
+                .on_click(move |_event, _window, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        if !this.reasoning_expanded.remove(&toggle_key) {
+                            this.reasoning_expanded.insert(toggle_key.clone());
+                        }
+                        cx.notify();
+                    });
+                })
+                .child(icons::icon(
+                    if expanded {
+                        icons::Icon::ChevronLeft
+                    } else {
+                        icons::Icon::ChevronRight
+                    },
+                    12.,
+                    wecom_theme::icon(),
+                ));
+            if is_group && let Some(name) = member {
+                header = header.child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wecom_theme::sender_label())
+                        .child(SharedString::from(name.clone())),
+                );
+            }
+            header = header
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wecom_theme::list_preview())
+                        .child(if streaming {
+                            i18n::t("思考中…").to_string()
+                        } else {
+                            if i18n::is_en() { format!("Thinking · {}", i18n::n(chars, "char", "chars")) } else { format!("思考过程 · {chars} 字") }
+                        }),
+                );
+            let mut block = div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(3.))
+                .child(header);
+            if expanded {
+                block = block.child(
+                    div()
+                        .w_full()
+                        .max_w(px(560.))
+                        .rounded(px(6.))
+                        .bg(wecom_theme::panel_card_bg())
+                        .px(px(10.))
+                        .py(px(6.))
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(wecom_theme::list_preview())
+                        .child(SharedString::from(text.clone())),
+                );
+            }
+            if is_group {
+                let row = div()
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap(px(8.))
+                    .child(PilotApp::wecom_avatar(
+                        member.as_deref().unwrap_or(""),
+                        member.as_deref().unwrap_or(""),
+                        36.,
+                    ))
+                    .child(block);
+                row.into_any_element()
+            } else {
+                div()
+                    .w_full()
+                    .pl(px(44.))
+                    .child(block)
+                    .into_any_element()
+            }
+        }
+        WecomRow::Tool(message) => {
+            let expanded = weak
+                .upgrade()
+                .map(|app| app.read(cx).tool_expanded.contains(&message.tool_call_id))
+                .unwrap_or(false);
+            wecom_tool_card(message, expanded, weak).into_any_element()
+        }
+    }
+}
+
+/// 群成员路由（与 backend `SendGroup` 同规则）：@点名 → everyone/all → 管理员/首个。
+fn route_group_members(
+    text: &str,
+    members: &[(String, String)],
+    responder_policy: &str,
+    admin_id: Option<&str>,
+) -> Vec<(String, String)> {
+    let parsed = bot_team::mentions::parse_mentions(text, members);
+    let mentioned: Vec<(String, String)> = members
+        .iter()
+        .filter(|(id, _)| parsed.ids.contains(id))
+        .cloned()
+        .collect();
+    if !mentioned.is_empty() {
+        return mentioned;
+    }
+    if parsed.everyone || responder_policy.trim() == "all" {
+        return members.to_vec();
+    }
+    admin_id
+        .and_then(|id| members.iter().find(|(member_id, _)| member_id == id))
+        .or_else(|| members.first())
+        .cloned()
+        .into_iter()
+        .collect()
+}
+
+/// 任务结算后刷新已打开的任务对话框（其他频道不动）。
+fn group_task_state_label(state: bot_team::tasks::TaskState) -> &'static str {
+    match state {
+        bot_team::tasks::TaskState::Queued => i18n::t("排队"),
+        bot_team::tasks::TaskState::Running => i18n::t("运行中"),
+        bot_team::tasks::TaskState::Waiting => i18n::t("等待"),
+        bot_team::tasks::TaskState::Stopped => i18n::t("已停止"),
+        bot_team::tasks::TaskState::Done => i18n::t("完成"),
+        bot_team::tasks::TaskState::Failed => i18n::t("失败"),
+        bot_team::tasks::TaskState::Cancelled => i18n::t("取消"),
+    }
+}
+
+fn group_task_state_color(state: bot_team::tasks::TaskState) -> gpui::Rgba {
+    match state {
+        bot_team::tasks::TaskState::Running | bot_team::tasks::TaskState::Queued => {
+            theme::warning()
+        }
+        bot_team::tasks::TaskState::Waiting => theme::ink_secondary(),
+        bot_team::tasks::TaskState::Done => theme::success(),
+        bot_team::tasks::TaskState::Failed => theme::danger(),
+        _ => theme::ink_tertiary(),
+    }
+}
+
+fn refresh_group_tasks_view(
+    view: Option<&gpui::WeakEntity<GroupTasksState>>,
+    key: &str,
+    cx: &mut gpui::App,
+) {
+    let Some(view) = view else {
+        return;
+    };
+    let Some(group_id) = key.strip_prefix("group:") else {
+        return;
+    };
+    let group_id = group_id.to_string();
+    let _ = view.update(cx, |state, cx| {
+        if state.group_id == group_id {
+            state.reload(cx);
+        }
+    });
+}
+
+/// 台账结算：成员回合结束/失败时结算对应子任务；子任务全部结束则连带根容器。
+fn settle_group_task_turn(
+    turns: &mut HashMap<String, GroupTaskTurn>,
+    key: &str,
+    member: &str,
+    ok: bool,
+) {
+    let Some(group_id) = key.strip_prefix("group:") else {
+        return;
+    };
+    let mut clear = false;
+    if let Some(turn) = turns.get_mut(key) {
+        if let Some(task_id) = turn.members.remove(member) {
+            let root_id = turn.root_id.clone();
+            if let Err(message) = group_tasks::settle(
+                &data::data_root(),
+                group_id,
+                &task_id,
+                ok,
+                Some(&root_id),
+            ) {
+                eprintln!("[tasks] 结算群任务失败：{message}");
+            }
+        }
+        clear = turn.members.is_empty();
+    }
+    if clear {
+        turns.remove(key);
+    }
+}
+
+/// 整轮失败（群级错误）：把仍未结算的子任务全部标记失败并清空映射。
+fn fail_group_task_turn(turns: &mut HashMap<String, GroupTaskTurn>, key: &str) {
+    let Some(group_id) = key.strip_prefix("group:") else {
+        return;
+    };
+    let Some(turn) = turns.remove(key) else {
+        return;
+    };
+    let root_id = turn.root_id;
+    for task_id in turn.members.into_values() {
+        if let Err(message) =
+            group_tasks::settle(&data::data_root(), group_id, &task_id, false, Some(&root_id))
+        {
+            eprintln!("[tasks] 失败结算群任务失败：{message}");
+        }
+    }
+}
+
+/// 这些错误意味着成员回合没有跑起来（发送/建会话失败），台账要直接判失败。
+fn is_terminal_group_error(message: &str) -> bool {
+    [
+        "发送失败",
+        "发送未受理",
+        "会话尚未建立",
+        "频道会话尚未建立",
+        "缺少模型选择",
+        "建会话失败",
+        "订阅会话失败",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
+    let Some((author, body)) = quote else {
+        return text.to_string();
+    };
+    let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let body: String = body.chars().take(200).collect();
+    if body.is_empty() {
+        return text.to_string();
+    }
+    let author = author.trim();
+    // 用户气泡按纯文本渲染（不走 markdown），所以不要用 `>` / `**` 这类标记——
+    // 否则回放历史时会把语法原样显示出来。这个格式模型同样能读懂。
+    let header = if author.is_empty() {
+        String::new()
+    } else {
+        format!("{author}：")
+    };
+    format!("引用 {header}{body}
+
+{text}")
+}
+
+/// 对话框里的单行/多行字段（标签 + 输入框外壳）。`id` 必须窗口内唯一。
+fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInput>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(if wechat { 12. } else { 11. }))
+                .line_height(px(16.))
+                .text_color(if wechat {
+                    wecom_theme::list_preview()
+                } else {
+                    theme::ink_tertiary()
+                })
+                .child(i18n::t(label)),
+        )
+        .child(
+            div()
+                .id(id)
+                .key_context("Dialog")
+                .h(px(36.))
+                .rounded(px(if wechat { 4. } else { theme::RADIUS_FIELD }))
+                .border_1()
+                .border_color(if wechat {
+                    wecom_theme::panel_divider()
+                } else {
+                    theme::edge()
+                })
+                .bg(if wechat {
+                    wecom_theme::chat_bg()
+                } else {
+                    theme::card()
+                })
+                .px(px(10.))
+                .py(px(6.))
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(if wechat { 14. } else { 13. }))
+                .line_height(px(if wechat { 22. } else { 18. }))
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .child(input.clone()),
+        )
+}
+
+/// 多行字段（正文类输入）：固定高度、内部滚动。
+fn dialog_field_tall(
+    id: &'static str,
+    label: &'static str,
+    input: &Entity<SimpleInput>,
+    height: f32,
+) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(if wechat { 12. } else { 11. }))
+                .line_height(px(16.))
+                .text_color(if wechat {
+                    wecom_theme::list_preview()
+                } else {
+                    theme::ink_tertiary()
+                })
+                .child(i18n::t(label)),
+        )
+        .child(
+            div()
+                .id(id)
+                .key_context("Dialog")
+                .h(px(height))
+                .rounded(px(if wechat { 4. } else { theme::RADIUS_FIELD }))
+                .border_1()
+                .border_color(if wechat {
+                    wecom_theme::panel_divider()
+                } else {
+                    theme::edge()
+                })
+                .bg(if wechat {
+                    wecom_theme::chat_bg()
+                } else {
+                    theme::card()
+                })
+                .px(px(10.))
+                .py(px(6.))
+                .overflow_hidden()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(if wechat { 14. } else { 13. }))
+                .line_height(px(if wechat { 22. } else { 18. }))
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .child(input.clone()),
+        )
+}
+
+/// 居中遮罩（点击遮罩吞掉事件，不关闭——关闭交给各对话框自己的按钮/Esc）。
+/// 卡片进场上做 140ms 淡入（DS 原则「有进就有出」的最小实现；gpui 的
+/// `with_animation` 在系统减少动效时会自动落到终态）。
+fn overlay_center(card: impl IntoElement + gpui::Styled + 'static) -> gpui::AnyElement {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(rgba(0x00000080))
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .relative()
+                .with_animation(
+                    "dialog-enter",
+                    gpui::Animation::new(theme::DUR_PANEL).with_easing(theme::spring_ease),
+                    |element, delta| {
+                        let delta = delta.clamp(0., 1.);
+                        element.opacity(delta).top(px(12. * (1. - delta)))
+                    },
+                )
+                .child(card),
+        )
+        .into_any_element()
+}
+
+/// 开关（微信：36×20 胶囊 + 16px 圆滑块；打开时微信绿）。
+fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div> {
+    let wechat = wecom_theme::active();
+    div()
+        .id(id)
+        .w(px(36.))
+        .h(px(20.))
+        .rounded_full()
+        .bg(if on {
+            if wechat {
+                wecom_theme::send_enabled()
+            } else {
+                theme::accent()
+            }
+        } else if wechat {
+            wecom_theme::chip_bg()
+        } else {
+            theme::hover()
+        })
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .child(
+            div()
+                .size(px(16.))
+                .rounded_full()
+                .bg(wecom_theme::nav_text_active())
+                .ml(px(if on { 18. } else { 2. }))
+                .border_1()
+                .border_color(if wechat {
+                    wecom_theme::panel_divider()
+                } else {
+                    theme::edge()
+                }),
+        )
+}
+
+/// 图标按钮（微信皮肤：28 方角、透明底、悬停叠色）。
+fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stateful<gpui::Div> {
+    let wechat = wecom_theme::active();
+    div()
+        .id(id)
+        .size(px(28.))
+        .rounded(px(if wechat { 4. } else { 999. }))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| {
+            style.bg(if wechat {
+                wecom_theme::nav_item_hover_bg()
+            } else {
+                theme::hover()
+            })
+        })
+        .child(icons::icon(
+            glyph,
+            15.,
+            if wechat {
+                wecom_theme::icon()
+            } else {
+                theme::ink_secondary()
+            },
+        ))
+}
+
+/// 对话框卡片外壳（宽度可变）：圆角/描边/底色/内边距/纵向布局一站式，
+/// 三个 overlay（新建、设置、删除确认）共用，避免各写一套又慢慢漂移。
+/// 对话框右上角关闭钮：统一走根部的 Esc 关闭链（最上层浮层优先）。
+fn dialog_close(id: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .absolute()
+        .top(px(12.))
+        .right(px(12.))
+        .size(px(32.))
+        .rounded_full()
+        .bg(theme::hover())
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::raised_hover()))
+        .on_click(|_, window, cx| {
+            window.dispatch_action(Box::new(CloseOverlay), cx);
+        })
+        .child(icons::icon(icons::Icon::X, 16., theme::ink_secondary()))
+}
+
+fn dialog_card(close_id: Option<&'static str>, width: f32) -> gpui::Div {
+    let card = div()
+        .relative()
+        .w(px(width))
+        .rounded(px(theme::RADIUS_DIALOG))
+        .border_1()
+        .border_color(theme::edge())
+        .bg(theme::app())
+        .shadow(theme::shadow_4())
+        .p(px(16.))
+        .flex()
+        .flex_col()
+        .gap(px(10.));
+    match close_id {
+        Some(id) => card.child(dialog_close(id)),
+        None => card,
+    }
+}
+
+/// 日期分隔条（今天 / 昨天 / 2026-11-12），居中 10px 次级文字。
+fn day_separator(at: u64) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .justify_center()
+        .py(px(2.))
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .line_height(px(16.))
+        .text_color(theme::ink_tertiary())
+        .child(SharedString::from(time::day_label(at)))
+}
+
+/// 消息时间（10px 次级文字；`at == 0` 时返回 None，不占位）。
+fn msg_time(at: u64) -> Option<gpui::AnyElement> {
+    (at > 0).then(|| {
+        div()
+            .font_family(theme::FONT_FAMILY)
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .text_color(theme::ink_tertiary())
+            .child(SharedString::from(time::format_hm(at)))
+            .into_any_element()
+    })
+}
+
+impl Default for ChatState {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            streaming_index: None,
+            tool_index: HashMap::new(),
+            member_stream: HashMap::new(),
+            reasoning_index: HashMap::new(),
+            streaming: false,
+            ready: false,
+            status: String::new(),
+            error: false,
+            session_id: None,
+            control: None,
+            permissions: Vec::new(),
+            questions: Vec::new(),
+            elicitations: Vec::new(),
+            quote: None,
+            transcript_limit: TRANSCRIPT_WINDOW,
+            unread: 0,
+            todos: Vec::new(),
+            usage: None,
+            last_sent: None,
+            pending_attachments: Vec::new(),
+            pending_attachment_previews: Vec::new(),
+        }
+    }
+}
+
+/// @所有人 的固定写法。
+const ALL_MENTION: &str = "所有人";
+
+/// 用户消息里的 `@名字` 高亮（chip 效果：强调色淡底 + 正文色），返回 StyledText。
+/// `names` 是当前名册里的成员名（群）或 Bot 名（私聊）。
+fn user_text_with_mentions(text: &str, names: &[String]) -> gpui::AnyElement {
+    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    let mut candidates: Vec<&str> = names.iter().map(|name| name.as_str()).collect();
+    candidates.push(ALL_MENTION);
+    for name in candidates {
+        if name.is_empty() {
+            continue;
+        }
+        let needle = format!("@{name}");
+        let mut cursor = 0usize;
+        while let Some(found) = text[cursor..].find(&needle) {
+            let start = cursor + found;
+            let end = start + needle.len();
+            // 词边界：后面紧跟字母/数字/下划线视为更长的名字，不算命中。
+            let boundary_ok = text[end..]
+                .chars()
+                .next()
+                .map(|ch| !ch.is_alphanumeric() && ch != '_')
+                .unwrap_or(true);
+            if boundary_ok {
+                highlights.push((
+                    start..end,
+                    HighlightStyle {
+                        background_color: Some(Hsla::from(theme::accent_soft())),
+                        color: Some(Hsla::from(theme::bubble_user_ink())),
+                        font_weight: Some(gpui::FontWeight::MEDIUM),
+                        ..Default::default()
+                    },
+                ));
+            }
+            cursor = end;
+        }
+    }
+    if highlights.is_empty() {
+        return div().child(SharedString::from(text.to_string())).into_any_element();
+    }
+    highlights.sort_by_key(|(range, _)| range.start);
+    div()
+        .child(StyledText::new(text.to_string()).with_highlights(highlights))
+        .into_any_element()
+}
+
+/// 「显示更早」行：长会话只渲染最近 N 条，点它按窗口步长往前放开一批。
+fn load_earlier_row(key: &str, hidden: usize, cx: &mut Context<PilotApp>) -> gpui::AnyElement {
+    let key = key.to_string();
+    div()
+        .id("load-earlier")
+        .w_full()
+        .flex()
+        .justify_center()
+        .py(px(4.))
+        .cursor_pointer()
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .text_color(theme::ink_tertiary())
+        .hover(|style| style.text_color(theme::ink()))
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            if let Some(chat) = this.chats.get_mut(&key) {
+                chat.transcript_limit = chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
+            }
+            cx.notify();
+        }))
+        .child(SharedString::from(if i18n::is_en() { format!("Show {}", i18n::n(hidden, "earlier message", "earlier messages")) } else { format!("显示更早的 {hidden} 条") }))
+        .into_any_element()
+}
+
+/// 一条消息的排版：用户气泡靠右（时间在气泡左侧），助手气泡靠左（成员/时间在气泡上方）。
+#[allow(clippy::too_many_arguments)] // 渲染辅助：参数都是消息行的固定组成，临时结构体反而更绕。
+fn message_row(
+    message: &Message,
+    bubble: impl IntoElement,
+    bubble_max: f32,
+    quote_button: Option<gpui::AnyElement>,
+    author: String,
+    author_id: String,
+    author_color: Option<Rgba>,
+    hover_group: SharedString,
+) -> gpui::AnyElement {
+    // 气泡最大宽：原版 min(672, 80% 列宽)，由调用方按列宽算好（百分比在滚动容器里不可靠）。
+    let bubble = div()
+        .max_w(px(bubble_max))
+        .child(bubble)
+        .into_any_element();
+    match message.role {
+        Role::User => {
+            // 时间/「引用」悬停才出现；用绝对定位，避免隐身元素把气泡从右边挤开。
+            let actions = div()
+                .absolute()
+                .top(px(-18.))
+                .right(px(0.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .opacity(0.)
+                .group_hover(hover_group.clone(), |style| style.opacity(1.))
+                .children(quote_button)
+                .children(msg_time(message.at));
+            div()
+                .w_full()
+                .flex()
+                .justify_end()
+                .items_end()
+                .group(hover_group)
+                .child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .child(actions)
+                        // 窄窗口（最小 900px 时中栏只剩 ~340px）里气泡要能收窄，否则会被
+                        // justify_end 推到可视区外、左侧文字被裁掉。
+                        .child(div().w_full().flex().justify_end().child(bubble)),
+                )
+                .into_any_element()
+        }
+        Role::Assistant => {
+            // DS 排版：左侧 22px 头像 + 角色色名字一行，气泡在头像右侧。
+            let label = author;
+            let color = author_color.unwrap_or(theme::ink_secondary());
+            let meta = div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .children(Some(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(13.))
+                        .line_height(px(18.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(color)
+                        .child(SharedString::from(label.clone())),
+                ))
+                .children(msg_time(message.at).map(|time| {
+                    div()
+                        .opacity(0.)
+                        .group_hover(hover_group.clone(), |style| style.opacity(1.))
+                        .child(time)
+                }))
+                .children(quote_button.map(|button| {
+                    div()
+                        .opacity(0.)
+                        .group_hover(hover_group.clone(), |style| style.opacity(1.))
+                        .child(button)
+                }));
+            let mut cell = div()
+                .w_full()
+                .flex()
+                .justify_start()
+                .flex_col()
+                .gap(px(4.))
+                .group(hover_group.clone());
+            cell = cell.child(meta);
+            cell = cell.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .w_full()
+                    .child(avatar::bot_avatar(&author_id, 22.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .justify_start()
+                            .child(bubble),
+                    ),
+            );
+            cell.into_any_element()
+        }
+    }
+}
+
+/// 消息旁的「引用」按钮（把该消息原文放进 composer 的引用条）。
+fn quote_button(
+    key: &str,
+    index: usize,
+    author: String,
+    text: String,
+    cx: &mut Context<PilotApp>,
+) -> gpui::AnyElement {
+    let key = key.to_string();
+    div()
+        .id(SharedString::from(format!("quote-{}", index)))
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .text_color(theme::ink_tertiary())
+        .cursor_pointer()
+        .hover(|style| style.text_color(theme::ink()))
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            if let Some(chat) = this.chats.get_mut(&key) {
+                chat.quote = Some((author.clone(), text.clone()));
+            }
+            cx.notify();
+        }))
+        .child(i18n::t("引用"))
+        .into_any_element()
+}
+
+/// 消息「复制」按钮（悬停显形，与「引用」同一行）。
+fn copy_button(index: usize, text: String, cx: &mut Context<PilotApp>) -> gpui::AnyElement {
+    div()
+        .id(SharedString::from(format!("copy-{}", index)))
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .text_color(theme::ink_tertiary())
+        .cursor_pointer()
+        .hover(|style| style.text_color(theme::ink()))
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            this.toast(i18n::t("已复制消息"), cx);
+            cx.notify();
+        }))
+        .child(i18n::t("复制"))
+        .into_any_element()
+}
+
+/// 悬停动作组：引用 + 复制。
+fn message_actions(
+    key: &str,
+    index: usize,
+    author: String,
+    text: String,
+    cx: &mut Context<PilotApp>,
+) -> gpui::AnyElement {
+    let copy_text = text.clone();
+    let code = fenced_code(&text);
+    let mut actions = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(quote_button(key, index, author, text, cx))
+        .child(copy_button(index, copy_text, cx));
+    if let Some(code) = code {
+        actions = actions.child(
+            div()
+                .id(SharedString::from(format!("copy-code-{index}")))
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .text_color(theme::ink_tertiary())
+                .cursor_pointer()
+                .hover(|style| style.text_color(theme::ink()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+                    this.toast(i18n::t("已复制代码"), cx);
+                    cx.notify();
+                }))
+                .child(i18n::t("复制代码")),
+        );
+    }
+    actions.into_any_element()
+}
+
+/// 抽取消息里的 ``` 围栏代码块（多个块用空行连接）；没有就返回 None。
+fn fenced_code(text: &str) -> Option<String> {
+    let mut blocks = Vec::new();
+    let mut current = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if inside {
+                if !current.trim().is_empty() {
+                    blocks.push(current.trim_end().to_string());
+                }
+                current.clear();
+                inside = false;
+            } else {
+                inside = true;
+            }
+        } else if inside {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks.join("\n\n"))
+    }
+}
+
+/// 用户气泡里的附件行（本端发送后可显示；历史回放没有附件元数据）。
+fn message_attachments(names: &[String]) -> Option<gpui::AnyElement> {
+    if names.is_empty() {
+        return None;
+    }
+    let mut column = div().mt(px(4.)).flex().flex_col().gap(px(2.));
+    for name in names {
+        column = column.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(icons::icon(icons::Icon::Paperclip, 11., theme::ink_secondary()))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(theme::ink_secondary())
+                        .child(SharedString::from(name.clone())),
+                ),
+        );
+    }
+    Some(column.into_any_element())
+}
+
+/// 历史/当前用户消息的附件行：历史图片可点开加载，加载后显示缩略图。
+fn history_attachment_view(
+    names: &[String],
+    metas: &[backend::HistoryAttachment],
+    weak: &gpui::WeakEntity<PilotApp>,
+    cx: &mut App,
+) -> Option<gpui::AnyElement> {
+    if names.is_empty() {
+        return None;
+    }
+    let (cache, pending) = weak
+        .upgrade()
+        .map(|app| {
+            let app = app.read(cx);
+            (app.history_images.clone(), app.history_images_pending.clone())
+        })
+        .unwrap_or_default();
+    let image_metas: Vec<&backend::HistoryAttachment> = metas
+        .iter()
+        .filter(|meta| meta.mime.starts_with("image/"))
+        .collect();
+    let image_names: std::collections::HashSet<&str> =
+        image_metas.iter().map(|meta| meta.file_name.as_str()).collect();
+    let mut column = div().mt(px(4.)).flex().flex_col().gap(px(4.));
+    for meta in image_metas {
+        let ref_key = meta.attachment_ref.clone();
+        if let Some(path) = cache.get(&meta.attachment_ref) {
+            let path = path.clone();
+            let thumb_path = path.clone();
+            let weak = weak.clone();
+            column = column.child(
+                div()
+                    .id(SharedString::from(format!("history-img-{}", ref_key)))
+                    .w(px(132.))
+                    .h(px(96.))
+                    .rounded(px(6.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(wecom_theme::composer_border())
+                    .cursor_pointer()
+                    .on_click(move |_event, _window, cx| {
+                        let path = thumb_path.clone();
+                        let _ = weak.update(cx, |this, cx| {
+                            this.image_preview = Some(path.clone());
+                            cx.notify();
+                        });
+                    })
+                    .child(
+                        img(path)
+                            .size_full()
+                            .object_fit(gpui::ObjectFit::Cover),
+                    ),
+            );
+            continue;
+        }
+        let loading = pending.contains(&meta.attachment_ref);
+        let meta = meta.clone();
+        let click_meta = meta.clone();
+        let weak = weak.clone();
+        column = column.child(
+            div()
+                .id(SharedString::from(format!("history-img-load-{}", ref_key)))
+                .h(px(24.))
+                .rounded(px(4.))
+                .bg(wecom_theme::chip_bg())
+                .px(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .cursor_pointer()
+                .when(!loading, |el| {
+                    el.on_click(move |_event, _window, cx| {
+                        let meta = click_meta.clone();
+                        let _ = weak.update(cx, |this, cx| this.load_history_image(&meta, cx));
+                    })
+                })
+                .child(icons::icon(icons::Icon::Paperclip, 11., wecom_theme::icon()))
+                .child(
+                    div()
+                        .max_w(px(160.))
+                        .truncate()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .text_color(wecom_theme::chip_text())
+                        .child(SharedString::from(meta.file_name.clone())),
+                )
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .text_color(wecom_theme::list_preview())
+                        .child(if loading { i18n::t("加载中…") } else { i18n::t("加载") }),
+                ),
+        );
+    }
+    for name in names {
+        if image_names.contains(name.as_str()) {
+            continue;
+        }
+        column = column.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(icons::icon(icons::Icon::Paperclip, 11., wecom_theme::icon()))
+                .child(
+                    div()
+                        .max_w(px(220.))
+                        .truncate()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .text_color(wecom_theme::chip_text())
+                        .child(SharedString::from(name.clone())),
+                ),
+        );
+    }
+    Some(column.into_any_element())
+}
+
+/// 按字符截断（id 可能不是纯 ASCII；不能按字节切）。
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut result: String = text.chars().take(limit).collect();
+    result.push('…');
+    result
+}
+
+fn nav_row(id: impl Into<gpui::ElementId>, active: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .min_h(px(54.))
+        .w_full()
+        .rounded(px(theme::RADIUS_CARD))
+        .px(px(8.))
+        .py(px(8.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .cursor_pointer()
+        .bg(if active { theme::selected() } else { theme::panel() })
+        .hover(|style| style.bg(theme::hover()))
+}
+
+fn two_line(title: String, subtitle: String, active: bool, pinned: bool) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .min_w(px(0.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(14.))
+                        .line_height(px(20.))
+                        .font_weight(if active {
+                            gpui::FontWeight::MEDIUM
+                        } else {
+                            gpui::FontWeight::NORMAL
+                        })
+                        .text_color(theme::ink())
+                        .truncate()
+                        .child(SharedString::from(title)),
+                )
+                .children(pinned.then(|| icons::icon(icons::Icon::Pin, 12., theme::ink_tertiary()))),
+        )
+        .child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .text_color(theme::ink_tertiary())
+                .truncate()
+                .child(SharedString::from(subtitle)),
+        )
+}
+
+ fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .line_height(px(16.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme::ink_tertiary())
+        .child(text.into())
+}
+
+/// 设置窗口的页顺序（P4-9 S1 子集；S3 的页在对应能力就绪后再出现）。
+const SETTINGS_PAGES: [&str; 18] = [
+    "通用",
+    "模型",
+    "插件",
+    "智能体",
+    "Bot",
+    "频道",
+    "团队记忆",
+    "连接器",
+    "IM",
+    "定时任务",
+    "密钥",
+    "能力",
+    "用量",
+    "关于",
+    "反馈",
+    "浏览器",
+    "电脑操控",
+    "更多",
+];
+
+/// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
+fn settings_page_icon(index: usize) -> icons::Icon {
+    match index {
+        0 => icons::Icon::Settings,
+        1 => icons::Icon::Cpu,
+        2 => icons::Icon::Folder,
+        3 => icons::Icon::Sparkles,
+        4 => icons::Icon::Bot,
+        5 => icons::Icon::Hash,
+        6 => icons::Icon::Brain,
+        7 => icons::Icon::Plug,
+        8 => icons::Icon::MessageCircle,
+        9 => icons::Icon::Calendar,
+        10 => icons::Icon::Key,
+        11 => icons::Icon::ListChecks,
+        12 => icons::Icon::Chart,
+        13 => icons::Icon::Info,
+        14 => icons::Icon::MessageSquare,
+        15 => icons::Icon::Folder,
+        16 => icons::Icon::Cpu,
+        _ => icons::Icon::Ellipsis,
+    }
+}
+
+/// 设置页骨架：页标题 + 纵向间距（调用方继续 `.child` 内容）。
+fn settings_page_body(_title: &'static str) -> gpui::Div {
+    // 页标题由设置壳统一渲染（原版 SettingsModal 的 h2），页面只排内容。
+    // gap 10 + settings_section 顶部 10 = 组间 20、标题到卡片 10。
+    div().w_full().flex().flex_col().gap(px(10.))
+}
+
+/// 设置页分区标题（13/18 · 600）。
+fn settings_section(title: impl Into<SharedString>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .w_full()
+        .px(px(4.))
+        .pt(px(10.))
+        .font_family(if wechat {
+            wecom_theme::FONT_FAMILY
+        } else {
+            theme::FONT_FAMILY
+        })
+        .text_size(px(13.))
+        .line_height(px(18.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(if wechat {
+            wecom_theme::chat_title()
+        } else {
+            theme::ink()
+        })
+        .child(title.into())
+}
+
+/// 设置页说明文字（12/16 次级色）。
+fn settings_note(text: impl Into<SharedString>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .font_family(if wechat {
+            wecom_theme::FONT_FAMILY
+        } else {
+            theme::FONT_FAMILY
+        })
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .text_color(if wechat {
+            wecom_theme::list_preview()
+        } else {
+            theme::ink_secondary()
+        })
+        .child(text.into())
+}
+
+/// 设置页错误说明（12/16 危险色；写路径失败不弹死框）。
+fn settings_error(text: impl Into<SharedString>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .w_full()
+        .font_family(if wechat {
+            wecom_theme::FONT_FAMILY
+        } else {
+            theme::FONT_FAMILY
+        })
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .text_color(theme::danger())
+        .child(text.into())
+}
+
+/// 工作目录尾名（定时任务找不到归属 Bot 时的展示名）。
+fn workspace_tail(path: &str) -> String {
+    let trimmed = path.trim().trim_end_matches(['\\', '/']);
+    trimmed
+        .rsplit(['\\', '/'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(i18n::t("未知工作区"))
+        .to_string()
+}
+
+/// 设置页的次按钮。
+fn settings_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let wechat = wecom_theme::active();
+    div()
+        .id(id)
+        .h(px(28.))
+        .rounded(px(if wechat { 4. } else { 999. }))
+        .bg(if wechat {
+            wecom_theme::chip_bg()
+        } else {
+            theme::hover()
+        })
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::raised_hover()))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .child(label.into()),
+        )
+}
+
+/// 值块（路径/长文本）：可选小标签 + 可换行的值。
+fn value_box(value: String, label: Option<&'static str>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .w_full()
+        .rounded(px(if wechat { 8. } else { theme::RADIUS_FIELD }))
+        .border_1()
+        .border_color(if wechat {
+            wecom_theme::panel_divider()
+        } else {
+            theme::edge()
+        })
+        .bg(if wechat {
+            wecom_theme::chip_bg()
+        } else {
+            theme::card()
+        })
+        .px(px(12.))
+        .py(px(10.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .children(label.map(|label| {
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(11.))
+                .text_color(if wechat {
+                    wecom_theme::time_label()
+                } else {
+                    theme::ink_tertiary()
+                })
+                .child(label)
+        }))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(if wechat { 13. } else { 12. }))
+                .line_height(px(if wechat { 20. } else { 16. }))
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink_secondary()
+                })
+                .child(SharedString::from(value)),
+        )
+}
+
+/// 设置页列表行：左标题 + 可选副标题，右侧放按钮（调用方 `.child`）。
+fn settings_row(title: String, detail: Option<String>) -> gpui::Div {
+    let wechat = wecom_theme::active();
+    div()
+        .w_full()
+        .min_h(px(42.))
+        .px(px(12.))
+        .py(px(10.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(12.))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .font_family(if wechat {
+                            wecom_theme::FONT_FAMILY
+                        } else {
+                            theme::FONT_FAMILY
+                        })
+                        .text_size(px(13.))
+                        .line_height(px(18.))
+                        .text_color(if wechat {
+                            wecom_theme::chat_title()
+                        } else {
+                            theme::ink()
+                        })
+                        .truncate()
+                        .child(SharedString::from(title)),
+                )
+                .children(detail.map(|detail| {
+                    div()
+                        .font_family(if wechat {
+                            wecom_theme::FONT_FAMILY
+                        } else {
+                            theme::FONT_FAMILY
+                        })
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(if wechat {
+                            wecom_theme::list_preview()
+                        } else {
+                            theme::ink_secondary()
+                        })
+                        .truncate()
+                        .child(SharedString::from(detail))
+                })),
+        )
+}
+
+/// 设置分组卡：行与行之间用细分割线，整组一个圆角卡（对齐原版 SettingsGroupCard）。
+fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    let count = rows.len();
+    let mut card = div()
+        .w_full()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(if wechat {
+            wecom_theme::panel_divider()
+        } else {
+            theme::edge()
+        })
+        .bg(if wechat {
+            wecom_theme::panel_bg()
+        } else {
+            theme::card()
+        })
+        .overflow_hidden()
+        .flex()
+        .flex_col();
+    for (index, row) in rows.into_iter().enumerate() {
+        let mut cell = div().w_full();
+        if index + 1 < count {
+            cell = cell
+                .border_b_1()
+                .border_color(if wechat {
+                    wecom_theme::divider()
+                } else {
+                    theme::edge()
+                });
+        }
+        card = card.child(cell.child(row));
+    }
+    card
+}
+
+fn kv_row(value: String, note: &'static str) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .min_h(px(42.))
+        .w_full()
+        .px(px(12.))
+        .py(px(10.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(12.))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .truncate()
+                .child(SharedString::from(value)),
+        )
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .text_color(if wechat {
+                    wecom_theme::time_label()
+                } else {
+                    theme::ink_tertiary()
+                })
+                .child(note),
+        )
+}
+
+fn hint_row(text: impl Into<SharedString>) -> impl IntoElement {
+    let wechat = wecom_theme::active();
+    div()
+        .px(px(8.))
+        .py(px(6.))
+        .font_family(if wechat {
+            wecom_theme::FONT_FAMILY
+        } else {
+            theme::FONT_FAMILY
+        })
+        .text_size(px(11.))
+        .text_color(if wechat {
+            wecom_theme::list_preview()
+        } else {
+            theme::ink_tertiary()
+        })
+        .child(text.into())
+}
+
+/// 「当前」标记（模型等列表里的选中项）。
+fn current_marker() -> impl IntoElement {
+    div()
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(11.))
+        .text_color(theme::accent())
+        .child(i18n::t("当前"))
+}
+
+/// IM 运行态文案（`WeixinRuntimeStatus::status`）。
+fn im_status_text(status: &str) -> &'static str {
+    match status {
+        "polling" => i18n::t("运行中（长轮询）"),
+        "connected" => i18n::t("运行中（长连接）"),
+        "connecting" => i18n::t("连接中"),
+        "reconnecting" => i18n::t("重连中"),
+        "kicked" => i18n::t("已下线（被踢）"),
+        "idle" => i18n::t("待机"),
+        "disabled" => i18n::t("已停用"),
+        "handled_elsewhere" => i18n::t("其他窗口处理中"),
+        "session_expired" => i18n::t("登录失效，请重新扫码"),
+        "error" => i18n::t("错误"),
+        _ => i18n::t("未知状态"),
+    }
+}
+
+/// 列表行的运行态：停用/未支持/待扫码/运行中/错误。
+fn im_runtime_label(
+    service: Option<&std::sync::Arc<im_service::ImService>>,
+    row: &im::ImBotRow,
+) -> (String, Rgba) {
+    if !row.enabled {
+        return (i18n::t("已停用").to_string(), theme::ink_tertiary());
+    }
+    if !matches!(row.provider.as_str(), "weixin" | "wecom") {
+        return (i18n::t("运行时未移植").to_string(), theme::ink_tertiary());
+    }
+    if !row.credential_registered {
+        return (i18n::t("待扫码").to_string(), theme::danger());
+    }
+    if let Some(status) = service.and_then(|service| service.runtime_status(&row.id)) {
+        let color = match status.status {
+            "polling" | "connected" => theme::success(),
+            "error" | "session_expired" => theme::danger(),
+            "handled_elsewhere" | "kicked" => theme::ink_tertiary(),
+            _ => theme::ink_secondary(),
+        };
+        return (im_status_text(status.status).to_string(), color);
+    }
+    if service.is_some_and(|service| service.is_running(&row.id)) {
+        return (i18n::t("运行中").to_string(), theme::success());
+    }
+    (i18n::t("待启动").to_string(), theme::ink_tertiary())
+}
+
+fn group_activation_label(
+    activation: Option<bots_service::BotGroupActivation>,
+) -> &'static str {
+    match activation {
+        Some(bots_service::BotGroupActivation::Always) => i18n::t("始终回复"),
+        Some(bots_service::BotGroupActivation::Mention) => i18n::t("仅 @ 时回复"),
+        Some(bots_service::BotGroupActivation::Disabled) | None => i18n::t("不响应群聊"),
+    }
+}
+
+fn bot_access_label(bot: &bots_service::BotConfig) -> &'static str {
+    match bot.access_mode {
+        Some(bots_service::BotAccessMode::Free) => i18n::t("自由"),
+        Some(bots_service::BotAccessMode::Whitelist) => i18n::t("白名单"),
+        None => {
+            if bot.private_chat_mode == Some(bots_service::BotPrivateChatMode::AllUsers) {
+                i18n::t("自由")
+            } else {
+                i18n::t("白名单")
+            }
+        }
+    }
+}
+
+fn text_block(text: String) -> impl IntoElement {
+    div()
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .text_color(theme::ink_secondary())
+        .child(SharedString::from(text))
+}
+
+/// 空态（DS §10.9：列表为空时居中、一句话，不套卡片框）。
+/// 标题 14/500 用主文字色，说明 12/18 用三级色；外层容器负责居中。
+fn empty_state(title: impl Into<SharedString>, body: impl Into<SharedString>) -> impl IntoElement {
+    empty_state_badged(None, title, body)
+}
+
+/// 带徽标的空态：首屏欢迎区放 Bot/频道头像，列表空态不放（`None`）。
+fn empty_state_badged(
+    badge: Option<gpui::AnyElement>,
+    title: impl Into<SharedString>,
+    body: impl Into<SharedString>,
+) -> impl IntoElement {
+    div()
+        .w_full()
+        .max_w(px(380.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(8.))
+        .px(px(16.))
+        .py(px(24.))
+        .children(badge.map(|badge| div().mb(px(4.)).child(badge)))
+        .child(
+            div()
+                .text_center()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(14.))
+                .line_height(px(20.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme::ink())
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_center()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .text_color(theme::ink_tertiary())
+                .child(body.into()),
+        )
+}
+
+/// 加载骨架（DS §10.9：加载用骨架占位，不用转圈）：三条气泡占位做余弦呼吸。
+/// 每条各自挂动画（元素 id 必须唯一），减少动效时自动落到静态首帧。
+fn skeleton_rows() -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(skeleton_bar("skeleton-bot-a", 210., false))
+        .child(skeleton_bar("skeleton-user", 150., true))
+        .child(skeleton_bar("skeleton-bot-b", 260., false))
+}
+
+fn skeleton_bar(id: &'static str, width: f32, right: bool) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .when(right, |row| row.justify_end())
+        .child(
+            div()
+                .w(px(width))
+                .h(px(34.))
+                .rounded(px(theme::RADIUS_BUBBLE))
+                .bg(theme::skeleton())
+                .with_animation(
+                    id,
+                    gpui::Animation::new(Duration::from_millis(1200))
+                        .repeat()
+                        .with_easing(|t| 0.775 - 0.225 * (t * std::f32::consts::TAU).cos()),
+                    |element, delta| element.opacity(delta.clamp(0., 1.)),
+                ),
+        )
+}
+
+/// AskUserQuestion/ExitPlanMode 的 permission.requested 只是等待态标记；
+/// 真正的交互随后经 requestUserInput 问题卡到达（与真实 UI 同语义）。
+fn is_user_input_backed(tool_name: &str) -> bool {
+    let tool = tool_name.trim().to_ascii_lowercase();
+    tool == "askuserquestion" || tool == "exitplanmode"
+}
+
+fn auto_permission(
+    bot: &Bot,
+    prompt: &PermissionPrompt,
+) -> Option<(String, String, String)> {
+    let level = parse_level(&bot.approval_level).ok()?;
+    let decision = decide(level, &bot.approval_allowlist, &prompt.tool_name);
+    let (allow, label) = match decision {
+        ApprovalDecision::Allow => (true, i18n::t("放行")),
+        ApprovalDecision::Deny => (false, "拒绝"),
+        ApprovalDecision::Ask => return None,
+    };
+    let option = pick_option(prompt, allow)?;
+    let note = format!(
+        "已按 {} 策略自动{} · {}",
+        match level {
+            bot_team::approval::ApprovalLevel::Full => "full",
+            bot_team::approval::ApprovalLevel::Auto => "auto",
+            bot_team::approval::ApprovalLevel::Ask => "ask",
+        },
+        label,
+        prompt.tool_name
+    );
+    if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+        eprintln!("[ui] auto {label} {} ({note})", prompt.tool_name);
+    }
+    Some((prompt.request_id.clone(), option, note))
+}
+
+/// allow 时优先「仅本次」，其次「始终」，再退任意 allow 类；deny 只认 deny 类。
+fn pick_option(prompt: &PermissionPrompt, allow: bool) -> Option<String> {
+    if allow {
+        for kind in ["allowOnce", "allowAlways"] {
+            if let Some(option) = prompt.options.iter().find(|option| option.kind == kind) {
+                return Some(option.option_id.clone());
+            }
+        }
+        prompt
+            .options
+            .iter()
+            .find(|option| option.kind.starts_with("allow"))
+            .map(|option| option.option_id.clone())
+    } else {
+        prompt
+            .options
+            .iter()
+            .find(|option| option.kind == "deny")
+            .map(|option| option.option_id.clone())
+    }
+}
+
+// ---- markdown 渲染（md 块 → gpui 元素）----
+
+/// gpui-kit 的 Markdown TextView（GFM 表格/列表/代码块/选择复制都由组件负责）。
+fn kit_markdown_el(id: String, text: &str, wechat: bool) -> gpui::AnyElement {
+    gpui::component::text::TextView::markdown(id, text.to_string())
+        .selectable(true)
+        .font_family(if wechat {
+            wecom_theme::FONT_FAMILY
+        } else {
+            theme::FONT_FAMILY
+        })
+        .text_size(px(14.))
+        .line_height(px(if wechat { 22. } else { 24. }))
+        .text_color(if wechat {
+            wecom_theme::bubble_text()
+        } else {
+            theme::ink()
+        })
+        .into_any_element()
+}
+
+fn tool_state_label(state: &str) -> &'static str {
+    match state {
+        "pending" => i18n::t("排队中"),
+        "running" => i18n::t("运行中"),
+        "done" => i18n::t("完成"),
+        "error" => i18n::t("失败"),
+        _ => "",
+    }
+}
+
+fn tool_state_color(state: &str) -> Rgba {
+    match state {
+        "running" => theme::accent(),
+        "done" => theme::success(),
+        "error" => theme::danger(),
+        _ => theme::ink_tertiary(),
+    }
+}
+
+/// 微信发送气泡右侧的小尾巴（6×12 三角，贴在气泡右上）。
+fn wechat_bubble_tail() -> impl IntoElement {
+    let color = wecom_theme::bubble_out();
+    gpui::canvas(
+        |bounds, _window, _cx| bounds,
+        move |bounds, _bounds2, window, _cx| {
+            let x = f32::from(bounds.origin.x);
+            let y = f32::from(bounds.origin.y);
+            let mut builder = gpui::PathBuilder::fill();
+            builder.move_to(point(px(x), px(y)));
+            builder.line_to(point(px(x + 6.0), px(y + 6.0)));
+            builder.line_to(point(px(x), px(y + 12.0)));
+            builder.close();
+            if let Ok(path) = builder.build() {
+                window.paint_path(path, gpui::Hsla::from(color));
+            }
+        },
+    )
+    .w(px(6.))
+    .h(px(12.))
+    .mt(px(8.))
+}
+
+/// 企微风格的工具卡：单行 chip，不再用满宽预览撑开。
+fn wecom_tool_card(
+    message: &Message,
+    expanded: bool,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> impl IntoElement {
+    let state_label = tool_state_label(&message.tool_state);
+    let state_color = if message.tool_state == "error" {
+        wecom_theme::nav_badge_bg()
+    } else {
+        wecom_theme::chip_text()
+    };
+    let (accent, glyph) = if message.tool_state == "error" {
+        (wecom_theme::nav_badge_bg(), icons::Icon::X)
+    } else {
+        (wecom_theme::chip_text(), icons::Icon::Settings)
+    };
+    let preview = message.tool_title.trim();
+    let show_preview = !preview.is_empty() && preview != message.tool_name.trim();
+    let has_detail = !message.tool_detail.trim().is_empty();
+    let call_id = message.tool_call_id.clone();
+    let toggle_id = SharedString::from(format!("tool-toggle-{call_id}"));
+    let weak = weak.clone();
+    let header = div()
+        .id(toggle_id)
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .when(has_detail, |el| {
+            el.cursor_pointer()
+                .hover(|style| style.opacity(0.9))
+                .on_click(move |_event, _window, cx| {
+                    let key = call_id.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        if !this.tool_expanded.remove(&key) {
+                            this.tool_expanded.insert(key.clone());
+                        }
+                        cx.notify();
+                    });
+                })
+        })
+            .child(icons::icon(glyph, 12., accent))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(wecom_theme::chip_text())
+                    .child(SharedString::from(message.tool_name.clone())),
+            )
+            .children(show_preview.then(|| {
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(wecom_theme::chip_text())
+                    .child(SharedString::from(preview.to_string()))
+            }))
+            .children((!state_label.is_empty()).then(|| {
+                div()
+                    .flex_shrink_0()
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(state_color)
+                    .child(i18n::t(state_label))
+            }))
+            .children(has_detail.then(|| {
+                icons::icon(
+                    if expanded {
+                        icons::Icon::ChevronLeft
+                    } else {
+                        icons::Icon::ChevronRight
+                    },
+                    12.,
+                    wecom_theme::icon(),
+                )
+            }));
+    div().w_full().flex().justify_start().child(
+        div()
+            .max_w(px(560.))
+            .rounded(px(6.))
+            .bg(wecom_theme::chip_bg())
+            .px(px(10.))
+            .py(px(5.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(header)
+            .children((expanded && has_detail).then(|| {
+                div()
+                    .w_full()
+                    .rounded(px(4.))
+                    .bg(wecom_theme::panel_card_bg())
+                    .px(px(8.))
+                    .py(px(6.))
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(wecom_theme::list_preview())
+                    .child(SharedString::from(message.tool_detail.clone()))
+            })),
+    )
+}
+
+fn tool_card(message: &Message) -> impl IntoElement {
+    let state_label = tool_state_label(&message.tool_state);
+    let state_color = tool_state_color(&message.tool_state);
+    let (accent, glyph) = if message.tool_state == "error" {
+        (theme::danger(), icons::Icon::X)
+    } else {
+        (theme::ink_tertiary(), icons::Icon::Settings)
+    };
+    // 预览与名字相同（很多工具只回显工具名）时不再重复一行。
+    let preview = message.tool_title.trim();
+    let show_preview = !preview.is_empty() && preview != message.tool_name.trim();
+    div()
+        .w_full()
+        .flex()
+        .justify_start()
+        // 与助手消息对齐：头像 22 + 间距 10 的缩进。
+        .pl(px(32.))
+        .child(
+            div()
+                .max_w(px(BUBBLE_MAX_WIDTH - 32.))
+                .rounded(px(theme::RADIUS_FIELD))
+                .border_1()
+                .border_color(theme::hairline())
+                .bg(theme::card())
+                .px(px(10.))
+                .py(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(icons::icon(glyph, 12., accent))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme::ink_secondary())
+                        .truncate()
+                        .child(SharedString::from(message.tool_name.clone())),
+                )
+                .children((!state_label.is_empty()).then(|| {
+                    div()
+                        .flex_shrink_0()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(state_color)
+                        .child(i18n::t(state_label))
+                }))
+                .children(show_preview.then(|| {
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .font_family(theme::FONT_MONO)
+                        .text_size(px(11.))
+                        .text_color(theme::ink_tertiary())
+                        .truncate()
+                        .child(SharedString::from(preview.to_string()))
+                })),
+        )
+}
+
+impl PilotApp {
+    /// 外壳分支：企微四栏（试验）或经典三栏。
+    fn shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.wecom_mode {
+            self.wecom_shell(window, cx)
+        } else {
+            self.classic_shell(window, cx)
+        }
+    }
+
+    fn classic_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.))
+            .w_full()
+            .child(self.titlebar(window, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .w_full()
+                    .child(self.sidebar(window, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .bg(theme::bg())
+                            .child(self.chat_header(window, cx))
+                            .child(self.transcript(window, cx))
+                            .children(self.question_cards(cx))
+                            .children(self.elicitation_cards(cx))
+                            .children(self.approval_cards(cx))
+                            .children(self.group_task_bar(cx))
+                            .child(self.composer(window, cx)),
+                    )
+                    .children(self.right_panel_open.then(|| self.right_panel(window, cx))),
+            )
+            .into_any_element()
+    }
+
+    fn wecom_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.))
+            .w_full()
+            .bg(wecom_theme::window_bg())
+            .child(self.wecom_titlebar(window, cx))
+            .child({
+                let mut body = div()
+                    .flex()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .w_full()
+                    .child(self.wecom_nav(cx));
+                if self.settings_open {
+                    body = body
+                        .child(self.wecom_list(window, cx))
+                        .child(self.wecom_settings_view(window, cx));
+                } else {
+                    body = body
+                        .child(self.wecom_list(window, cx))
+                        .child(self.wecom_chat(window, cx));
+                }
+                body
+            })
+            .into_any_element()
+    }
+
+    fn wecom_titlebar(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let maximize_icon = if window.is_maximized() {
+            icons::Icon::WindowRestore
+        } else {
+            icons::Icon::WindowMaximize
+        };
+        let topmost = self.topmost;
+        div()
+            .h(px(wecom_theme::TITLEBAR_HEIGHT))
+            .flex_shrink_0()
+            .w_full()
+            .flex()
+            .items_center()
+            .bg(wecom_theme::titlebar_bg())
+            .text_color(wecom_theme::nav_text())
+            .child(
+                div()
+                    .window_control_area(WindowControlArea::Drag)
+                    .flex_1()
+                    .h_full(),
+            )
+            .child(
+                div()
+                    .id("wechat-pin-topmost")
+                    .w(px(44.))
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(topmost, |el| {
+                        el.bg(wecom_theme::nav_item_selected_bg())
+                    })
+                    .when(!topmost, |el| {
+                        el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                    })
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.topmost = !this.topmost;
+                        save_ui_prefs(&this.muted, this.topmost, &this.pinned_settings);
+                        window_style::set_topmost(this.topmost);
+                        this.toast(if this.topmost { i18n::t("窗口已置顶") } else { i18n::t("已取消置顶") }, cx);
+                        cx.notify();
+                    }))
+                    .child(icons::icon(
+                        icons::Icon::Pushpin,
+                        14.,
+                        if topmost {
+                            wecom_theme::nav_text_active()
+                        } else {
+                            wecom_theme::icon()
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(self.wecom_window_button(
+                        "wechat-win-min",
+                        icons::Icon::Minus,
+                        false,
+                        |_window| window_style::minimize(),
+                    ))
+                    .child(self.wecom_window_button(
+                        "wechat-win-max",
+                        maximize_icon,
+                        false,
+                        |window| {
+                            if let Some(geometry) = current_geometry(window) {
+                                window_state::remember(geometry);
+                            }
+                            window_style::toggle_maximize();
+                        },
+                    ))
+                    .child(self.wecom_window_button(
+                        "wechat-win-close",
+                        icons::Icon::X,
+                        true,
+                        |window| {
+                            close_or_hide(window);
+                        },
+                    )),
+            )
+    }
+
+    fn wecom_window_button(
+        &self,
+        id: &'static str,
+        glyph: icons::Icon,
+        danger: bool,
+        action: impl Fn(&mut Window) + 'static,
+    ) -> impl IntoElement {
+        let base = div()
+            .id(id)
+            .w(px(44.))
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer();
+        let base = if danger {
+            base.hover(|style| style.bg(wecom_theme::nav_badge_bg()))
+        } else {
+            base.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+        };
+        base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
+            .child(icons::icon(glyph, 14., wecom_theme::icon()))
+    }
+
+    /// 企业微信的彩色首字方块头像（10px 圆角）。
+    fn wecom_avatar(id: &str, name: &str, size: f32) -> impl IntoElement {
+        div()
+            .size(px(size))
+            .flex_shrink_0()
+            .rounded(px(6.))
+            .bg(wecom_theme::avatar_color(id))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(size * 0.42))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(wecom_theme::nav_text_active())
+                    .child(name.chars().next().unwrap_or('B').to_string()),
+            )
+    }
+
+    /// 微信群头像的 2×2 拼图（用成员的真实方形头像，空位补底色）。
+    fn wecom_group_avatar(ids: &[String], size: f32) -> impl IntoElement {
+        let cell = size / 2.0;
+        let mut grid = div()
+            .size(px(size))
+            .flex_shrink_0()
+            .rounded(px(4.))
+            .overflow_hidden()
+            .bg(wecom_theme::chip_bg())
+            .flex()
+            .flex_wrap();
+        for index in 0..4 {
+            let cell_el = match ids.get(index) {
+                Some(id) => avatar::bot_avatar_square(id, cell).into_any_element(),
+                None => div()
+                    .size(px(cell))
+                    .bg(wecom_theme::chip_bg())
+                    .into_any_element(),
+            };
+            grid = grid.child(cell_el);
+        }
+        grid
+    }
+
+    fn wecom_channel_avatar(id: &str, size: f32) -> impl IntoElement {
+        div()
+            .size(px(size))
+            .flex_shrink_0()
+            .rounded(px(4.))
+            .bg(wecom_theme::avatar_color(id))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icons::icon(
+                icons::Icon::Hash,
+                size * 0.52,
+                wecom_theme::nav_text_active(),
+            ))
+    }
+
+    fn wecom_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.wecom_nav;
+        let total_unread: usize = self
+            .chats
+            .values()
+            .map(|chat| chat.unread)
+            .sum();
+        let mut rail = div()
+            .w(px(wecom_theme::NAV_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .bg(wecom_theme::nav_gradient())
+            .pt(px(12.))
+            .pb(px(12.))
+            .gap(px(4.));
+        // 顶部用户头像（圆形 + 在线绿点）
+        rail = rail.child(
+            div()
+                .id("wechat-me")
+                .relative()
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.me_card_open = !this.me_card_open;
+                    this.detail_menu_open = false;
+                    this.footer_menu_open = false;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .size(px(40.))
+                        .rounded_full()
+                        .bg(wecom_theme::avatar_color("me"))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(16.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(wecom_theme::nav_text_active())
+                        .child(i18n::t("我")),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(0.))
+                        .bottom(px(0.))
+                        .size(px(10.))
+                        .rounded_full()
+                        .bg(wecom_theme::online_dot())
+                        .border_2()
+                        .border_color(wecom_theme::titlebar_bg()),
+                ),
+        );
+        rail = rail.child(div().h(px(8.)));
+        let filters = [
+            (WecomNav::All, icons::Icon::MessageCircle, i18n::t("消息")),
+            (WecomNav::Bots, icons::Icon::Contacts, i18n::t("通讯录")),
+            (WecomNav::Channels, icons::Icon::Hash, i18n::t("频道")),
+        ];
+        for (filter, icon, label) in filters {
+            let active = current == filter && !self.settings_open;
+            // 微信激活态是实心绿色图标，不是「白色描边 + 选中底」。
+            let glyph = if filter == WecomNav::All && active {
+                icons::Icon::MessageCircleFilled
+            } else {
+                icon
+            };
+            rail = rail.child(
+                div()
+                    .id(SharedString::from(format!("wechat-rail-{label}")))
+                    .relative()
+                    .size(px(wecom_theme::NAV_ITEM_HEIGHT))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .bg(gpui::rgba(0x00000000))
+                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.wecom_nav = filter;
+                        this.settings_open = false;
+                        this.ensure_wecom_selection(cx);
+                        cx.notify();
+                    }))
+                    .child(icons::icon(
+                        glyph,
+                        24.,
+                        if active {
+                            wecom_theme::send_enabled()
+                        } else {
+                            wecom_theme::nav_icon()
+                        },
+                    ))
+                    .children((filter == WecomNav::All && total_unread > 0).then(|| {
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .right(px(2.))
+                            .min_w(px(16.))
+                            .h(px(16.))
+                            .px(px(4.))
+                            .rounded_full()
+                            .bg(wecom_theme::nav_badge_bg())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(wecom_theme::nav_text_active())
+                            .child(SharedString::from(if total_unread > 99 {
+                                "99+".to_string()
+                            } else {
+                                total_unread.to_string()
+                            }))
+                    })),
+            );
+        }
+        for tab in self.pinned_settings.clone() {
+            let active = self.settings_open && self.settings_tab == tab;
+            rail = rail.child(
+                div()
+                    .id(SharedString::from(format!("wechat-pinned-settings-{tab}")))
+                    .size(px(wecom_theme::NAV_ITEM_HEIGHT))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .bg(gpui::rgba(0x00000000))
+                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_settings_at(tab);
+                        cx.notify();
+                    }))
+                    .child(icons::icon(
+                        settings_page_icon(tab),
+                        24.,
+                        if active {
+                            wecom_theme::send_enabled()
+                        } else {
+                            wecom_theme::nav_icon()
+                        },
+                    )),
+            );
+        }
+        rail.child(div().flex_1()).child(
+            div()
+                .id("wechat-rail-settings")
+                .size(px(wecom_theme::NAV_ITEM_HEIGHT))
+                .rounded(px(6.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .bg(gpui::rgba(0x00000000))
+                .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    // 设置页头不再放关闭按钮；导轨齿轮同时承担开/关。
+                    this.settings_open = !this.settings_open;
+                    cx.notify();
+                }))
+                .child(icons::icon(
+                    icons::Icon::Settings,
+                    24.,
+                    if self.settings_open {
+                        wecom_theme::send_enabled()
+                    } else {
+                        wecom_theme::nav_icon()
+                    },
+                )),
+        )
+    }
+
+    fn ensure_wecom_selection(&mut self, cx: &mut Context<Self>) {
+        match self.wecom_nav {
+            WecomNav::Channels => {
+                if self.selected_group().is_none()
+                    && let Some(index) = self.roster.groups.iter().position(|_| true)
+                {
+                    self.select_group(index, cx);
+                }
+            }
+            WecomNav::Bots => {
+                if self.selected_bot().is_none()
+                    && let Some(index) = self.roster.bots.iter().position(|_| true)
+                {
+                    self.select_bot(index, cx);
+                }
+            }
+            WecomNav::All => {}
+        }
+    }
+
+    fn wecom_entries(&self, cx: &App) -> Vec<WecomEntry> {
+        let query = self.search_input.read(cx).content().trim().to_lowercase();
+        let mut entries = Vec::new();
+        let mut push = |is_group: bool,
+                        index: usize,
+                        id: String,
+                        name: String,
+                        fallback: String,
+                        at: u64,
+                        pinned: bool,
+                        unread: usize,
+                        active: bool,
+                        member_ids: Vec<String>| {
+            if !query.is_empty() && !name.to_lowercase().contains(&query) {
+                return;
+            }
+            let key = if is_group {
+                group_key(&id)
+            } else {
+                bot_key(&id)
+            };
+            let preview = self
+                .chats
+                .get(&key)
+                .and_then(|chat| {
+                    chat.messages
+                        .iter()
+                        .rev()
+                        .find(|message| !message.text.trim().is_empty())
+                        .map(|message| {
+                            message
+                                .text
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                })
+                .map(|text| truncate_chars(&text, 32))
+                .filter(|text| !text.is_empty())
+                .unwrap_or(fallback);
+            entries.push(WecomEntry {
+                is_group,
+                index,
+                id,
+                name,
+                preview,
+                at,
+                pinned,
+                unread,
+                active,
+                muted: self.muted.contains(&key),
+                member_ids,
+                status: chat_runtime_status(self.chats.get(&key)),
+            });
+        };
+        if self.wecom_nav != WecomNav::Channels {
+            for (index, bot) in self.roster.bots.iter().enumerate() {
+                let chat = self.chats.get(&bot_key(&bot.id));
+                let at = chat
+                    .and_then(|chat| chat.messages.last().map(|message| message.at))
+                    .unwrap_or(0);
+                push(
+                    false,
+                    index,
+                    bot.id.clone(),
+                    bot.name.clone(),
+                    if bot.role.is_empty() {
+                        i18n::t("暂无消息").to_string()
+                    } else {
+                        bot.role.clone()
+                    },
+                    at,
+                    bot.pinned,
+                    chat.map(|chat| chat.unread).unwrap_or(0),
+                    self.selection == Some(Selection::Bot(index)),
+                    Vec::new(),
+                );
+            }
+        }
+        if self.wecom_nav != WecomNav::Bots {
+            for (index, group) in self.roster.groups.iter().enumerate() {
+                let chat = self.chats.get(&group_key(&group.id));
+                let at = chat
+                    .and_then(|chat| chat.messages.last().map(|message| message.at))
+                    .unwrap_or(0);
+                push(
+                    true,
+                    index,
+                    group.id.clone(),
+                    group.name.clone(),
+                    count_members(group.member_ids.len()),
+                    at,
+                    group.pinned,
+                    chat.map(|chat| chat.unread).unwrap_or(0),
+                    self.selection == Some(Selection::Group(index)),
+                    group
+                        .member_ids
+                        .iter()
+                        .filter(|id| self.roster.bot_by_id(id).is_some())
+                        .take(4)
+                        .cloned()
+                        .collect(),
+                );
+            }
+        }
+        entries.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| b.at.cmp(&a.at))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        entries
+    }
+
+    /// 侧栏分组后的列表行：未分组条目在前，之后是各分组标题 + 成员（折叠时只留标题）。
+    fn wecom_list_rows(&self, cx: &App) -> Vec<WecomListRow> {
+        let entries = self.wecom_entries(cx);
+        if self.sidebar_sections.sections.is_empty() {
+            return entries.into_iter().map(WecomListRow::Entry).collect();
+        }
+        let section_ids: std::collections::HashSet<String> = self
+            .sidebar_sections
+            .sections
+            .iter()
+            .map(|section| section.id.clone())
+            .collect();
+        let mut ungrouped = Vec::new();
+        let mut grouped: HashMap<String, Vec<WecomEntry>> = HashMap::new();
+        for entry in entries {
+            let key = wecom_entry_key(&entry);
+            match self.sidebar_sections.membership.get(&key) {
+                Some(section_id) if section_ids.contains(section_id) => {
+                    grouped.entry(section_id.clone()).or_default().push(entry);
+                }
+                _ => ungrouped.push(entry),
+            }
+        }
+        let mut rows: Vec<WecomListRow> = ungrouped.into_iter().map(WecomListRow::Entry).collect();
+        for section in &self.sidebar_sections.sections {
+            let items = grouped.remove(&section.id).unwrap_or_default();
+            rows.push(WecomListRow::Section {
+                id: section.id.clone(),
+                name: section.name.clone(),
+                color: section.color.clone(),
+                collapsed: section.collapsed,
+                count: items.len(),
+            });
+            if !section.collapsed {
+                rows.extend(items.into_iter().map(WecomListRow::Entry));
+            }
+        }
+        rows
+    }
+
+    fn wecom_list(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let list = div()
+            .w(px(wecom_theme::LIST_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(wecom_theme::list_gradient());
+        if self.settings_open {
+            let mut rows = div().flex().flex_col().gap(px(2.)).px(px(8.));
+            for (index, label) in SETTINGS_PAGES.iter().enumerate() {
+                let active = self.settings_tab == index;
+                if index == 14 {
+                    rows = rows.child(
+                        div()
+                            .mx(px(8.))
+                            .my(px(6.))
+                            .h(px(1.))
+                            .bg(wecom_theme::divider()),
+                    );
+                }
+                rows = rows.child(
+                    div()
+                        .id(SharedString::from(format!("wechat-set-{index}")))
+                        .h(px(32.))
+                        .w_full()
+                        .px(px(8.))
+                        .rounded(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .cursor_pointer()
+                        .when(active, |el| el.bg(wecom_theme::nav_item_selected_bg()))
+                        .when(!active, |el| {
+                            el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        })
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            this.settings_tab = index;
+                            cx.notify();
+                            // 点导航不产生焦点，Esc 会因无焦点元素而丢键：把焦点留在设置页上。
+                            this.settings_focus.focus(window, cx);
+                        }))
+                        .child(icons::icon(
+                            settings_page_icon(index),
+                            16.,
+                            if active {
+                                wecom_theme::send_enabled()
+                            } else {
+                                wecom_theme::icon()
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(13.))
+                                .line_height(px(18.))
+                                .text_color(if active {
+                                    wecom_theme::chat_title()
+                                } else {
+                                    wecom_theme::list_title()
+                                })
+                                .child(i18n::t(label)),
+                        ),
+                );
+            }
+            return list
+                .child(
+                    div()
+                        .h(px(56.))
+                        .flex_shrink_0()
+                        .px(px(16.))
+                        .flex()
+                        .items_center()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(14.))
+                        .line_height(px(20.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(wecom_theme::list_title())
+                        .child(i18n::t("设置")),
+                )
+                .child(
+                    div()
+                        .id("wechat-settings-list")
+                        .flex_1()
+                        .min_h(px(0.))
+                        .overflow_y_scroll()
+                        .scrollbar_width(px(6.))
+                        .child(rows),
+                );
+        }
+        let rows = self.wecom_list_rows(cx);
+        let count = rows.len();
+        let fingerprint = wecom_list_rows_fingerprint(&rows);
+        if self.wecom_list_state.item_count() != count {
+            self.wecom_list_state.reset(count);
+            self.wecom_list_fingerprint = fingerprint;
+        } else if self.wecom_list_fingerprint != fingerprint {
+            if count > 0 {
+                self.wecom_list_state.remeasure_items(0..count);
+            }
+            self.wecom_list_fingerprint = fingerprint;
+        }
+        let list_body: gpui::AnyElement = if rows.is_empty() {
+            div()
+                .py(px(24.))
+                .text_center()
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(12.))
+                .text_color(wecom_theme::list_preview())
+                .child(i18n::t("没有匹配的会话"))
+                .into_any_element()
+        } else {
+            let rows = std::sync::Arc::new(rows);
+            let weak = cx.weak_entity();
+            gpui::list(
+                self.wecom_list_state.clone(),
+                move |index, _window, _cx| wecom_list_row_el(&rows[index], &weak),
+            )
+            .size_full()
+            .into_any_element()
+        };
+        list.child(
+            div()
+                .px(px(12.))
+                .pt(px(12.))
+                .pb(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .id("wechat-search")
+                        .flex_1()
+                        .h(px(wecom_theme::SEARCH_HEIGHT))
+                        .rounded(px(4.))
+                        .bg(wecom_theme::search_bg())
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(icons::icon(
+                            icons::Icon::Search,
+                            14.,
+                            wecom_theme::list_preview(),
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(13.))
+                                .line_height(px(18.))
+                                .text_color(wecom_theme::list_title())
+                                .child(self.search_input.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("wechat-new")
+                        .size(px(28.))
+                        .rounded_full()
+                        .bg(wecom_theme::search_bg())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(wecom_theme::list_hover()))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.open_new_dialog(cx);
+                        }))
+                        .child(icons::icon(icons::Icon::Plus, 16., wecom_theme::icon())),
+                ),
+        )
+        .child(
+            div()
+                .id("wechat-list")
+                .flex_1()
+                .min_h(px(0.))
+                .child(list_body),
+        )
+    }
+
+    fn wecom_settings_view(
+        &mut self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let title = i18n::t(SETTINGS_PAGES[self.settings_tab]);
+        let tab = self.settings_tab;
+        let pinned = self.pinned_settings.contains(&tab);
+        let page = self.settings_page(cx);
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(wecom_theme::chat_bg())
+            // 内嵌设置：焦点句柄必须挂在主轴，否则无焦点元素时 Esc 会丢。
+            .track_focus(&self.settings_focus)
+            .child(
+                div()
+                    .h(px(56.))
+                    .flex_shrink_0()
+                    .px(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(15.))
+                            .line_height(px(24.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(wecom_theme::chat_title())
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .id("wecom-settings-pin")
+                            .h(px(28.))
+                            .px(px(8.))
+                            .rounded(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.toggle_pinned_setting(tab, cx);
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::Pin,
+                                13.,
+                                if pinned {
+                                    wecom_theme::send_enabled()
+                                } else {
+                                    wecom_theme::panel_text()
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .line_height(px(18.))
+                                    .text_color(if pinned {
+                                        wecom_theme::send_enabled()
+                                    } else {
+                                        wecom_theme::panel_text()
+                                    })
+                                    .child(if pinned {
+                                        i18n::t("从侧栏移除")
+                                    } else {
+                                        i18n::t("添加到侧栏")
+                                    }),
+                            ),
+                    ),
+            )
+            .child(div().h(px(1.)).bg(wecom_theme::divider()))
+            .child(
+                div()
+                    .id("wecom-settings-scroll")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .px(px(24.))
+                    .py(px(16.))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(920.))
+                            .mx_auto()
+                            .child(
+                                div()
+                                    .relative()
+                                    .with_animation(
+                                        SharedString::from(format!(
+                                            "wecom-settings-page-{tab}"
+                                        )),
+                                        gpui::Animation::new(theme::motion_base())
+                                            .with_easing(theme::ease_out),
+                                        |element, delta| {
+                                            let delta = delta.clamp(0., 1.);
+                                            element.opacity(delta).top(px(6. * (1. - delta)))
+                                        },
+                                    )
+                                    .child(page),
+                            ),
+                    ),
+            )
+    }
+
+    fn wecom_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = if let Some(bot) = self.selected_bot() {
+            bot.name.clone()
+        } else if let Some(group) = self.selected_group() {
+            group.name.clone()
+        } else {
+            "Mode Bot".to_string()
+        };
+        let is_bot_chat = self.selected_bot().is_some();
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(wecom_theme::chat_bg())
+            .child(
+                div()
+                    .h(px(56.))
+                    .flex_shrink_0()
+                    .px(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(15.))
+                                    .line_height(px(20.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(wecom_theme::chat_title())
+                                    .child(SharedString::from(title)),
+                            )
+                            .children(is_bot_chat.then(|| {
+                                div()
+                                    .size(px(14.))
+                                    .flex_shrink_0()
+                                    .rounded(px(3.))
+                                    .bg(wecom_theme::chip_bg())
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(icons::icon(
+                                        icons::Icon::Bot,
+                                        10.,
+                                        wecom_theme::chip_text(),
+                                    ))
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("wechat-more")
+                            .size(px(28.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                if this.selection.is_some() {
+                                    this.detail_menu_open = !this.detail_menu_open;
+                                    this.menu_selected = 0;
+                                }
+                                cx.notify();
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::Settings,
+                                22.,
+                                wecom_theme::icon(),
+                            )),
+                    ),
+            )
+            .child(self.wecom_transcript(window, cx))
+            .children(self.question_cards(cx))
+            .children(self.elicitation_cards(cx))
+            .children(self.approval_cards(cx))
+            .children(self.group_task_bar(cx))
+            .child(self.wecom_composer(window, cx))
+    }
+
+    fn wecom_transcript(
+        &mut self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let key = self.active_key();
+        let bot = self.selected_bot().cloned();
+        let group = self.selected_group().cloned();
+        let is_group = group.is_some();
+        let default_author = bot
+            .as_ref()
+            .map(|bot| bot.name.clone())
+            .or_else(|| group.as_ref().map(|group| group.name.clone()))
+            .unwrap_or_else(|| "Bot".to_string());
+        let member_ids: HashMap<String, String> = self
+            .roster
+            .bots
+            .iter()
+            .map(|bot| (bot.name.clone(), bot.id.clone()))
+            .collect();
+        let mention_names: Vec<String> = group
+            .as_ref()
+            .map(|group| {
+                group
+                    .member_ids
+                    .iter()
+                    .filter_map(|id| self.roster.bot_by_id(id).map(|bot| bot.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(chat) = key.as_ref().and_then(|key| self.chats.get(key)) else {
+            return div()
+                .flex_1()
+                .min_h(px(0.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(empty_state(
+                    i18n::t("选择会话"),
+                    "从左侧列表选择 Bot 或频道，或点右上角 + 新建。",
+                ))
+                .into_any_element();
+        };
+        if chat.messages.is_empty() {
+            if !chat.ready {
+                return div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .flex()
+                    .justify_center()
+                    .child(skeleton_rows())
+                    .into_any_element();
+            }
+            return div().flex_1().min_h(px(0.)).into_any_element();
+        }
+        let start = chat.messages.len().saturating_sub(chat.transcript_limit);
+        let chat_key = key.clone().unwrap_or_default();
+        let mut rows: Vec<WecomRow> = Vec::new();
+        let mut turn_rows: Vec<usize> = Vec::new();
+        if start > 0 {
+            rows.push(WecomRow::LoadEarlier {
+                key: chat_key.clone(),
+                hidden: start,
+            });
+        }
+        let mut last_day: Option<String> = None;
+        for (_index, message) in chat.messages.iter().enumerate().skip(start) {
+            if message.kind == MsgKind::Tool {
+                rows.push(WecomRow::Tool(message.clone()));
+                continue;
+            }
+            if message.kind == MsgKind::Reasoning {
+                if !self.show_thinking || message.text.trim().is_empty() {
+                    continue;
+                }
+                let key = format!(
+                    "reason-{}-{}",
+                    message.at,
+                    message.member.as_deref().unwrap_or("")
+                );
+                rows.push(WecomRow::Reasoning {
+                    expanded: self.reasoning_expanded.contains(&key),
+                    key,
+                    text: message.text.clone(),
+                    member: message.member.clone(),
+                    streaming: message.streaming,
+                });
+                continue;
+            }
+            if is_group && message.role == Role::User && is_group_prompt(&message.text) {
+                continue;
+            }
+            if message.at > 0 {
+                let day = time::format_day(message.at);
+                if last_day.as_deref() != Some(day.as_str()) {
+                    last_day = Some(day);
+                    rows.push(WecomRow::Date(format!(
+                        "{} {}",
+                        time::day_label(message.at),
+                        time::format_hm(message.at)
+                    )));
+                }
+            }
+            if message.role == Role::User {
+                // 历史里偶发空 userInput（附件元数据缺失时）不渲染空气泡。
+                if message.text.is_empty()
+                    && message.attachments.is_empty()
+                    && message.attachment_meta.is_empty()
+                {
+                    continue;
+                }
+                rows.push(WecomRow::User {
+                    text: message.text.clone(),
+                    attachments: message.attachments.clone(),
+                    attachment_meta: message.attachment_meta.clone(),
+                });
+                turn_rows.push(rows.len() - 1);
+                continue;
+            }
+            if message.text.is_empty() && !message.streaming {
+                continue;
+            }
+            let author = message
+                .member
+                .clone()
+                .unwrap_or_else(|| default_author.clone());
+            let author_id = message
+                .member
+                .as_ref()
+                .and_then(|name| member_ids.get(name))
+                .cloned()
+                .unwrap_or_else(|| author.clone());
+            rows.push(WecomRow::Assistant {
+                text: message.text.clone(),
+                author,
+                author_id,
+            });
+        }
+        let count = rows.len();
+        let fingerprint = wecom_rows_fingerprint(&rows);
+        let last_row_fingerprint = rows.last().map(wecom_row_fingerprint).unwrap_or(0);
+        let old_count = self.wecom_row_count;
+        let chat_changed = self.wecom_scroller_chat.as_deref() != Some(chat_key.as_str());
+        if chat_changed {
+            self.wecom_scroller.update(cx, |state, cx| {
+                state.reset(count, cx);
+                state.remeasure(cx);
+                state.scroll_to_end(cx);
+            });
+            self.wecom_row_count = count;
+            self.wecom_rows_fingerprint = fingerprint;
+            self.wecom_last_row_fingerprint = last_row_fingerprint;
+            self.wecom_scroller_chat = Some(chat_key);
+            if !turn_rows.is_empty() {
+                self.wecom_turn_cursor = turn_rows.len() - 1;
+            }
+        } else if count != old_count {
+            if count > old_count && last_row_fingerprint == self.wecom_last_row_fingerprint {
+                // 只是向上补了历史（加载更早）：prepend 保持滚动锚点。
+                let added = count - old_count;
+                self.wecom_scroller
+                    .update(cx, |state, cx| state.prepend(added, cx));
+            } else if count > old_count {
+                // 新消息：append 会为新增行建测量项；reset 在本组件里会复用旧行元素，
+                // 导致新助手行显示上一条内容。
+                let added = count - old_count;
+                self.wecom_scroller.update(cx, |state, cx| {
+                    state.append(added, cx);
+                    state.scroll_to_end(cx);
+                });
+            } else {
+                self.wecom_scroller.update(cx, |state, cx| {
+                    state.reset(count, cx);
+                    state.remeasure(cx);
+                });
+            }
+            self.wecom_row_count = count;
+            self.wecom_rows_fingerprint = fingerprint;
+            self.wecom_last_row_fingerprint = last_row_fingerprint;
+        } else if self.wecom_rows_fingerprint != fingerprint {
+            // 行数不变但内容增长（流式回复）：通知虚拟列表重测，否则行高与内容会停在旧帧。
+            self.wecom_scroller
+                .update(cx, |state, cx| state.remeasure(cx));
+            self.wecom_rows_fingerprint = fingerprint;
+            self.wecom_last_row_fingerprint = last_row_fingerprint;
+        }
+        let turn_rows = std::sync::Arc::new(turn_rows);
+        let rows = std::sync::Arc::new(rows);
+        let render_rows = rows.clone();
+        let weak = cx.weak_entity();
+        let scroller = gpui::component::message_scroller::MessageScroller::new(
+            "wechat-transcript",
+            self.wecom_scroller.clone(),
+            move |index, _window, cx| -> gpui::AnyElement {
+                wecom_row_el(
+                    &render_rows[index],
+                    index,
+                    is_group,
+                    &mention_names,
+                    &weak,
+                    cx,
+                )
+            },
+        )
+        .scrollbar(true)
+        .jump_button(false)
+        .with_row_style(gpui::StyleRefinement::default().px(px(16.)).pb(px(8.)))
+        .flex_1()
+        .min_h(px(0.));
+        let mut container = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.))
+            .child(scroller);
+        if turn_rows.len() > 1 {
+            let turns_prev = turn_rows.clone();
+            let turns_next = turn_rows.clone();
+            let cursor = self.wecom_turn_cursor;
+            let can_prev = cursor > 0;
+            let can_next = cursor + 1 < turns_prev.len();
+            let mut nav = div()
+                .absolute()
+                .top(px(12.))
+                .right(px(16.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(wecom_theme::composer_border())
+                .bg(wecom_theme::panel_card_bg())
+                .p(px(2.));
+            for (label, previous, enabled) in
+                [("↑", true, can_prev), ("↓", false, can_next)]
+            {
+                let turns = if previous {
+                    turns_prev.clone()
+                } else {
+                    turns_next.clone()
+                };
+                nav = nav.child(
+                    div()
+                        .id(if previous {
+                            "wechat-turn-prev"
+                        } else {
+                            "wechat-turn-next"
+                        })
+                        .size(px(22.))
+                        .rounded(px(4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .when(!enabled, |el| el.opacity(0.35))
+                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if previous {
+                                if this.wecom_turn_cursor > 0 {
+                                    this.wecom_turn_cursor -= 1;
+                                }
+                            } else if this.wecom_turn_cursor + 1 < turns.len() {
+                                this.wecom_turn_cursor += 1;
+                            }
+                            if let Some(index) = turns.get(this.wecom_turn_cursor) {
+                                this.wecom_scroller.update(cx, |state, cx| {
+                                    state.scroll_to_item(*index, cx);
+                                });
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .text_color(wecom_theme::icon())
+                                .child(i18n::t(label)),
+                        ),
+                );
+            }
+            container = container.child(nav);
+        }
+        container.into_any_element()
+    }
+
+    fn wecom_composer(
+        &mut self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let chat = self.active_key().and_then(|key| self.chats.get(&key));
+        let ready = chat.is_some_and(|chat| chat.ready);
+        let streaming = chat.is_some_and(|chat| chat.streaming);
+        let pending_approval = chat
+            .is_some_and(|chat| !chat.permissions.is_empty() || !chat.questions.is_empty());
+        let has_attachments = chat.is_some_and(|chat| !chat.pending_attachments.is_empty());
+        let is_bot = self.selected_bot().is_some();
+        let is_group = self.selected_group().is_some();
+        let send_enabled = (is_bot || is_group)
+            && ready
+            && !streaming
+            && !pending_approval
+            && (!self.input.read(cx).content().trim().is_empty() || has_attachments);
+        let send_bg = if streaming {
+            wecom_theme::nav_badge_bg()
+        } else if send_enabled {
+            wecom_theme::send_enabled()
+        } else {
+            wecom_theme::send_disabled_bg()
+        };
+        let send_fg = if streaming || send_enabled {
+            wecom_theme::nav_text_active()
+        } else {
+            wecom_theme::send_disabled_text()
+        };
+        div()
+            .ml(px(16.))
+            .mr(px(16.))
+            .mb(px(16.))
+            .min_h(px(wecom_theme::COMPOSER_HEIGHT))
+            .flex_shrink_0()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(wecom_theme::composer_border())
+            .bg(wecom_theme::composer_bg())
+            .on_drop::<gpui::ExternalPaths>(cx.listener(
+                |this, paths: &gpui::ExternalPaths, _window, cx| {
+                    let files: Vec<String> = paths
+                        .paths()
+                        .iter()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .collect();
+                    this.stage_attachment_paths(files, cx);
+                },
+            ))
+            .flex()
+            .flex_col()
+            .children(self.mention_panel(cx))
+            .children(self.attachment_chips(cx))
+            .children(self.error_bar(cx))
+            .child(
+                div()
+                    .id("composer-input")
+                    .key_context("Composer")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .px(px(12.))
+                    .py(px(14.))
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(14.))
+                    .line_height(px(22.))
+                    .text_color(wecom_theme::bubble_text())
+                    .child(self.input.clone()),
+            )
+            .child(
+                div()
+                    .h(px(44.))
+                    .flex_shrink_0()
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .id("wechat-tool-smile")
+                            .size(px(28.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                let content = this.input.read(cx).content().to_string();
+                                this.input.update(cx, |input, cx| {
+                                    input.set_content(format!("{content}🙂"), cx);
+                                });
+                            }))
+                            .child(icons::icon(icons::Icon::Smile, 22., wecom_theme::icon())),
+                    )
+                    .child(
+                        div()
+                            .id("wechat-tool-folder")
+                            .size(px(28.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.stage_attachments(cx);
+                            }))
+                            .child(icons::icon(icons::Icon::Folder, 22., wecom_theme::icon())),
+                    )
+                    .child(
+                        div()
+                            .id("wechat-tool-scissors")
+                            .size(px(28.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.paste_clipboard_image(cx);
+                            }))
+                            .child(icons::icon(icons::Icon::Scissors, 22., wecom_theme::icon())),
+                    )
+                    .child(
+                        div()
+                            .id("wechat-tool-mic")
+                            .size(px(28.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toast(i18n::t("语音暂未接入"), cx);
+                            }))
+                            .child(icons::icon(icons::Icon::Mic, 22., wecom_theme::icon())),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("wechat-send")
+                            .h(px(26.))
+                            .px(px(14.))
+                            .rounded(px(4.))
+                            .bg(send_bg)
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(send_fg)
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                if this.active_key().is_some_and(|key| {
+                                    this.chats
+                                        .get(&key)
+                                        .is_some_and(|chat| chat.streaming)
+                                }) {
+                                    this.stop_streaming(cx);
+                                    return;
+                                }
+                                this.send_current(window, cx);
+                            }))
+                            .child(if streaming { i18n::t("停止") } else { i18n::t("发送") }),
+                    ),
+            )
+    }
+}
+
+impl Render for PilotApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let render_started = std::time::Instant::now();
+        // gpui 只把按键派发给「有焦点的元素」的派发路径：窗口起来时若没有任何元素持有
+        // 焦点，字符输入与全局 action（Ctrl+N/K/,）都会静默丢失。首帧把焦点交给输入框，
+        // 之后焦点归用户（点击输入框/搜索框各自接管）。
+        if self.pending_find {
+            self.pending_find = false;
+            self.on_find_shortcut(&FindShortcut, window, cx);
+        }
+        // 每帧把窗口几何记进内存槽（后台线程负责落盘）。首帧先做一次恢复校准：
+        // gpui 的 border offset 换算在 DWM 下不对称，实测「请求 - 实际」后才能固定位置。
+        if let Some(geometry) = current_geometry(window) {
+            window_state::calibrate_if_pending((geometry.x, geometry.y));
+            window_state::remember(geometry);
+        }
+        if !self.first_frame_logged {
+            self.first_frame_logged = true;
+            // 窗口已存在：补 DWM 阴影与任务栏图标（幂等，只在首帧跑一次）。
+            window_style::apply();
+            if self.topmost {
+                window_style::set_topmost(true);
+            }
+            // 最大化/还原由系统处理，图标与几何靠窗口尺寸观察者同步。
+            self.bounds_observer = Some(cx.observe_window_bounds(window, |_this, window, cx| {
+                if let Some(geometry) = current_geometry(window) {
+                    window_state::remember(geometry);
+                }
+                cx.notify();
+            }));
+            // 托盘：首次启动装一次（失败不影响主窗口）。
+            #[cfg(windows)]
+            {
+                tray::install();
+            }
+            if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1")
+                && let Some(boot) = BOOT_AT.get()
+            {
+                eprintln!("[boot] first frame in {} ms", boot.elapsed().as_millis());
+            }
+        }
+        if !self.focus_bootstrapped && window.focused(cx).is_none() {
+            self.focus_bootstrapped = true;
+            let handle = self.input.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, cx| {
+                handle.focus(window, cx);
+            });
+        }
+        let pending_notifications = std::mem::take(&mut self.pending_notifications);
+        for message in pending_notifications {
+            window.push_notification(
+                gpui::component::notification::Notification::new()
+                    .message(message)
+                    .placement(gpui::Anchor::BottomCenter)
+                    .w(px(320.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(wecom_theme::composer_border())
+                    .bg(wecom_theme::panel_card_bg())
+                    .px(px(16.))
+                    .py(px(10.))
+                    .text_color(wecom_theme::chat_title()),
+                cx,
+            );
+        }
+        if let Some(request) = self.pending_bot_dialog.take() {
+            self.open_bot_form_dialog(request, window, cx);
+        }
+        if let Some(request) = self.pending_group_dialog.take() {
+            self.open_group_form_dialog(request, window, cx);
+        }
+        if let Some(bot_id) = self.pending_allowlist_dialog.take() {
+            self.open_allowlist_dialog(bot_id, window, cx);
+        }
+        if let Some(bot_id) = self.pending_model_dialog.take() {
+            self.open_model_dialog(bot_id, window, cx);
+        }
+        if let Some(group_id) = self.pending_group_goal_dialog.take() {
+            self.open_group_goal_dialog(group_id, window, cx);
+        }
+        if let Some(group_id) = self.pending_group_tasks_dialog.take() {
+            self.open_group_tasks_dialog(group_id, window, cx);
+        }
+        if let Some((provider_id, provider_name)) = self.pending_provider_key_dialog.take() {
+            self.open_provider_key_dialog(provider_id, provider_name, window, cx);
+        }
+        if let Some(request) = self.pending_section_dialog.take() {
+            self.open_section_dialog(request, window, cx);
+        }
+        if let Some((provider_id, provider_name, base_url)) =
+            self.pending_provider_url_dialog.take()
+        {
+            self.open_provider_url_dialog(provider_id, provider_name, base_url, window, cx);
+        }
+        if let Some(info) = self.pending_plugin_config.take() {
+            self.open_plugin_config_dialog(info, window, cx);
+        }
+        let mut root = div();
+        root.text_style().font_fallbacks = Some(theme::font_fallbacks());
+        let root = root
+            .id("pilot-root")
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme::bg())
+            .font_family(theme::FONT_FAMILY)
+            .text_color(theme::ink())
+            .on_action(cx.listener(Self::on_send))
+            .on_action(cx.listener(Self::on_close_overlay))
+            .on_action(cx.listener(Self::on_new_session_shortcut))
+            .on_action(cx.listener(Self::on_search_shortcut))
+            .on_action(cx.listener(Self::on_settings_shortcut))
+            .on_action(cx.listener(Self::on_select_next))
+            .on_action(cx.listener(Self::on_select_prev))
+            .on_action(cx.listener(Self::on_approve_allow))
+            .on_action(cx.listener(Self::on_approve_deny))
+            .on_action(cx.listener(Self::on_new_bot_shortcut))
+            .on_action(cx.listener(Self::on_edit_bot_shortcut))
+            .on_action(cx.listener(Self::on_new_channel_shortcut))
+            .on_action(cx.listener(Self::on_submit_dialog))
+            .on_action(cx.listener(Self::on_find_shortcut))
+            .on_action(cx.listener(Self::on_palette_shortcut))
+            .on_action(cx.listener(Self::on_palette_prev))
+            .on_action(cx.listener(Self::on_palette_next))
+            .on_action(cx.listener(Self::on_palette_submit))
+            .on_action(cx.listener(Self::on_find_prev))
+            .on_action(cx.listener(Self::on_find_next))
+            .on_action(cx.listener(Self::on_find_open))
+            .on_action(cx.listener(Self::on_mention_next))
+            .on_action(cx.listener(Self::on_mention_prev))
+            .on_action(cx.listener(Self::on_focus_next))
+            .on_action(cx.listener(Self::on_focus_prev))
+            .child(self.shell(window, cx))
+            .children(self.image_preview_overlay(cx))
+            .children(self.settings_overlay(window, cx))
+            .children(self.footer_menu_overlay(cx))
+            .children(None::<gpui::AnyElement>)
+            .children(self.find_dialog_overlay(window, cx))
+            .children(self.palette_overlay(window, cx))
+;
+        // 渲染成本打点（元素构建耗时；> 8ms 才报，避免日志噪音）。
+        if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+            let elapsed = render_started.elapsed();
+            if elapsed.as_millis() >= 8 {
+                let messages = self
+                    .active_key()
+                    .and_then(|key| self.chats.get(&key))
+                    .map(|chat| chat.messages.len())
+                    .unwrap_or(0);
+                eprintln!(
+                    "[perf] render {} ms (messages={messages})",
+                    elapsed.as_millis()
+                );
+            }
+        }
+        root
+            .children(self.me_card_overlay(cx))
+            .children(self.detail_menu_overlay(window, cx))
+    }
+}
+
+/// 进程启动时刻（首帧耗时基线；`BOT_PILOT_DEBUG=1` 时打印）。
+static BOOT_AT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// 读当前窗口几何（隐藏/最小化时 bounds 可能不可信，仍原样记录）。
+fn current_geometry(window: &Window) -> Option<window_state::Geometry> {
+    let bounds = window.bounds();
+    let origin = bounds.origin;
+    let size = bounds.size;
+    Some(window_state::Geometry {
+        x: f32::from(origin.x),
+        y: f32::from(origin.y),
+        width: f32::from(size.width),
+        height: f32::from(size.height),
+        maximized: window.is_maximized(),
+        // 补偿由 `window_state::remember` 用首帧实测值覆盖。
+        offset_x: 0.0,
+        offset_y: 0.0,
+    })
+}
+
+/// 性能测量钩子：`BOT_PILOT_FAKE_HISTORY=N` 时返回 N 条合成历史（不写库）。
+fn fake_history_or(entries: Vec<backend::HistoryEntry>) -> Vec<backend::HistoryEntry> {
+    match std::env::var("BOT_PILOT_FAKE_HISTORY")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        Some(count) if count > 0 => {
+            let now = time::now_ms();
+            (0..count)
+                .map(|index| {
+                    let text = if index % 3 == 0 {
+                        format!(
+                            "合成消息 #{index}：长会话渲染开销测试。
+
+- 列表项 A
+- 列表项 B
+
+| 列1 | 列2 |
+| --- | --- |
+| a | b |"
+                        )
+                    } else {
+                        format!(
+                            "合成消息 #{index}：这一段是普通段落，用来测试长会话的渲染开销与滚动表现。"
+                        )
+                    };
+                    backend::HistoryEntry {
+                        user: index % 2 == 0,
+                        reasoning: false,
+                        attachments: Vec::new(),
+                        text,
+                        tool: None,
+                        member: None,
+                        at: now - ((count - index) as u64) * 1000,
+                    }
+                })
+                .collect()
+        }
+        _ => entries,
+    }
+}
+
+/// 把 HistoryEntry 转成 UI 消息（History 事件与合成注入共用）。
+fn history_messages(entries: Vec<backend::HistoryEntry>) -> Vec<Message> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let mut message = match entry.tool {
+                Some(card) => Message::tool(card),
+                None if entry.reasoning => {
+                    Message::reasoning(entry.member.clone(), entry.text, false)
+                }
+                None => Message::text(
+                    if entry.user { Role::User } else { Role::Assistant },
+                    entry.text,
+                    false,
+                ),
+            };
+            message.attachments = entry
+                .attachments
+                .iter()
+                .map(|attachment| attachment.file_name.clone())
+                .collect();
+            message.attachment_meta = entry.attachments;
+            message.member = entry.member;
+            if entry.at > 0 {
+                message.at = entry.at;
+            }
+            message
+        })
+        .collect()
+}
+
+/// 把 gpui-kit 的默认主题色板换成微信深色，供 Dialog/Notification/Input 等组件使用。
+/// 必须走 `Theme::update`（会同步 tokens 与 base theme）；直接改 global_mut 不会更新 Base。
+fn configure_kit_theme(cx: &mut App) {
+    use gpui::component::Theme;
+    Theme::update(cx, |theme| {
+        theme.background = gpui::Hsla::from(wecom_theme::chat_bg());
+        theme.foreground = gpui::Hsla::from(wecom_theme::chat_title());
+        theme.popover = gpui::Hsla::from(wecom_theme::panel_card_bg());
+        theme.popover_foreground = gpui::Hsla::from(wecom_theme::chat_title());
+        theme.border = gpui::Hsla::from(wecom_theme::composer_border());
+        theme.input = gpui::Hsla::from(wecom_theme::composer_border());
+        theme.primary = gpui::Hsla::from(wecom_theme::send_enabled());
+        theme.primary_foreground = gpui::Hsla::from(wecom_theme::nav_text_active());
+        theme.secondary = gpui::Hsla::from(wecom_theme::chip_bg());
+        theme.secondary_foreground = gpui::Hsla::from(wecom_theme::chat_title());
+        theme.muted = gpui::Hsla::from(wecom_theme::chip_bg());
+        theme.muted_foreground = gpui::Hsla::from(wecom_theme::panel_text());
+        theme.accent = gpui::Hsla::from(wecom_theme::list_hover());
+        theme.accent_foreground = gpui::Hsla::from(wecom_theme::chat_title());
+        theme.danger = gpui::Hsla::from(wecom_theme::nav_badge_bg());
+        theme.danger_foreground = gpui::Hsla::from(wecom_theme::nav_text_active());
+        theme.ring = gpui::Hsla::from(wecom_theme::send_enabled());
+        theme.caret = gpui::Hsla::from(wecom_theme::chat_title());
+        theme.font_family = wecom_theme::FONT_FAMILY.into();
+        theme.font_size = px(13.);
+    });
+}
+
+fn main() {
+    // 发布打包脚本用它核对构建期注入的版本（MODE_BOT_VERSION）是否真的进了二进制。
+    if std::env::args_os().any(|arg| matches!(arg.to_str(), Some("--version" | "-V"))) {
+        println!("Mode Bot {}", update::current_version());
+        return;
+    }
+    let _ = BOOT_AT.set(std::time::Instant::now());
+    // 主题偏好（深色/浅色）要在建窗口前读好，否则首帧会闪一下。
+    theme::load_preference();
+    // 企微皮肤是深色专属；只改运行期，不覆盖用户的浅色偏好。
+    if std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1") {
+        theme::force_dark();
+        wecom_theme::set_active(true);
+    }
+    // 崩溃先落盘（早于任何 UI/后台线程）：日志在试点状态目录，不碰产品数据。
+    instance::install_panic_hook(&instance::state_dir());
+    // 单实例：第二个进程只把已有窗口置前然后退出（不建第二份会话/第二个窗口）。
+    let _instance_lock = match instance::acquire(&instance::state_dir().join("pilot-instance")) {
+        instance::Acquire::Acquired(lock) => Some(lock),
+        instance::Acquire::AlreadyRunning => {
+            eprintln!("[instance] 已有试点实例在运行，已请求置前并退出");
+            instance::focus_existing_window("Mode Bot");
+            return;
+        }
+        instance::Acquire::Failed(error) => {
+            // 锁机制失败不阻断启动（只读浏览仍可用），但明确告警。
+            eprintln!("[instance] 单实例锁获取失败（继续启动）：{error}");
+            None
+        }
+    };
+
+    gpui::application().run(|cx: &mut App| {
+        // gpui-kit 的主题/组件/对话框状态必须先初始化，否则组件拿不到 theme。
+        gpui::init(cx);
+        // 微信皮肤是深色专属；gpui-kit 默认 Light，会导致 TextView/代码块用浅色 token。
+        gpui::component::Theme::change(gpui::component::ThemeMode::Dark, None, cx);
+        configure_kit_theme(cx);
+        // Geist 是原版 UI 的主字体（SIL OFL，随包 assets/fonts）。DirectWrite 只认 TTF/OTF。
+        let _ = cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!(
+            "../assets/fonts/Geist-Variable.ttf"
+        ))]);
+        if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
+            let has_geist = cx
+                .text_system()
+                .all_font_names()
+                .iter()
+                .any(|name| name.contains("Geist"));
+            eprintln!("[fonts] Geist loaded: {has_geist}");
+        }
+        cx.bind_keys([
+            // 命令面板导航用 Tab/Shift+Tab：上下方向键被 TextInput 的光标移动绑定占用
+            // （实测 Palette 上下文抢不过它），Tab 在全局没有绑定，不会打架。
+            KeyBinding::new("tab", PaletteNext, Some("Palette")),
+            KeyBinding::new("shift-tab", PalettePrev, Some("Palette")),
+            KeyBinding::new("enter", PaletteSubmit, Some("Palette")),
+            // Composer 的 Enter/Shift+Enter 由 gpui-kit Textarea 的 submit_on_enter 处理。
+            // 无障碍底线（P4-6）：Esc 关浮层、Ctrl+N/K/, 覆盖主要入口，全键盘可达。
+            // 注意：请求焦点在 Composer 时 Esc 也在这里处理（输入法组合态的取消由
+            // 平台层先行处理，P3-7 人工验收会复核是否会误关浮层）。
+            KeyBinding::new("escape", CloseOverlay, None),
+            // ⋯ 菜单：焦点在菜单容器上时 ↑/↓ 选择、Enter 执行。
+            KeyBinding::new("up", DetailMenuPrev, Some("DetailMenu")),
+            KeyBinding::new("down", DetailMenuNext, Some("DetailMenu")),
+            KeyBinding::new("enter", DetailMenuConfirm, Some("DetailMenu")),
+            // 搜索历史：Tab/Shift+Tab 选命中、Enter 跳转（↑/↓ 会被输入框吃掉）。
+            KeyBinding::new("tab", FindNext, Some("Find")),
+            KeyBinding::new("shift-tab", FindPrev, Some("Find")),
+            KeyBinding::new("enter", FindOpen, Some("Find")),
+            // @ 候选：焦点在 composer 上时 Tab/Shift+Tab 选择（Enter 在 on_send 里插入）。
+            KeyBinding::new("tab", MentionNext, Some("Composer")),
+            KeyBinding::new("shift-tab", MentionPrev, Some("Composer")),
+            // 按钮焦点链：Tab 在可聚焦控件间移动，Enter 激活当前控件。
+            KeyBinding::new("tab", FocusNext, None),
+            KeyBinding::new("shift-tab", FocusPrev, None),
+            KeyBinding::new("enter", ActivateTabStop, Some("TabStop")),
+            KeyBinding::new("ctrl-n", NewSessionShortcut, None),
+            KeyBinding::new("ctrl-k", SearchShortcut, None),
+            KeyBinding::new("ctrl-,", SettingsShortcut, None),
+            // 键盘操作主循环：换条目 / 处理审批（Tab 焦点链见 README 已知限制）。
+            KeyBinding::new("alt-down", SelectNextItem, None),
+            KeyBinding::new("alt-up", SelectPrevItem, None),
+            KeyBinding::new("alt-a", ApproveAllow, None),
+            KeyBinding::new("alt-d", ApproveDeny, None),
+            KeyBinding::new("ctrl-b", NewBotShortcut, None),
+            KeyBinding::new("ctrl-e", EditBotShortcut, None),
+            KeyBinding::new("ctrl-g", NewChannelShortcut, None),
+            KeyBinding::new("ctrl-f", FindShortcut, None),
+            KeyBinding::new("ctrl-p", PaletteShortcut, None),
+            // 对话框里 Enter 提交（输入框是单行/多行都用 Shift+Enter 换行）。
+            KeyBinding::new("enter", SubmitDialog, Some("Dialog")),
+        ]);
+
+        // 窗口几何持久化：上次的位置/大小/最大化；没有记录时用默认位置。
+        // 原点要加 `restore_origin` 的补偿（gpui 的 border offset 换算在 DWM 下不对称，
+        // 不补的话每次重启窗口上移 4px）。
+        let saved = window_state::load();
+        let requested_origin = match &saved {
+            Some(geometry) => window_state::restore_origin(geometry),
+            None => (120.0, 90.0),
+        };
+        let bounds = match saved {
+            Some(geometry) => Bounds::new(
+                Point::new(px(requested_origin.0), px(requested_origin.1)),
+                size(px(geometry.width), px(geometry.height)),
+            ),
+            None => Bounds::new(
+                Point::new(px(requested_origin.0), px(requested_origin.1)),
+                size(px(1100.), px(720.)),
+            ),
+        };
+        let window_bounds = match saved {
+            Some(geometry) if geometry.maximized => WindowBounds::Maximized(bounds),
+            _ => WindowBounds::Windowed(bounds),
+        };
+        window_state::set_restore_request(requested_origin);
+        window_state::spawn_autosave();
+        let options = WindowOptions {
+            window_bounds: Some(window_bounds),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Mode Bot".into()),
+                appears_transparent: true,
+                traffic_light_position: None,
+            }),
+            window_min_size: Some(size(px(900.), px(600.))),
+            ..Default::default()
+        };
+
+        // gpui-kit 的 Root 包一层：Dialog/Sheet/Notification/Popover 等组件
+        // 依赖 Root 的 overlay 层；自绘浮层不受影响。
+        gpui::open_window(options, cx, |_window, cx| {
+            cx.new(|cx| {
+                let mut app = PilotApp::new(cx);
+                app.schedule_auto_update(cx);
+                app
+            })
+        })
+        .expect("failed to open GPUI shell window");
+        cx.activate(true);
+    });
+
+    std::thread::sleep(Duration::from_millis(50));
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::compose_with_quote;
+
+    #[test]
+    fn quote_is_prefixed_and_trimmed() {
+        let quoted = compose_with_quote(
+            "OK",
+            Some(("你".to_string(), "  多行
+引用  内容  ".to_string())),
+        );
+        assert!(quoted.starts_with("引用 你：多行 引用 内容"), "{quoted}");
+        assert!(quoted.ends_with("OK"), "{quoted}");
+        // 无引用时原样返回
+        assert_eq!(compose_with_quote("OK", None), "OK");
+        // 空引用体不产生引用块
+        assert_eq!(
+            compose_with_quote("OK", Some(("你".to_string(), "   ".to_string()))),
+            "OK"
+        );
+        // 超长引用裁剪到 200 字
+        let long = "x".repeat(400);
+        let quoted = compose_with_quote("OK", Some(("你".to_string(), long)));
+        let body_line = quoted.lines().next().unwrap_or_default();
+        assert!(
+            body_line.chars().count() <= "引用 你：".chars().count() + 200,
+            "引用体过长：{}",
+            body_line.chars().count()
+        );
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::approval_option_label;
+
+    /// CLI 的机器可读标签要变成中文；认不出的保留原文（不猜）。
+    #[test]
+    fn approval_labels_localized() {
+        assert_eq!(approval_option_label("custom", "allow_once"), "允许一次");
+        assert_eq!(approval_option_label("custom", "allow_project"), "始终允许");
+        assert_eq!(approval_option_label("allowAlways", ""), "始终允许");
+        assert_eq!(approval_option_label("allowOnce", ""), "允许一次");
+        assert_eq!(approval_option_label("deny", ""), "拒绝");
+        assert_eq!(approval_option_label("custom", "Reject"), "拒绝");
+        assert_eq!(approval_option_label("custom", "allow"), "允许");
+        assert_eq!(approval_option_label("custom", "自定义选项"), "自定义选项");
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    /// 正文可读下限：与产品 `text-ui-xs`（10px）同档，低于它一律视为回归。
+    const MIN_TEXT_PX: f32 = 10.0;
+
+    /// 抽出源码里所有 `text_size(px(N))` 的字号及其行号。
+    fn text_sizes(source: &str) -> Vec<(usize, f32)> {
+        let mut out = Vec::new();
+        for (index, line) in source.lines().enumerate() {
+            let mut rest = line;
+            while let Some(position) = rest.find("text_size(px(") {
+                rest = &rest[position + "text_size(px(".len()..];
+                let end = rest.find(')').unwrap_or(rest.len());
+                let raw = rest[..end].trim();
+                if let Ok(value) = raw.parse::<f32>() {
+                    out.push((index + 1, value));
+                }
+            }
+        }
+        out
+    }
+
+    /// 无障碍底线（P4-6）：不允许出现小于 10px 的文字。
+    #[test]
+    fn no_text_below_floor() {
+        let sources = [
+            ("main.rs", include_str!("main.rs")),
+            ("composer_input.rs", include_str!("composer_input.rs")),
+            ("simple_input.rs", include_str!("simple_input.rs")),
+        ];
+        let mut checked = 0usize;
+        for (name, source) in sources {
+            for (line, size) in text_sizes(source) {
+                assert!(
+                    size >= MIN_TEXT_PX,
+                    "{name}:{line} 字号 {size}px 低于可读下限 {MIN_TEXT_PX}px"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 50, "字号扫描疑似失效（只扫到 {checked} 处）");
+    }
+}
+
+#[cfg(test)]
+mod composer_tests {
+    use super::composer_radius;
+
+    #[test]
+    fn composer_radius_switches_on_multiline_or_attachments() {
+        assert_eq!(composer_radius(false, false), 22.0);
+        assert_eq!(composer_radius(true, false), 18.0);
+        assert_eq!(composer_radius(false, true), 18.0);
+    }
+}
+
+#[cfg(test)]
+mod legacy_token_tests {
+    /// 旧视觉 token 不能在主界面残留（都已被 theme 的新口径替代）。
+    #[test]
+    fn no_legacy_visual_tokens() {
+        let source = include_str!("main.rs");
+        for needle in [
+            concat!("bubble_", "bot("),
+            concat!("accent_", "faint("),
+            concat!("theme::", "violet("),
+            concat!("bot_", "color("),
+        ] {
+            assert!(!source.contains(needle), "残留 {needle}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod icon_source_tests {
+    /// 图标纪律：窗口按钮/清除按钮不再用文字符号充当图标。
+    #[test]
+    fn no_text_icon_glyphs() {
+        let source = include_str!("main.rs");
+        for needle in [
+            ".child(\"\u{2014}\")", // —
+            ".child(\"\u{25a1}\")", // □
+            ".child(\"\u{2715}\")", // ✕
+            ".child(\"\u{00d7}\")", // ×
+        ] {
+            assert!(!source.contains(needle), "残留文字图标 {needle}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod prefs_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_settings_dedup_and_bound() {
+        assert_eq!(normalize_pinned_settings(&[3, 1, 3, 999]), vec![3, 1]);
+        let many: Vec<usize> = (0..SETTINGS_PAGES.len() + 5).collect();
+        let out = normalize_pinned_settings(&many);
+        assert_eq!(out.len(), MAX_PINNED_SETTINGS);
+        assert_eq!(out[0], 0);
+    }
+
+    #[test]
+    fn pinned_settings_migrate_to_new_layout() {
+        assert_eq!(migrate_pinned_settings(&[1, 6], 1), vec![1, 7]);
+        assert_eq!(migrate_pinned_settings(&[1, 6], 2), vec![1, 6]);
+        assert_eq!(migrate_pinned_settings(&[1, 15], 2), vec![1, 17]);
+        assert_eq!(migrate_pinned_settings(&[1, 6, 14], 1), vec![1, 7, 17]);
+        assert_eq!(migrate_pinned_settings(&[1, 6, 17], 3), vec![1, 6, 17]);
+    }
+}
+
+#[cfg(test)]
+mod group_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn hides_v4_and_legacy_group_prompts() {
+        let v4 = "你是这个群的管理员「娜娜」（码农）。\n群规则：先对齐再动手。\n用户刚说：\n你好\n请直接写你在群里的回复（面向用户）。";
+        assert!(is_group_prompt(v4));
+        let legacy = "群聊：发布小组\n用户刚说：你好";
+        assert!(is_group_prompt(legacy));
+        assert!(!is_group_prompt("用户刚说：这个词只是引用，不是系统 prompt"));
+        assert!(!is_group_prompt("你是这个群的朋友吗？用户刚说：不是"));
+    }
+}
+
+#[cfg(test)]
+mod reasoning_state_tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_sits_before_the_answer_placeholder() {
+        let mut chat = ChatState::default();
+        chat.push_user("问题".to_string());
+        chat.push_reasoning(None, "先想一下", false, false);
+        chat.push_delta("答案");
+        assert_eq!(chat.messages.len(), 3);
+        assert_eq!(chat.messages[0].kind, MsgKind::Text);
+        assert!(matches!(chat.messages[0].role, Role::User));
+        assert_eq!(chat.messages[1].kind, MsgKind::Reasoning);
+        assert_eq!(chat.messages[1].text, "先想一下");
+        assert_eq!(chat.messages[2].kind, MsgKind::Text);
+        assert_eq!(chat.messages[2].text, "答案");
+        chat.finish_reasoning(None);
+        assert!(!chat.messages[1].streaming);
+    }
+}
+
+#[cfg(test)]
+mod code_copy_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_fenced_code_blocks() {
+        assert_eq!(
+            fenced_code("说明\n\n```rust\nlet x = 1;\n```\n"),
+            Some("let x = 1;".to_string())
+        );
+        assert_eq!(
+            fenced_code("```\na\n```\n中间\n```\nb\nx\n```"),
+            Some("a\n\nb\nx".to_string())
+        );
+        assert_eq!(fenced_code("没有代码"), None);
+    }
+}
+
+#[cfg(test)]
+mod history_reasoning_tests {
+    use super::*;
+
+    #[test]
+    fn historical_reasoning_becomes_reasoning_message() {
+        let messages = history_messages(vec![backend::HistoryEntry {
+            user: false,
+            reasoning: true,
+            text: "先想一下".to_string(),
+            tool: None,
+            attachments: Vec::new(),
+            member: Some("娜娜".to_string()),
+            at: 1,
+        }]);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].kind, MsgKind::Reasoning);
+        assert_eq!(messages[0].member.as_deref(), Some("娜娜"));
+        assert!(!messages[0].streaming);
+    }
+}
+
+#[cfg(test)]
+mod image_transcode_tests {
+    use super::*;
+
+    #[test]
+    fn bmp_transcodes_to_png() {
+        let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([220, 30, 30, 255]));
+        let mut bmp = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bmp, image::ImageFormat::Bmp)
+            .expect("encode bmp");
+        let png = transcode_image_to_png(bmp.get_ref()).expect("transcode");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let decoded = image::load_from_memory(&png).expect("decode png");
+        assert_eq!(decoded.to_rgba8().get_pixel(0, 0).0[0], 220);
+    }
+}

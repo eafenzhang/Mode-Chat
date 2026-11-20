@@ -1,0 +1,334 @@
+//! v4 会话订阅：ACK、wire frame 过滤与分片外壳。
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use agent_process::{
+    AgentControlClient, AgentProcessSpec, AgentRuntimeRegistry, AgentWorkspaceTarget, ControlError,
+    SpecFactory,
+};
+use agent_protocol::v4_delta::ConversationDelta;
+use agent_protocol::v4_transport::{
+    ConversationFramePayload, ConversationSubscribeParams, ConversationWireFrame, SubscribeMode,
+    V4ClientMode,
+};
+use serde_json::Value;
+
+const FIXTURE: &str = env!("CARGO_BIN_EXE_agent-process-fixture");
+
+struct FrameLog(PathBuf);
+
+impl FrameLog {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "mode-v4-transport-{label}-{}-{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        Self(path)
+    }
+
+    fn frame_params(&self, method: &str) -> Option<Value> {
+        let marker = format!("frame\t{method}\t");
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&self.0) {
+                if let Some(line) = text.lines().find(|line| line.starts_with(&marker)) {
+                    return line.splitn(3, '\t').nth(2)?.parse().ok();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    }
+}
+
+impl Drop for FrameLog {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn control(mode: &str, log: &FrameLog, spawns: Arc<AtomicUsize>) -> AgentControlClient {
+    let mode = mode.to_string();
+    let log = log.0.to_string_lossy().into_owned();
+    let factory: SpecFactory = Arc::new(move |_target| {
+        spawns.fetch_add(1, Ordering::SeqCst);
+        let mut spec = AgentProcessSpec::new(FIXTURE);
+        if !mode.is_empty() {
+            spec.args.push(mode.clone());
+        }
+        spec.env
+            .push(("AGENT_FIXTURE_FRAME_LOG".to_string(), log.clone()));
+        Ok(spec)
+    });
+    AgentControlClient::new(Arc::new(AgentRuntimeRegistry::new(factory)))
+}
+
+fn params() -> ConversationSubscribeParams {
+    ConversationSubscribeParams {
+        topic: "conversation/sess-1".to_string(),
+        base: None,
+        visibility: None,
+        connection_id: "conn-1".to_string(),
+        client_mode: V4ClientMode::DesktopContinuous,
+        workspace: None,
+        legacy_task_ids: None,
+        resume_thought_level: None,
+        workflow_run_deltas: Some(true),
+    }
+}
+
+#[tokio::test]
+async fn subscribes_and_filters_frames_by_subscription() {
+    let log = FrameLog::new("ok");
+    let spawns = Arc::new(AtomicUsize::new(0));
+    let client = control("", &log, spawns);
+
+    let mut subscription = client
+        .subscribe_conversation_v4(&AgentWorkspaceTarget::new("/ws/demo"), params())
+        .await
+        .unwrap();
+    assert_eq!(subscription.ack.subscription_id, "sub-1");
+    assert_eq!(subscription.ack.mode, SubscribeMode::Snapshot);
+    assert_eq!(subscription.ack.log_epoch, "epoch-1");
+    assert!(subscription.ack.open_timing.is_some());
+
+    // 第一条：本订阅的 snapshot 帧。
+    let first = tokio::time::timeout(Duration::from_secs(2), subscription.recv())
+        .await
+        .expect("必须收到首帧")
+        .expect("流仍在");
+    match first {
+        ConversationWireFrame::Complete(frame) => {
+            assert_eq!(frame.logical_frame_id, "f1");
+            assert_eq!(frame.subscription_id, "sub-1");
+            match &frame.frame.payload {
+                ConversationFramePayload::Snapshot(payload) => {
+                    assert_eq!(payload.snapshot.session_id, "sess-1");
+                }
+                other => panic!("unexpected payload: {other:?}"),
+            }
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
+
+    // 第二条：deltas 帧（其它订阅的帧被过滤）。
+    let second = tokio::time::timeout(Duration::from_secs(2), subscription.recv())
+        .await
+        .expect("必须收到增量帧")
+        .expect("流仍在");
+    match second {
+        ConversationWireFrame::Complete(frame) => {
+            assert_eq!(frame.logical_frame_id, "f3");
+            match &frame.frame.payload {
+                ConversationFramePayload::Deltas(payload) => {
+                    assert_eq!(payload.deltas.len(), 1);
+                    match &payload.deltas[0] {
+                        ConversationDelta::RowDelta(delta) => {
+                            assert_eq!(delta.append, "x");
+                            assert_eq!(delta.path, agent_protocol::v4_delta::StreamablePath::Text);
+                        }
+                        other => panic!("unexpected delta: {other:?}"),
+                    }
+                }
+                other => panic!("unexpected payload: {other:?}"),
+            }
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
+
+    // 第三条：本订阅的 fragment。
+    let third = tokio::time::timeout(Duration::from_secs(2), subscription.recv())
+        .await
+        .expect("必须收到分片帧")
+        .expect("流仍在");
+    match third {
+        ConversationWireFrame::Fragment(frame) => {
+            assert_eq!(frame.logical_frame_id, "f2");
+            assert_eq!(frame.subscription_id, "sub-1");
+            assert_eq!(frame.checksum.value, "00000000");
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
+
+    let sent = log
+        .frame_params("v4/conversation/subscribe")
+        .expect("必须记录到请求帧");
+    assert_eq!(sent["topic"], "conversation/sess-1");
+    assert_eq!(sent["connectionId"], "conn-1");
+    assert_eq!(sent["clientMode"], "desktop-continuous");
+    assert_eq!(sent["workflowRunDeltas"], true);
+}
+
+#[tokio::test]
+async fn rejects_too_many_legacy_task_ids() {
+    let log = FrameLog::new("legacy");
+    let spawns = Arc::new(AtomicUsize::new(0));
+    let client = control("", &log, Arc::clone(&spawns));
+    let mut params = params();
+    params.legacy_task_ids = Some((0..201).map(|index| format!("task-{index}")).collect());
+
+    let error = match client
+        .subscribe_conversation_v4(&AgentWorkspaceTarget::new("/ws/demo"), params)
+        .await
+    {
+        Ok(_) => panic!("legacyTaskIds 超限时不应建立订阅"),
+        Err(error) => error,
+    };
+    match error {
+        ControlError::InvalidParams(message) => {
+            assert!(message.contains("legacyTaskIds"), "{message}");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(spawns.load(Ordering::SeqCst), 0, "参数非法不得拉起 Agent");
+}
+
+fn sessions_index_params() -> ConversationSubscribeParams {
+    ConversationSubscribeParams {
+        topic: "sessions-index/ws-1".to_string(),
+        base: None,
+        visibility: None,
+        connection_id: "conn-1".to_string(),
+        client_mode: V4ClientMode::DesktopContinuous,
+        workspace: None,
+        legacy_task_ids: None,
+        resume_thought_level: None,
+        workflow_run_deltas: None,
+    }
+}
+
+#[tokio::test]
+async fn subscribes_sessions_index_and_receives_snapshot_frame() {
+    let log = FrameLog::new("sessions-index");
+    let spawns = Arc::new(AtomicUsize::new(0));
+    let client = control("", &log, Arc::clone(&spawns));
+
+    let mut subscription = client
+        .subscribe_sessions_index_v4(
+            &AgentWorkspaceTarget::new("/ws/demo"),
+            sessions_index_params(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(subscription.ack.subscription_id, "sub-1");
+    assert_eq!(subscription.ack.mode, SubscribeMode::Snapshot);
+    assert_eq!(subscription.ack.log_epoch, "epoch-1");
+    assert!(subscription.ack.open_timing.is_none());
+    assert_eq!(spawns.load(Ordering::SeqCst), 1);
+
+    let first = tokio::time::timeout(Duration::from_secs(2), subscription.recv())
+        .await
+        .expect("必须收到首帧")
+        .expect("流仍在");
+    match first {
+        agent_protocol::v4_sessions_index::SessionsIndexWireFrame::Complete(frame) => {
+            assert_eq!(frame.topic, "sessions-index/ws-1");
+            match &frame.frame.payload {
+                agent_protocol::v4_sessions_index::SessionsIndexFramePayload::Snapshot(payload) => {
+                    assert_eq!(payload.snapshot.workspace_id, "ws-1");
+                    assert_eq!(payload.snapshot.log_epoch, "epoch-1");
+                    assert!(payload.snapshot.sessions.is_empty());
+                }
+                other => panic!("unexpected payload: {other:?}"),
+            }
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
+
+    let sent = log
+        .frame_params("v4/conversation/subscribe")
+        .expect("请求帧");
+    assert_eq!(sent["topic"], "sessions-index/ws-1");
+}
+
+#[tokio::test]
+async fn rejects_non_sessions_index_topic_before_spawn() {
+    let log = FrameLog::new("sessions-index-bad");
+    let spawns = Arc::new(AtomicUsize::new(0));
+    let client = control("", &log, Arc::clone(&spawns));
+    let error = match client
+        .subscribe_sessions_index_v4(&AgentWorkspaceTarget::new("/ws/demo"), params())
+        .await
+    {
+        Ok(_) => panic!("非 sessions-index topic 必须拒绝"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, ControlError::InvalidParams(_)), "{error:?}");
+    assert_eq!(spawns.load(Ordering::SeqCst), 0);
+}
+
+fn workspace_config_params() -> ConversationSubscribeParams {
+    ConversationSubscribeParams {
+        topic: "workspace-config/ws-1".to_string(),
+        base: None,
+        visibility: None,
+        connection_id: "conn-1".to_string(),
+        client_mode: V4ClientMode::DesktopContinuous,
+        workspace: None,
+        legacy_task_ids: None,
+        resume_thought_level: None,
+        workflow_run_deltas: None,
+    }
+}
+
+#[tokio::test]
+async fn subscribes_workspace_config_and_receives_snapshot_frame() {
+    let log = FrameLog::new("workspace-config");
+    let spawns = Arc::new(AtomicUsize::new(0));
+    let client = control("", &log, Arc::clone(&spawns));
+
+    let mut subscription = client
+        .subscribe_workspace_config_v4(
+            &AgentWorkspaceTarget::new("/ws/demo"),
+            workspace_config_params(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(subscription.ack.subscription_id, "sub-1");
+    assert!(subscription.ack.open_timing.is_none());
+    assert_eq!(spawns.load(Ordering::SeqCst), 1);
+
+    let first = tokio::time::timeout(Duration::from_secs(2), subscription.recv())
+        .await
+        .expect("必须收到首帧")
+        .expect("流仍在");
+    match first {
+        agent_protocol::v4_workspace_config::WorkspaceConfigWireFrame::Complete(frame) => {
+            assert_eq!(frame.topic, "workspace-config/ws-1");
+            match &frame.frame.payload {
+                agent_protocol::v4_workspace_config::WorkspaceConfigFramePayload::Snapshot(
+                    payload,
+                ) => {
+                    assert_eq!(payload.snapshot.workspace_id, "ws-1");
+                    assert!(payload.snapshot.config.config_options.is_empty());
+                    assert!(payload.snapshot.config.slash_commands.is_empty());
+                }
+                other => panic!("unexpected payload: {other:?}"),
+            }
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rejects_non_workspace_config_topic_before_spawn() {
+    let log = FrameLog::new("workspace-config-bad");
+    let spawns = Arc::new(AtomicUsize::new(0));
+    let client = control("", &log, Arc::clone(&spawns));
+    let error = match client
+        .subscribe_workspace_config_v4(&AgentWorkspaceTarget::new("/ws/demo"), params())
+        .await
+    {
+        Ok(_) => panic!("非 workspace-config topic 必须拒绝"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, ControlError::InvalidParams(_)), "{error:?}");
+    assert_eq!(spawns.load(Ordering::SeqCst), 0);
+}

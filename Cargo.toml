@@ -1,0 +1,94 @@
+# Mode Chat — Rust + GPUI desktop client (extracted from the Mode monorepo).
+#
+# Standalone workspace: the app is the root package, the crates it needs live in
+# `crates/`. No dependency on the Mode monorepo or its Node/TS agent runtime.
+
+[workspace]
+resolver = "2"
+members = [
+  "crates/agent-process",
+  "crates/agent-protocol",
+  "crates/atomic-file",
+  "crates/automation-repo",
+  "crates/automation-runtime",
+  "crates/automation-schedule",
+  "crates/automation-service",
+  "crates/bot-team",
+  "crates/bots-service",
+  "crates/connectors-service",
+  "crates/credential-store",
+  "crates/mode-protocol-client",
+  "crates/model-selection",
+  "crates/tasks-db",
+  "crates/workspace-identity",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+publish = false
+
+[workspace.dependencies]
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+uuid = { version = "1", features = ["v4"] }
+
+[package]
+name = "bot-gpui-pilot"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Mode Chat desktop client (Rust + GPUI)"
+
+[[bin]]
+name = "bot-gpui-pilot"
+path = "src/main.rs"
+
+[dependencies]
+# UI 框架切到 gpui-kit（内部固定 gpui-pre 0.3.12 + gpui-pre-platform）。
+# 依赖名仍叫 gpui，现有 `use gpui::...` 通过 kit 的 facade 继续解析。
+gpui = { package = "gpui-kit", version = "=0.10.0", default-features = false, features = ["component"] }
+unicode-segmentation = "1"
+# 真实控制面：与 Mode Bot 壳同一套 Agent 运行时（spawn / createSession / send / subscribe）。
+agent-process = { path = "crates/agent-process" }
+agent-protocol = { path = "crates/agent-protocol" }
+# 审批判定矩阵直接复用产品纯 Rust 逻辑（ask/auto/full + allowlist）。
+bot-team = { path = "crates/bot-team" }
+# legacy 反向请求（interaction/requestUserInput）处理器要用它的类型。
+mode-protocol-client = { path = "crates/mode-protocol-client" }
+# 新建 Bot：复用产品的 teammates 记录模型与原子写。
+atomic-file = { path = "crates/atomic-file" }
+# 团队记忆读取（mode-bot:team 的 memory store，与壳同口径）。
+bots-service = { path = "crates/bots-service" }
+# 定时任务：设置页直接读写与壳同一个 tasks-index.sqlite（不新造 schema）。
+automation-repo = { path = "crates/automation-repo" }
+automation-schedule = { path = "crates/automation-schedule" }
+automation-runtime = { path = "crates/automation-runtime" }
+automation-service = { path = "crates/automation-service" }
+# 连接器目录/状态/MCP 解析（与壳共用同一份 catalog 与 connectors.json）。
+connectors-service = { path = "crates/connectors-service" }
+# IM 通道：与壳共用同一份 bot 凭据库（`v2/credentials.json`，键 `bot:<id>:credential`）。
+credential-store = { path = "crates/credential-store" }
+# 微信 iLink 长轮询/扫码注册的 HTTP 传输（rustls-no-provider，provider 由 im 模块安装）。
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# 扫码登录：把 iLink 返回的二维码内容渲染成 PNG（GPUI `img` 读文件）。
+qrcode = { version = "0.14", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+# 企微媒体：AES-256-CBC 解密（aeskey → key，IV = key 前 16 字节）。
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+# 只读会话库（待办 / 用量面板）：bundled SQLite 使二进制 +~1.5MB，换取零外部依赖。
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 附件上传（v4 sendText）：分片 base64 + sha256 校验。
+base64 = "0.22"
+sha2 = "0.10"

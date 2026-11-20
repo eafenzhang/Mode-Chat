@@ -1,0 +1,10 @@
+[package]
+name = "bot-team"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Mode Bot teammate/group 领域模型、校验与纯逻辑"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
