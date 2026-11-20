@@ -637,6 +637,14 @@ pub struct RpiSession {
 
 impl RpiSession {
     pub async fn open(options: OpenOptions) -> Result<Self, String> {
+        let debug = std::env::var("BOT_PILOT_DEBUG").is_ok();
+        if debug {
+            eprintln!(
+                "[rpi] open start workspace={} resume={:?}",
+                options.workspace.display(),
+                options.resume_path
+            );
+        }
         let root = sessions_root();
         std::fs::create_dir_all(&root)
             .map_err(|error| format!("会话目录创建失败（{}）：{error}", root.display()))?;
@@ -683,6 +691,9 @@ impl RpiSession {
             }
         };
 
+        if debug {
+            eprintln!("[rpi] storage ok path={path}");
+        }
         let session = Session::new(Arc::new(storage), None);
         let gate = Arc::new(ApprovalGate::new(
             options.events.clone(),
@@ -703,6 +714,8 @@ impl RpiSession {
         harness_options.system_prompt = Some(options.system_prompt);
         harness_options.thinking_level = options.thinking;
         harness_options.session = session;
+        // 恢复已有 JSONL 会话时必须显式允许；否则 harness 拒绝带记录的会话。
+        harness_options.allow_existing_session = true;
         harness_options.agent_emitter = Some(Arc::new(UiEmitter {
             events: options.events.clone(),
             key: options.key.clone(),
@@ -716,6 +729,9 @@ impl RpiSession {
             .await
             .map_err(|error| format!("Agent 会话初始化失败：{error}"))?;
         let session_id = harness.session_id();
+        if debug {
+            eprintln!("[rpi] harness ok id={session_id}");
+        }
         let lane = harness.lane("main");
         Ok(Self {
             harness,

@@ -470,6 +470,7 @@ async fn open_rpi_session(
     identity: &str,
     model: Option<ModelSpec>,
     resume: Option<String>,
+    member: Option<String>,
     events: &UnboundedSender<BackendEvent>,
 ) -> Result<(crate::rpi_engine::RpiSession, ModelSpec), String> {
     let spec = model
@@ -487,7 +488,7 @@ async fn open_rpi_session(
         system_prompt,
         events: events.clone(),
         key: key.to_string(),
-        member: None,
+        member,
         approval_level,
         allowlist,
     };
@@ -2077,7 +2078,11 @@ async fn run_agent(
                 session_id: resume_id,
                 engine,
             } => {
-
+                if std::env::var("BOT_PILOT_DEBUG").is_ok() {
+                    eprintln!(
+                        "[cmd] ensure key={key} workspace={workspace} resume={resume_id:?} engine={engine:?}"
+                    );
+                }
                 if let Some(ctx) = sessions.get(&key) {
                     // ACP 子进程退出（session/load 失败等）时句柄已关闭：
                     // 丢掉死会话，让本次 Ensure 重建，而不是永远 continue。
@@ -2168,6 +2173,9 @@ async fn run_agent(
                         };
                         match crate::rpi_engine::RpiSession::open(options).await {
                             Ok(session) => {
+                                if std::env::var("BOT_PILOT_DEBUG").is_ok() {
+                                    eprintln!("[rpi] ensure open ok path={}", session.path);
+                                }
                                 let session = Arc::new(session);
                                 let path = session.path.clone();
                                 sessions.insert(
@@ -2385,6 +2393,7 @@ async fn run_agent(
                             &identity,
                             model.clone(),
                             None,
+                            None,
                             &events,
                         )
                         .await
@@ -2544,11 +2553,13 @@ async fn run_agent(
                             &identity,
                             model.clone(),
                             Some(session_id.clone()),
+                            None,
                             &events,
                         )
                         .await
                         {
                             Ok((session, spec)) => {
+                                let session = Arc::new(session);
                                 let path = session.path.clone();
                                 sessions.insert(
                                     key.clone(),
@@ -2558,7 +2569,7 @@ async fn run_agent(
                                         session_id: path.clone(),
                                         model: Some(message_model(&spec)),
                                         member: None,
-                                        engine: SessionEngine::Rpi(Arc::new(session)),
+                                        engine: SessionEngine::Rpi(Arc::clone(&session)),
                                         turn_started: std::sync::Arc::new(
                                             std::sync::atomic::AtomicBool::new(false),
                                         ),
@@ -2572,6 +2583,14 @@ async fn run_agent(
                                         slot: None,
                                     },
                                 });
+                                if auto != AutoMode::None && !auto_sent {
+                                    auto_sent = true;
+                                    let prompt = std::env::var("BOT_PILOT_PROMPT")
+                                        .unwrap_or_else(|_| "只回复两个字：收到".to_string());
+                                    tokio::spawn(async move {
+                                        session.send(prompt, Vec::new()).await;
+                                    });
+                                }
                             }
                             Err(message) => {
                                 let _ = events.send(BackendEvent::Session {
@@ -2811,6 +2830,59 @@ async fn run_agent(
                     if sessions.contains_key(&internal) {
                         continue;
                     }
+                    if matches!(resolve_engine(None), EngineChoice::Rpi) {
+                        let opened = open_rpi_session(
+                            &spec.group_key,
+                            &member.workspace,
+                            &member.identity,
+                            member.model.clone(),
+                            member.session_id.clone(),
+                            Some(member.name.clone()),
+                            &events,
+                        )
+                        .await;
+                        match opened {
+                            Ok((session, member_model)) => {
+                                let path = session.path.clone();
+                                sessions.insert(
+                                    internal.clone(),
+                                    SessionCtx {
+                                        target: AgentWorkspaceTarget::new(
+                                            member.workspace.clone(),
+                                        )
+                                        .with_identity(member.identity.clone()),
+                                        session_id: path.clone(),
+                                        model: Some(message_model(&member_model)),
+                                        member: Some(member.name.clone()),
+                                        engine: SessionEngine::Rpi(Arc::new(session)),
+                                        turn_started: std::sync::Arc::new(
+                                            std::sync::atomic::AtomicBool::new(false),
+                                        ),
+                                    },
+                                );
+                                let _ = events.send(BackendEvent::Session {
+                                    key: spec.group_key.clone(),
+                                    event: SessionEvent::Ready {
+                                        session_id: path,
+                                        slot: Some(internal.clone()),
+                                    },
+                                });
+                            }
+                            Err(message) => {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: spec.group_key.clone(),
+                                    event: SessionEvent::Error {
+                                        member: Some(member.name.clone()),
+                                        message: format!(
+                                            "{} 建会话失败：{message}",
+                                            member.name
+                                        ),
+                                    },
+                                });
+                            }
+                        }
+                        continue;
+                    }
                                         let target = AgentWorkspaceTarget::new(member.workspace.clone())
                         .with_identity(member.identity.clone());
                     let model = member.model.clone().or_else(env_model);
@@ -3027,6 +3099,31 @@ async fn run_agent(
                         });
                         continue;
                     };
+                    if let SessionEngine::Rpi(session) = &ctx.engine {
+                        let images =
+                            match crate::rpi_engine::images_from_attachments(&attachments) {
+                                Ok(images) => images,
+                                Err(message) => {
+                                    let _ = events.send(BackendEvent::Session {
+                                        key: key.clone(),
+                                        event: SessionEvent::Error {
+                                            member: Some(member.name.clone()),
+                                            message: format!(
+                                                "{}：{message}",
+                                                member.name
+                                            ),
+                                        },
+                                    });
+                                    continue;
+                                }
+                            };
+                        let session = Arc::clone(session);
+                        let prompt = prompt.clone();
+                        tokio::spawn(async move {
+                            session.send(prompt, images).await;
+                        });
+                        continue;
+                    }
                     if let SessionEngine::Acp(_) = &ctx.engine
                         && !attachments.is_empty()
                     {
