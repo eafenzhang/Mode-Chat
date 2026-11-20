@@ -41,7 +41,8 @@ pub fn missing_secrets(spec: &ConnectorSpec, configured: &[String]) -> Vec<&'sta
         .collect()
 }
 
-/// 回合 `createSession.mcpServers` 的 payload（与壳协议 stdio 形状一致）。
+/// 回合 `createSession.mcpServers` 的 payload（MCP 宿主恢复后使用）。
+#[allow(dead_code)]
 pub fn payload(servers: Vec<ConnectorMcpServer>) -> Vec<serde_json::Value> {
     servers
         .into_iter()
@@ -60,6 +61,7 @@ pub fn payload(servers: Vec<ConnectorMcpServer>) -> Vec<serde_json::Value> {
 }
 
 /// 从数据根读启用清单 + 密钥并解析成 payload；缺密钥/坏库按空清单处理（与壳一致）。
+#[allow(dead_code)]
 pub fn payload_for_workspace(data_root: &Path, workspace: &str) -> Vec<serde_json::Value> {
     let state = state(data_root);
     if state.enabled.is_empty() {

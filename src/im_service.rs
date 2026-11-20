@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use agent_process::AgentControlClient;
 use bots_service::http::{
     HttpBytesResponse, HttpFuture, HttpJsonPort, HttpJsonResponse, OutboundHttpRequest,
 };
@@ -272,7 +271,7 @@ pub fn log_line(message: impl AsRef<str>) {
 }
 
 /// 在 Agent 控制面启动后调用：装配 HTTP/凭据/绑定码，并启动配置巡检测试的运行时。
-pub fn start(data_root: PathBuf, control: Arc<AgentControlClient>) -> Arc<ImService> {
+pub fn start(data_root: PathBuf) -> Arc<ImService> {
     if let Some(existing) = SERVICE.get() {
         return Arc::clone(existing);
     }
@@ -284,7 +283,6 @@ pub fn start(data_root: PathBuf, control: Arc<AgentControlClient>) -> Arc<ImServ
         data_root.clone(),
         Arc::clone(&http),
         Arc::clone(&tokens),
-        control,
         Arc::clone(&bind_codes),
     );
     let (tx, rx) = mpsc::unbounded_channel::<ImTask>();

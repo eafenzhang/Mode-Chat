@@ -9,10 +9,11 @@ replaced by an embedded [pi-rust](https://github.com/bigfish1913/pi-rust) runtim
 ## Status
 
 - Standalone workspace builds (`cargo check` / `cargo test` green).
-- The embedded pi-rust engine is the default for private chat, channels, IM turns
-  and automations; sessions persist as JSONL under `~/.mode-bot/.mode/v2/mode-chat-sessions`.
-- Node/TS agent runtime is no longer bundled. `MODE_CHAT_ENGINE=v4` keeps the old
-  Mode Agent path as a migration escape hatch.
+- The embedded pi-rust engine is the only engine for private chat, channels, IM
+  turns and automations; sessions persist as JSONL under
+  `~/.mode-bot/.mode/v2/mode-chat-sessions`.
+- The legacy v4 client and its crates (`agent-process`, `agent-protocol`,
+  `mode-protocol-client`) have been removed; no Node/TS runtime is bundled.
 - Known gaps until the host-side MCP bridge lands: plugin market, connectors, and
   non-image attachments are unavailable in the embedded engine.
 

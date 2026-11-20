@@ -6,18 +6,14 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/agent-process",
-  "crates/agent-protocol",
   "crates/atomic-file",
   "crates/automation-repo",
   "crates/automation-runtime",
   "crates/automation-schedule",
-  "crates/automation-service",
   "crates/bot-team",
   "crates/bots-service",
   "crates/connectors-service",
   "crates/credential-store",
-  "crates/mode-protocol-client",
   "crates/model-selection",
   "crates/tasks-db",
   "crates/workspace-identity",
@@ -55,12 +51,9 @@ path = "src/main.rs"
 gpui = { package = "gpui-kit", version = "=0.10.0", default-features = false, features = ["component"] }
 unicode-segmentation = "1"
 # 真实控制面：与 Mode Bot 壳同一套 Agent 运行时（spawn / createSession / send / subscribe）。
-agent-process = { path = "crates/agent-process" }
-agent-protocol = { path = "crates/agent-protocol" }
 # 审批判定矩阵直接复用产品纯 Rust 逻辑（ask/auto/full + allowlist）。
 bot-team = { path = "crates/bot-team" }
 # legacy 反向请求（interaction/requestUserInput）处理器要用它的类型。
-mode-protocol-client = { path = "crates/mode-protocol-client" }
 # 新建 Bot：复用产品的 teammates 记录模型与原子写。
 atomic-file = { path = "crates/atomic-file" }
 # 团队记忆读取（mode-bot:team 的 memory store，与壳同口径）。
@@ -69,7 +62,6 @@ bots-service = { path = "crates/bots-service" }
 automation-repo = { path = "crates/automation-repo" }
 automation-schedule = { path = "crates/automation-schedule" }
 automation-runtime = { path = "crates/automation-runtime" }
-automation-service = { path = "crates/automation-service" }
 # 连接器目录/状态/MCP 解析（与壳共用同一份 catalog 与 connectors.json）。
 connectors-service = { path = "crates/connectors-service" }
 # IM 通道：与壳共用同一份 bot 凭据库（`v2/credentials.json`，键 `bot:<id>:credential`）。

@@ -3,7 +3,6 @@
 //! 纯规则在 `bots_service::heartbeat`（到点判定/目标选择/提示词）；这里只做 IO 与投影：
 //! bot-state 的会话投影、上次心跳时间戳、`HEARTBEAT.md` 指令、locale 与运行中检查。
 
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bots_service::BotsRepo;
@@ -115,55 +114,6 @@ pub fn read_settings_locale(data_root: &std::path::Path) -> Option<String> {
         .get("locale")
         .and_then(Value::as_str)
         .map(str::to_string)
-}
-
-/// 已有任务在跑就跳过本 bot：心跳不能和真实回合抢同一段会话。
-pub async fn heartbeat_task_active(
-    control: &Arc<agent_process::AgentControlClient>,
-    conversation: &HeartbeatConversation,
-    task_id: &str,
-    scope: &str,
-) -> bool {
-    let mut target = agent_process::AgentWorkspaceTarget::new(&conversation.workspace_path);
-    if let Some(identity) = conversation
-        .workspace_identity
-        .as_deref()
-        .filter(|identity| !identity.trim().is_empty())
-    {
-        target = target.with_identity(identity);
-    }
-    match control
-        .read_session_with_policy(
-            &target,
-            task_id,
-            None,
-            Some(10),
-            None,
-            agent_process::RuntimePolicy::ExistingOnly,
-        )
-        .await
-    {
-        Ok(snapshot) => {
-            let status = serde_json::to_value(snapshot.session.status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_default();
-            matches!(status.as_str(), "running" | "waiting")
-        }
-        Err(error) => {
-            // 冷会话/已卸载会话读不到快照：视为「没有在跑」，允许心跳继续；
-            // 其它未知错误仍保守跳过，避免与真实回合抢同一段会话。
-            let lower = format!("{error}").to_lowercase();
-            if lower.contains("not active")
-                || lower.contains("session not found")
-                || lower.contains("sessionnotfound")
-            {
-                return false;
-            }
-            im_log!("[im] {scope} 心跳活动检查失败 task={task_id}: {error}");
-            true
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

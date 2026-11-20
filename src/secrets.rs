@@ -35,6 +35,7 @@ pub fn list(data_root: &Path) -> Result<Vec<String>, String> {
 }
 
 /// 读取全部密钥值（只供回合构造 MCP env；UI 不得调用）。
+#[allow(dead_code)]
 pub fn values(data_root: &Path) -> Result<BTreeMap<String, String>, String> {
     Ok(read(&path(data_root)).secrets)
 }

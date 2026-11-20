@@ -181,7 +181,8 @@ pub fn read_plugin_switches(directory: &str) -> Option<(bool, bool)> {
     Some((flag(PLUGIN_BROWSER), flag(PLUGIN_COMPUTER)))
 }
 
-/// 列出 workspace 已登记的所有插件开关（按插件 id 排序）。
+/// 列出 workspace 已登记的所有插件开关（按插件 id 排序；插件宿主恢复后使用）。
+#[allow(dead_code)]
 pub fn workspace_plugins(directory: &str) -> Vec<(String, bool)> {
     let path = Path::new(directory.trim())
         .join(".mode")

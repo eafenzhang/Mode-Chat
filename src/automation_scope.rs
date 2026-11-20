@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Scope {
     pub workspace_path: String,
     pub workspace_identity: Option<String>,
@@ -50,6 +51,7 @@ pub fn set_active(workspace_path: &str, workspace_identity: Option<String>) {
     }
 }
 
+#[allow(dead_code)]
 pub fn lookup(session_id: &str) -> Option<Scope> {
     if let Ok(map) = sessions().lock()
         && let Some(scope) = map.get(session_id)

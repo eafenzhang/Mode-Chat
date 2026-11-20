@@ -9,15 +9,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use agent_process::{AgentControlClient, AgentWorkspaceTarget, RuntimePolicy};
-use agent_protocol::message::MessageInfo;
-use agent_protocol::v4::{
-    CommandSessionId, CommandType, ConversationCommandEnvelope, ResolveInteractionAnswer,
-};
 use bots_service::command::{parse_bot_command, BotCommand};
 use bots_service::commands::{
     handle_new, handle_status, handle_workspace_list, handle_workspace_set, CommandReply,
@@ -116,7 +111,6 @@ pub struct ImRuntimeManager {
     data_root: std::path::PathBuf,
     http: Arc<ReqwestHttpPort>,
     tokens: Arc<TokenVault>,
-    control: Arc<AgentControlClient>,
     bind_codes: Arc<BindCodeStore>,
     statuses: WeixinStatusRegistry,
     running: Mutex<HashMap<String, RunningLoop>>,
@@ -130,14 +124,12 @@ impl ImRuntimeManager {
         data_root: std::path::PathBuf,
         http: Arc<ReqwestHttpPort>,
         tokens: Arc<TokenVault>,
-        control: Arc<AgentControlClient>,
         bind_codes: Arc<BindCodeStore>,
     ) -> Arc<Self> {
         Arc::new(Self {
             data_root,
             http,
             tokens,
-            control,
             bind_codes,
             statuses: WeixinStatusRegistry::new(),
             running: Mutex::new(HashMap::new()),
@@ -399,7 +391,7 @@ impl ImRuntimeManager {
             Arc::clone(&streams),
             broker.clone(),
         ));
-        let ops: Arc<dyn BotTurnOps> = turn_ops(&self.control, &self.data_root, &sink);
+        let ops: Arc<dyn BotTurnOps> = turn_ops(&self.data_root);
         let inner: Arc<dyn WeixinMessageHandler> = Arc::new(
             ImWeixinHandler::new(
                 self.data_root.clone(),
@@ -585,21 +577,7 @@ impl ImRuntimeManager {
                 continue;
             };
             let conversation = plan.conversation;
-            if let Some(active_task) = conversation.active_task_id.as_deref()
-                && crate::im_heartbeat::heartbeat_task_active(
-                    &self.control,
-                    &conversation,
-                    active_task,
-                    if bot.provider == BotProvider::Wecom {
-                        "wecom"
-                    } else {
-                        "weixin"
-                    },
-                )
-                .await
-            {
-                continue;
-            }
+
             if let Err(error) = crate::im_heartbeat::record_heartbeat(&repo, &bot.id, now) {
                 im_log!("[im] 心跳时间戳写入失败 bot={}: {error}", bot.id);
             }
@@ -635,7 +613,7 @@ impl ImRuntimeManager {
                     &from_user_id,
                 ))
             };
-            let ops: Arc<dyn BotTurnOps> = turn_ops(&self.control, &self.data_root, &sink);
+            let ops: Arc<dyn BotTurnOps> = turn_ops(&self.data_root);
             let store = ConversationStore::new(BotsRepo::new(&self.data_root));
             let runner = ConversationRunner::new(&store, &*ops, &*sink)
                 .with_polling(Duration::from_secs(1), 240);
@@ -700,7 +678,7 @@ impl ImRuntimeManager {
             &bot.id,
             &from_user_id,
         ));
-        let ops: Arc<dyn BotTurnOps> = turn_ops(&self.control, &self.data_root, &sink);
+        let ops: Arc<dyn BotTurnOps> = turn_ops(&self.data_root);
         let handler: Arc<dyn WeixinMessageHandler> = Arc::new(ImWeixinHandler::new(
             self.data_root.clone(),
             bot.clone(),
@@ -1300,195 +1278,8 @@ fn to_weixin_message(
     }
 }
 
-/// v4 回合操作：createSession / sendText / 快照读取 / Stop / 审批回执。
-pub struct ImTurnOps {
-    control: Arc<AgentControlClient>,
-    data_root: std::path::PathBuf,
-    seq: AtomicU64,
-    watches: Mutex<HashMap<String, TurnWatch>>,
-    announced: Mutex<HashSet<String>>,
-    sink: Arc<dyn BotReplySink>,
-}
-
-#[derive(Default)]
-struct TurnWatch {
-    baseline_id: Option<String>,
-    idle_streak: u32,
-    last_text: String,
-}
-
-struct SnapshotView {
-    status: String,
-    last_assistant_text: String,
-    last_assistant_id: Option<String>,
-    pending_permission: Option<PendingPermissionPrompt>,
-}
-
-fn command_id(seq: &AtomicU64) -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("gpui-im-{millis}-{}", seq.fetch_add(1, Ordering::Relaxed))
-}
-
-fn envelope(
-    client_id: &str,
-    seq: &AtomicU64,
-    command_type: CommandType,
-    session_id: CommandSessionId,
-    payload: Value,
-) -> ConversationCommandEnvelope {
-    let issued_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or_default();
-    ConversationCommandEnvelope {
-        ttft: None,
-        command_id: command_id(seq),
-        client_id: client_id.to_string(),
-        session_id,
-        base_revision: None,
-        base_log_epoch: None,
-        command_type,
-        payload,
-        issued_at: serde_json::Number::from(issued_at),
-    }
-}
-
-fn target_of(workspace_path: &str, workspace_identity: Option<&str>) -> AgentWorkspaceTarget {
-    let mut target = AgentWorkspaceTarget::new(workspace_path);
-    if let Some(identity) = workspace_identity.map(str::trim).filter(|value| !value.is_empty()) {
-        target = target.with_identity(identity.to_string());
-    }
-    target
-}
-
-fn status_of(snapshot: &agent_protocol::snapshot::SessionStateSnapshot) -> String {
-    serde_json::to_value(snapshot.session.status)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default()
-}
-
-fn last_assistant_text(snapshot: &agent_protocol::snapshot::SessionStateSnapshot) -> String {
-    for message in snapshot.messages.iter().rev() {
-        if !matches!(message.info, MessageInfo::Assistant(_)) {
-            continue;
-        }
-        let text = message
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                agent_protocol::message::MessagePart::Text(part) => Some(part.text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        if !text.trim().is_empty() {
-            return text;
-        }
-    }
-    String::new()
-}
-
-fn pending_permission_of(
-    snapshot: &agent_protocol::snapshot::SessionStateSnapshot,
-) -> Option<PendingPermissionPrompt> {
-    let permission = snapshot.projection.pending_permissions.first()?;
-    Some(PendingPermissionPrompt {
-        request_id: permission.request_id.clone(),
-        tool_name: permission.tool_name.clone(),
-        reason: permission.reason.clone(),
-        risk_level: serde_json::to_value(permission.risk_level)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default(),
-        options: permission
-            .options
-            .iter()
-            .map(|option| PermissionPromptOption {
-                option_id: option.option_id.clone(),
-                kind: option.kind.clone(),
-                name: option.name.clone(),
-            })
-            .collect(),
-    })
-}
-
-impl ImTurnOps {
-    pub fn new(
-        control: Arc<AgentControlClient>,
-        data_root: std::path::PathBuf,
-        sink: Arc<dyn BotReplySink>,
-    ) -> Self {
-        Self {
-            control,
-            data_root,
-            seq: AtomicU64::new(0),
-            watches: Mutex::new(HashMap::new()),
-            announced: Mutex::new(HashSet::new()),
-            sink,
-        }
-    }
-
-    async fn present_approval(
-        &self,
-        context: &ConversationContext,
-        prompt: &PendingPermissionPrompt,
-    ) -> Result<(), String> {
-        let is_new = self
-            .announced
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(prompt.request_id.clone());
-        if !is_new {
-            return Ok(());
-        }
-        let mut lines = vec![format!(
-            "工具 {} 需要审批（风险：{}）。回复 /permission <序号> 选择，或 /deny 拒绝。",
-            prompt.tool_name,
-            if prompt.risk_level.trim().is_empty() { "unknown" } else { &prompt.risk_level }
-        )];
-        if !prompt.reason.trim().is_empty() {
-            lines.push(prompt.reason.clone());
-        }
-        for (index, option) in prompt.options.iter().enumerate() {
-            lines.push(format!("{}. {}", index + 1, option.name));
-        }
-        im_log!(
-            "[im] approval pending bot={} request={} tool={} options={}",
-            context.bot_id,
-            prompt.request_id,
-            prompt.tool_name,
-            prompt.options.len()
-        );
-        self.sink
-            .send_reply(
-                &context.bot_id,
-                &context.conversation_key,
-                None,
-                &lines.join("\n"),
-            )
-            .await
-    }
-}
-
-/// 引擎选择：默认内嵌 rpi；`MODE_CHAT_ENGINE=v4` 可回退旧 Mode Agent。
-fn turn_ops(
-    control: &Arc<AgentControlClient>,
-    data_root: &std::path::Path,
-    sink: &Arc<dyn BotReplySink>,
-) -> Arc<dyn BotTurnOps> {
-    if std::env::var("MODE_CHAT_ENGINE").ok().as_deref() == Some("v4") {
-        Arc::new(ImTurnOps::new(
-            Arc::clone(control),
-            data_root.to_path_buf(),
-            Arc::clone(sink),
-        ))
-    } else {
-        Arc::new(RpiTurnOps::new(data_root.to_path_buf()))
-    }
+fn turn_ops(data_root: &std::path::Path) -> Arc<dyn BotTurnOps> {
+    Arc::new(RpiTurnOps::new(data_root.to_path_buf()))
 }
 
 /// 内嵌 pi-rust 的 IM 回合操作：每个 IM 会话一个持久 JSONL 会话。
@@ -1789,368 +1580,6 @@ impl RpiTurnState {
     }
 }
 
-impl BotTurnOps for ImTurnOps {
-    fn create_session<'a>(
-        &'a self,
-        workspace_path: &'a str,
-        workspace_identity: Option<&'a str>,
-    ) -> RuntimeFuture<'a, Result<String, String>> {
-        let control = Arc::clone(&self.control);
-        let workspace_path = workspace_path.to_string();
-        let workspace_identity = workspace_identity.map(str::to_string);
-        let data_root = self.data_root.clone();
-        let client_id = format!("gpui-im-{}", uuid::Uuid::new_v4());
-        let seq = &self.seq;
-        let envelope = envelope(
-            &client_id,
-            seq,
-            CommandType::CreateSession,
-            CommandSessionId(None),
-            json!({
-                "workspaceId": workspace_path,
-                "mcpServers": crate::connectors::payload_for_workspace(&data_root, &workspace_path),
-                "workspaceIdentity": workspace_identity,
-            }),
-        );
-        Box::pin(async move {
-            let target = target_of(&workspace_path, workspace_identity.as_deref());
-            let ack = control
-                .send_conversation_command_v4(&target, &envelope)
-                .await
-                .map_err(|error| format!("v4 createSession 失败：{error}"))?;
-            if !ack.status.is_success() {
-                return Err(format!(
-                    "v4 createSession 未受理（{}）：{}",
-                    ack.status.as_str(),
-                    ack.message.unwrap_or_default()
-                ));
-            }
-            ack.result
-                .and_then(|value| {
-                    value
-                        .get("sessionId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .ok_or_else(|| "v4 createSession 没有返回 sessionId".to_string())
-        })
-    }
-
-    fn send_text<'a>(
-        &'a self,
-        context: &'a ConversationContext,
-        text: &'a str,
-    ) -> RuntimeFuture<'a, Result<(), String>> {
-        let control = Arc::clone(&self.control);
-        let target = target_of(&context.workspace_path, context.workspace_identity.as_deref());
-        let session_id = context.session_id.clone().unwrap_or_default();
-        let text = text.to_string();
-        let client_id = format!("gpui-im-{}", uuid::Uuid::new_v4());
-        let seq = &self.seq;
-        let model_selection = teammate_model_selection(
-            &self.data_root,
-            context.workspace_identity.as_deref(),
-            &context.workspace_path,
-        );
-        Box::pin(async move {
-            if session_id.trim().is_empty() {
-                return Err("会话尚未创建".to_string());
-            }
-            let baseline_id = read_snapshot(&control, &target, &session_id)
-                .await
-                .ok()
-                .and_then(|view| view.last_assistant_id);
-            // v4 sendText 的 strict schema 要求 modelSelection（缺省会被 CLI 直接 rejected）。
-            let mut payload = json!({ "text": text });
-            if let Some(selection) = model_selection {
-                payload["modelSelection"] = selection;
-            }
-            let envelope = envelope(
-                &client_id,
-                seq,
-                CommandType::SendText,
-                CommandSessionId(Some(session_id.clone())),
-                payload,
-            );
-            let ack = control
-                .send_conversation_command_v4(&target, &envelope)
-                .await
-                .map_err(|error| error.to_string())?;
-            if !ack.status.is_success() {
-                // 带上 reasonCode（proto.sessionNotFound 等）：ConversationRunner 依赖
-                // 「session not found」判定触发「冷恢复→新建会话」回退。
-                return Err(format!(
-                    "sendText 未受理（{} / {}）：{}",
-                    ack.status.as_str(),
-                    ack.reason_code.as_deref().unwrap_or("no-reason"),
-                    ack.message.unwrap_or_default()
-                ));
-            }
-            // 基线的读取必须在发送前完成；发送成功后登记 watch。
-            if let Ok(mut watches) = self.watches.lock() {
-                watches.insert(
-                    session_id,
-                    TurnWatch {
-                        baseline_id,
-                        ..Default::default()
-                    },
-                );
-            }
-            Ok(())
-        })
-    }
-
-    fn read_reply<'a>(
-        &'a self,
-        context: &'a ConversationContext,
-    ) -> RuntimeFuture<'a, Result<Option<String>, String>> {
-        let control = Arc::clone(&self.control);
-        let target = target_of(&context.workspace_path, context.workspace_identity.as_deref());
-        let session_id = context.session_id.clone().unwrap_or_default();
-        Box::pin(async move {
-            if session_id.trim().is_empty() {
-                return Err("会话尚未创建".to_string());
-            }
-            let view = read_snapshot(&control, &target, &session_id).await?;
-            // 审批可能出现在任何状态（CLI 的 legacy 请求不改变 status）：先呈现再等作答。
-            if let Some(prompt) = view.pending_permission.as_ref() {
-                self.present_approval(context, prompt).await?;
-                if let Ok(mut watches) = self.watches.lock()
-                    && let Some(watch) = watches.get_mut(&session_id)
-                {
-                    watch.idle_streak = 0;
-                }
-                return Ok(None);
-            }
-            match view.status.as_str() {
-                "error" => {
-                    self.announced
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .clear();
-                    self.watches
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .remove(&session_id);
-                    Err(format!(
-                        "Bot 回合失败（session 状态 error{}）",
-                        if view.last_assistant_text.is_empty() {
-                            String::new()
-                        } else {
-                            format!("：{}", view.last_assistant_text)
-                        }
-                    ))
-                }
-                "completed" => {
-                    self.announced
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .clear();
-                    self.watches
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .remove(&session_id);
-                    Ok(Some(view.last_assistant_text))
-                }
-                "running" | "waiting" => {
-                    self.announced
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .clear();
-                    if let Ok(mut watches) = self.watches.lock()
-                        && let Some(watch) = watches.get_mut(&session_id)
-                    {
-                        watch.idle_streak = 0;
-                    }
-                    Ok(None)
-                }
-                _ => {
-                    // 空闲态：发送前的 assistant 基线未变化说明本轮还没开始；
-                    // 连续两轮文本稳定才算终态，避免工具调用间隙误判。
-                    let mut watches = self
-                        .watches
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let watch = watches.entry(session_id).or_default();
-                    if let Some(last_id) = view.last_assistant_id.as_deref() {
-                        if watch.baseline_id.as_deref() == Some(last_id) {
-                            watch.idle_streak = 0;
-                            return Ok(None);
-                        }
-                        if watch.last_text == view.last_assistant_text {
-                            watch.idle_streak = watch.idle_streak.saturating_add(1);
-                        } else {
-                            watch.last_text = view.last_assistant_text.clone();
-                            watch.idle_streak = 1;
-                        }
-                        if watch.idle_streak >= 2 {
-                            return Ok(Some(view.last_assistant_text));
-                        }
-                    }
-                    Ok(None)
-                }
-            }
-        })
-    }
-
-    fn resume_session<'a>(
-        &'a self,
-        context: &'a ConversationContext,
-    ) -> RuntimeFuture<'a, Result<bool, String>> {
-        let control = Arc::clone(&self.control);
-        let target = target_of(&context.workspace_path, context.workspace_identity.as_deref());
-        let session_id = context.session_id.clone().unwrap_or_default();
-        Box::pin(async move {
-            if session_id.trim().is_empty() {
-                return Ok(false);
-            }
-            let params = agent_protocol::session_write::SessionResumeParams {
-                session_id: session_id.clone(),
-                workspace: None,
-                thought_level: None,
-                mcp_servers: None,
-                tool_allowlist: None,
-                tool_denylist: None,
-                off_peak_tool_enabled: None,
-                dynamic_workflow_enabled: None,
-            };
-            match control.resume_session(&target, params).await {
-                Ok(_) => Ok(true),
-                Err(error) => {
-                    im_log!("[im] 会话冷恢复失败 session={session_id}: {error}");
-                    Ok(false)
-                }
-            }
-        })
-    }
-
-    fn pending_permissions<'a>(
-        &'a self,
-        context: &'a ConversationContext,
-    ) -> RuntimeFuture<'a, Result<Vec<PendingPermissionPrompt>, String>> {
-        let control = Arc::clone(&self.control);
-        let target = target_of(&context.workspace_path, context.workspace_identity.as_deref());
-        let session_id = context.session_id.clone().unwrap_or_default();
-        Box::pin(async move {
-            if session_id.trim().is_empty() {
-                return Ok(Vec::new());
-            }
-            let view = read_snapshot(&control, &target, &session_id).await?;
-            Ok(view.pending_permission.into_iter().collect())
-        })
-    }
-
-    fn resolve_interaction<'a>(
-        &'a self,
-        context: &'a ConversationContext,
-        request_id: &'a str,
-        option_id: &'a str,
-    ) -> RuntimeFuture<'a, Result<(), String>> {
-        let control = Arc::clone(&self.control);
-        let target = target_of(&context.workspace_path, context.workspace_identity.as_deref());
-        let session_id = context.session_id.clone().unwrap_or_default();
-        let request_id = request_id.to_string();
-        let option_id = option_id.to_string();
-        Box::pin(async move {
-            let answer = ResolveInteractionAnswer {
-                option_id: Some(option_id),
-                free_text: None,
-                action: None,
-                content: None,
-            };
-            control
-                .resolve_interaction_v4(&target, &session_id, &request_id, answer)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        })
-    }
-
-    fn stop<'a>(
-        &'a self,
-        context: &'a ConversationContext,
-    ) -> RuntimeFuture<'a, Result<bool, String>> {
-        let control = Arc::clone(&self.control);
-        let target = target_of(&context.workspace_path, context.workspace_identity.as_deref());
-        let session_id = context.session_id.clone().unwrap_or_default();
-        let client_id = format!("gpui-im-{}", uuid::Uuid::new_v4());
-        let seq = &self.seq;
-        Box::pin(async move {
-            if session_id.trim().is_empty() {
-                return Ok(false);
-            }
-            let envelope = envelope(
-                &client_id,
-                seq,
-                CommandType::Stop,
-                CommandSessionId(Some(session_id)),
-                json!({}),
-            );
-            control
-                .send_conversation_command_v4(&target, &envelope)
-                .await
-                .map(|ack| ack.status.is_success())
-                .map_err(|error| error.to_string())
-        })
-    }
-}
-
-/// IM 回合使用工作区 Bot 的模型选择（teammates.json `modelSelection`）。
-///
-/// v4 `sendText` 不带 `modelSelection` 会被 CLI 以 rejected 拒绝；WebView 时代由
-/// Node Host 兜底选模型，GPUI 直接读名册里的持久化选择。
-fn teammate_model_selection(
-    data_root: &std::path::Path,
-    workspace_identity: Option<&str>,
-    workspace_path: &str,
-) -> Option<Value> {
-    let text = std::fs::read_to_string(data_root.join("v2").join("teammates.json")).ok()?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    let teammate_id = workspace_identity
-        .and_then(|identity| identity.trim().strip_prefix("mode-bot:teammate:"))
-        .map(str::to_string);
-    let teammate = value
-        .get("teammates")?
-        .as_array()?
-        .iter()
-        .find(|item| {
-            teammate_id.as_deref().map_or_else(
-                || item.get("directory").and_then(Value::as_str) == Some(workspace_path),
-                |id| item.get("id").and_then(Value::as_str) == Some(id),
-            )
-        })?;
-    let selection = teammate.get("modelSelection")?.clone();
-    let provider = selection.get("providerId").and_then(Value::as_str)?;
-    let model = selection.get("modelId").and_then(Value::as_str)?;
-    (!provider.trim().is_empty() && !model.trim().is_empty()).then_some(selection)
-}
-
-async fn read_snapshot(
-    control: &AgentControlClient,
-    target: &AgentWorkspaceTarget,
-    session_id: &str,
-) -> Result<SnapshotView, String> {
-    let snapshot = control
-        .read_session_with_policy(
-            target,
-            session_id,
-            None,
-            Some(30),
-            None,
-            RuntimePolicy::ExistingOnly,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(SnapshotView {
-        status: status_of(&snapshot),
-        last_assistant_text: last_assistant_text(&snapshot),
-        last_assistant_id: snapshot.messages.iter().rev().find_map(|message| match &message.info {
-            MessageInfo::Assistant(info) => Some(info.message_id.clone()),
-            _ => None,
-        }),
-        pending_permission: pending_permission_of(&snapshot),
-    })
-}
 
 /// 微信入站处理器：绑定 → 闸门 → 命令 → 会话编排。
 pub struct ImWeixinHandler {
