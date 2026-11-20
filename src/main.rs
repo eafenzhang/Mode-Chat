@@ -3670,14 +3670,13 @@ impl PilotApp {
     }
 
     fn open_new_dialog(&mut self, cx: &mut Context<Self>) {
-        self.settings_open = false;
+        // 从设置页打开时保留设置背景；对话框关闭后回到原页。
         self.pending_bot_dialog = Some(BotFormRequest::New);
         cx.notify();
     }
 
     /// 编辑已有 Bot：下一帧由 render 打开 kit AlertDialog。
     fn open_edit_dialog(&mut self, bot_id: String, cx: &mut Context<Self>) {
-        self.settings_open = false;
         self.pending_bot_dialog = Some(BotFormRequest::Edit(bot_id));
         cx.notify();
     }
@@ -9672,6 +9671,9 @@ impl PilotApp {
                     } else {
                         tri!("已是最新（v{latest}）", "Up to date (v{latest})")
                     }
+                }
+                Some(update::Check::NoRelease) => {
+                    tri!("发布源暂无版本（尚未发布）", "No release published yet")
                 }
                 Some(update::Check::Failed(error)) => tri!("检查失败：{error}", "Check failed: {error}"),
             }

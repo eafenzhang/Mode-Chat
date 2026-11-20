@@ -43,6 +43,8 @@ pub enum Check {
         newer: bool,
         target: Option<Target>,
     },
+    /// 发布源还没有任何版本（404）：不是网络/解析错误，UI 用中性提示。
+    NoRelease,
     Failed(String),
 }
 
@@ -79,9 +81,12 @@ pub fn check(timeout: Duration) -> Check {
                 target: manifest.target,
             }
         }
+        Err(error) if error == NO_RELEASE => Check::NoRelease,
         Err(error) => Check::Failed(error),
     }
 }
+
+const NO_RELEASE: &str = "__no_release__";
 
 /// 用系统 `curl.exe` 取清单并解析版本/平台目标。
 fn fetch_manifest(timeout: Duration) -> Result<Manifest, String> {
@@ -96,6 +101,8 @@ fn fetch_manifest(timeout: Duration) -> Result<Manifest, String> {
             &seconds,
             "--header",
             "Accept: application/json",
+            "--write-out",
+            "|HTTP:%{http_code}",
             &url,
         ])
         .stdin(Stdio::null())
@@ -111,7 +118,14 @@ fn fetch_manifest(timeout: Duration) -> Result<Manifest, String> {
             format!("网络请求失败：{detail}")
         });
     }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (body, status) = stdout
+        .rsplit_once("|HTTP:")
+        .map_or((stdout.as_ref(), ""), |(body, status)| (body, status));
+    if status.trim() == "404" {
+        return Err(NO_RELEASE.to_string());
+    }
+    let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| format!("清单不是合法 JSON：{error}"))?;
     parse_manifest(&value)
 }
