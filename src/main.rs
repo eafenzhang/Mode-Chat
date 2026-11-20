@@ -6386,7 +6386,7 @@ impl PilotApp {
     // ---- @ 提及候选（群聊 composer） ----
 
     /// 输入框末尾正在敲的 @提及：返回（`@` 的字节位置，查询串）。
-    fn mention_context(&self, cx: &Context<Self>) -> Option<(usize, Vec<String>)> {
+    fn mention_context(&self, cx: &App) -> Option<(usize, Vec<String>)> {
         let group = self.selected_group()?;
         if self.mention_dismissed {
             return None;
@@ -6486,7 +6486,7 @@ impl PilotApp {
                         .font_family(theme::FONT_FAMILY)
                         .text_size(px(10.))
                         .text_color(theme::ink_tertiary())
-                        .child(i18n::t("Tab 选择 · Enter 插入 · Esc 收起")),
+                        .child(i18n::t("点击选择 · Enter 插入 · Esc 收起")),
                 )
                 .into_any_element(),
         )
@@ -11347,6 +11347,28 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .on_action(cx.listener(Self::on_detail_menu_prev))
                 .on_action(cx.listener(Self::on_detail_menu_next))
                 .on_action(cx.listener(Self::on_detail_menu_confirm))
+                // 上下文键位在 Windows + gpui-kit 下不可靠（Tab 还会被平台焦点遍历吃掉）：
+                // 焦点就在这个遮罩上，直接听原始按键再派发同名 Action，按键一定生效。
+                .on_key_down(cx.listener(|_this, event: &gpui::KeyDownEvent, window, cx| {
+                    let handled = match event.keystroke.key.as_str() {
+                        "up" => {
+                            window.dispatch_action(Box::new(DetailMenuPrev), cx);
+                            true
+                        }
+                        "down" => {
+                            window.dispatch_action(Box::new(DetailMenuNext), cx);
+                            true
+                        }
+                        "enter" => {
+                            window.dispatch_action(Box::new(DetailMenuConfirm), cx);
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        cx.stop_propagation();
+                    }
+                }))
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(|this, _event, window, cx| {
@@ -11509,7 +11531,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .font_family(theme::FONT_FAMILY)
                 .text_size(px(11.))
                 .text_color(theme::ink_tertiary())
-                .child(i18n::t("Tab / Shift+Tab 选择 · Enter 执行 · Esc 关闭")),
+                .child(i18n::t("↑/↓ 选择 · Enter 执行 · Esc 关闭")),
         );
 
         let card = dialog_card(Some("model-close-card"), 460.)
@@ -14239,6 +14261,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .text_size(px(14.))
                             .line_height(px(22.))
                             .text_color(theme::ink())
+                            .key_context("Composer")
                             .child(self.input.clone()),
                     )
                     .child(
@@ -14496,7 +14519,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                     this.detail_menu_open = !this.detail_menu_open;
                                     this.menu_selected = 0;
                                     if this.detail_menu_open {
-                                        this.menu_focus.clone().focus(window, cx);
+                                        // 菜单元素这一帧还没渲染，直接 focus 会落空（焦点仍在输入框）；
+                                        // 推迟到下一帧再把焦点交给遮罩。
+                                        let menu_focus = this.menu_focus.clone();
+                                        window.defer(cx, move |window, cx| {
+                                            menu_focus.focus(window, cx);
+                                        });
                                     }
                                 }
                                 cx.notify();
@@ -14508,7 +14536,10 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                     this.menu_selected = 0;
                                     // 菜单要拿焦点：否则 ↑/↓ 被输入框吞掉、Enter 直接发出消息。
                                     if this.detail_menu_open {
-                                        this.menu_focus.clone().focus(window, cx);
+                                        let menu_focus = this.menu_focus.clone();
+                                        window.defer(cx, move |window, cx| {
+                                            menu_focus.focus(window, cx);
+                                        });
                                     }
                                 }
                                 cx.notify();
@@ -19418,6 +19449,10 @@ fn main() {
             // （实测 Palette 上下文抢不过它），Tab 在全局没有绑定，不会打架。
             KeyBinding::new("tab", PaletteNext, Some("Palette")),
             KeyBinding::new("shift-tab", PalettePrev, Some("Palette")),
+            // Windows 上 Tab 会被平台层先吃掉做焦点遍历，业务绑定收不到；
+            // 上下键才是可靠路径（命令面板是单行输入，不抢 ↑/↓）。
+            KeyBinding::new("up", PalettePrev, Some("Palette")),
+            KeyBinding::new("down", PaletteNext, Some("Palette")),
             KeyBinding::new("enter", PaletteSubmit, Some("Palette")),
             // Composer 的 Enter/Shift+Enter 由 gpui-kit Textarea 的 submit_on_enter 处理。
             // 无障碍底线（P4-6）：Esc 关浮层、Ctrl+N/K/, 覆盖主要入口，全键盘可达。
@@ -19431,6 +19466,8 @@ fn main() {
             // 搜索历史：Tab/Shift+Tab 选命中、Enter 跳转（↑/↓ 会被输入框吃掉）。
             KeyBinding::new("tab", FindNext, Some("Find")),
             KeyBinding::new("shift-tab", FindPrev, Some("Find")),
+            KeyBinding::new("up", FindPrev, Some("Find")),
+            KeyBinding::new("down", FindNext, Some("Find")),
             KeyBinding::new("enter", FindOpen, Some("Find")),
             // @ 候选：焦点在 composer 上时 Tab/Shift+Tab 选择（Enter 在 on_send 里插入）。
             KeyBinding::new("tab", MentionNext, Some("Composer")),
