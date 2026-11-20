@@ -4985,7 +4985,7 @@ impl PilotApp {
                         .h(px(28.))
                         .rounded_full()
                         .border_1()
-                        .border_color(theme::accent())
+                        .border_color(ui_accent())
                         .bg(theme::raised())
                         .px(px(12.))
                         .flex()
@@ -5326,7 +5326,7 @@ impl PilotApp {
                             .id(SharedString::from(format!("elicit-submit-{request_id}")))
                             .h(px(28.))
                             .rounded_full()
-                            .bg(theme::accent())
+                            .bg(ui_accent())
                             .px(px(12.))
                             .flex()
                             .items_center()
@@ -5356,7 +5356,7 @@ impl PilotApp {
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_CARD))
             .border_1()
-            .border_color(theme::accent())
+            .border_color(ui_accent())
             .bg(theme::card())
             .p(px(12.))
             .flex()
@@ -5631,7 +5631,9 @@ impl PilotApp {
                 let request_id_click = request_id.clone();
                 let (bg, border, fg) = match kind.as_str() {
                     "deny" => (theme::card(), theme::danger(), theme::danger()),
-                    "allowAlways" => (theme::accent(), theme::accent(), theme::accent_ink()),
+                    "allowAlways" | "allow_always" => {
+                        (ui_accent(), ui_accent(), theme::accent_ink())
+                    }
                     _ => (theme::raised(), theme::edge(), theme::ink()),
                 };
                 options = options.child(
@@ -5675,7 +5677,7 @@ impl PilotApp {
             .flex_shrink_0()
             .rounded(px(10.))
             .border_1()
-            .border_color(theme::accent())
+            .border_color(ui_accent())
             .bg(theme::card())
             .p(px(12.))
             .flex()
@@ -12565,7 +12567,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 div()
                                     .font_family(theme::FONT_FAMILY)
                                     .text_size(px(11.))
-                                    .text_color(theme::accent())
+                                    .text_color(ui_accent())
                                     .child(SharedString::from(owner_label)),
                             )
                             .child(
@@ -16877,11 +16879,8 @@ fn wecom_row_el(
                     .child(block);
                 row.into_any_element()
             } else {
-                div()
-                    .w_full()
-                    .pl(px(44.))
-                    .child(block)
-                    .into_any_element()
+                // 私聊没有成员头像：与助手正文左缘对齐，别再额外缩进。
+                div().w_full().child(block).into_any_element()
             }
         }
         WecomRow::Tool(message) => {
@@ -17410,8 +17409,12 @@ fn user_text_with_mentions(text: &str, names: &[String]) -> gpui::AnyElement {
                 highlights.push((
                     start..end,
                     HighlightStyle {
-                        background_color: Some(Hsla::from(theme::accent_soft())),
-                        color: Some(Hsla::from(theme::bubble_user_ink())),
+                        background_color: Some(Hsla::from(ui_accent_soft())),
+                        color: Some(Hsla::from(if wecom_theme::active() {
+                            wecom_theme::bubble_out_text()
+                        } else {
+                            theme::bubble_user_ink()
+                        })),
                         font_weight: Some(gpui::FontWeight::MEDIUM),
                         ..Default::default()
                     },
@@ -18061,8 +18064,32 @@ fn connector_link(
         .text_size(px(11.))
         .line_height(px(16.))
         .text_color(theme::ink_secondary())
-        .hover(|style| style.text_color(theme::accent()))
+        .hover(|style| style.text_color(ui_accent()))
         .child(label.into())
+}
+
+/// 当前皮肤的强调色（微信绿 / 经典强调色）。
+fn ui_accent() -> Rgba {
+    if wecom_theme::active() {
+        wecom_theme::send_enabled()
+    } else {
+        theme::accent()
+    }
+}
+
+/// 当前皮肤的强调色淡底。
+fn ui_accent_soft() -> Rgba {
+    if wecom_theme::active() {
+        let accent = wecom_theme::send_enabled();
+        Rgba {
+            r: accent.r,
+            g: accent.g,
+            b: accent.b,
+            a: 0.18,
+        }
+    } else {
+        theme::accent_soft()
+    }
 }
 
 /// 连接器卡片的分类图标（DS 用品牌 logo；我们没有素材，用分类图标占位）。
@@ -18709,7 +18736,7 @@ fn tool_state_label(state: &str) -> &'static str {
 
 fn tool_state_color(state: &str) -> Rgba {
     match state {
-        "running" => theme::accent(),
+        "running" => ui_accent(),
         "done" => theme::success(),
         "error" => theme::danger(),
         _ => theme::ink_tertiary(),
@@ -19859,8 +19886,8 @@ impl PilotApp {
                                     .truncate()
                                     .font_family(wecom_theme::FONT_FAMILY)
                                     .text_size(px(15.))
-                                    .line_height(px(20.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .line_height(px(22.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(wecom_theme::chat_title())
                                     .child(SharedString::from(title)),
                             )

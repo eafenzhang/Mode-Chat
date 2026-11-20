@@ -79,7 +79,7 @@ pub const PANEL_WIDTH: f32 = 166.0;
 pub const NAV_ITEM_HEIGHT: f32 = 44.0;
 pub const LIST_ROW_HEIGHT: f32 = 56.0;
 pub const SEARCH_HEIGHT: f32 = 32.0;
-pub const COMPOSER_HEIGHT: f32 = 176.0;
+pub const COMPOSER_HEIGHT: f32 = 148.0;
 
 // 窗口 / 标题栏
 pub fn window_bg() -> Rgba {
@@ -138,7 +138,7 @@ pub fn list_time_selected() -> Rgba {
     pick_alpha(0xffffff, 0xa6, 0x666666, 255)
 }
 pub fn search_bg() -> Rgba {
-    pick(0x454547, 0xe2e2e2)
+    pick(0x3a3a3b, 0xe2e2e2)
 }
 pub fn star() -> Rgba {
     pick(0xfbc224, 0xf5a623)
@@ -261,10 +261,18 @@ pub fn list_gradient() -> Background {
 
 /// 选中会话行：深色整行主题绿；浅色微信是灰色选中行。
 pub fn selected_gradient() -> Background {
+    // 深色不做整行实心绿（太吵）：主题色 22% 叠在列表底色上；
+    // 浅色沿用微信灰色选中行。
     let color = if light() {
         rgb(0xd9d9d9)
     } else {
-        crate::theme::accent_custom().unwrap_or_else(|| rgb(0x0da869))
+        let accent = accent_color();
+        Rgba {
+            r: accent.r,
+            g: accent.g,
+            b: accent.b,
+            a: 0.22,
+        }
     };
     linear_gradient(
         90.0,
