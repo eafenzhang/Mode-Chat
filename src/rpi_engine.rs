@@ -1035,6 +1035,82 @@ fn collect_search(
     }
 }
 
+/// 最近 `days` 天（含今天）的用量分日聚合：`(day, input, output, cacheRead)`。
+pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
+    let mut buckets: std::collections::HashMap<String, (i64, i64, i64)> =
+        std::collections::HashMap::new();
+    collect_daily(&sessions_root(), &mut buckets);
+    let now = crate::time::now_ms();
+    (0..days)
+        .rev()
+        .map(|back| {
+            let ms = now.saturating_sub(back as u64 * 86_400_000);
+            let day = crate::time::format_day(ms);
+            let (input, output, cache) = buckets.get(&day).copied().unwrap_or((0, 0, 0));
+            (day, input, output, cache)
+        })
+        .collect()
+}
+
+fn collect_daily(
+    dir: &std::path::Path,
+    buckets: &mut std::collections::HashMap<String, (i64, i64, i64)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_daily(&path, buckets);
+            continue;
+        }
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        if !name.ends_with(".jsonl") || name.ends_with(".progress.jsonl") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if value.get("kind").and_then(|item| item.as_str()) != Some("entry") {
+                continue;
+            }
+            let Some(message) = value.get("message") else {
+                continue;
+            };
+            if message.get("kind").and_then(|item| item.as_str()) != Some("assistant") {
+                continue;
+            }
+            let Some(usage) = message.get("usage") else {
+                continue;
+            };
+            let at = value
+                .get("timestamp")
+                .and_then(|item| item.as_u64())
+                .or_else(|| message.get("timestamp").and_then(|item| item.as_u64()))
+                .unwrap_or(0);
+            if at == 0 {
+                continue;
+            }
+            let day = crate::time::format_day(at);
+            let input = usage.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
+            let output = usage.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache = usage
+                .get("cacheRead")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let slot = buckets.entry(day).or_insert((0, 0, 0));
+            slot.0 += input;
+            slot.1 += output;
+            slot.2 += cache;
+        }
+    }
+}
+
 /// 一个 JSONL 会话的累计用量（assistant 消息里的 usage）。
 ///
 /// 用量页过去读 `db.sqlite` 的 turn_usage：内嵌引擎的会话是 JSONL，那条路永远是空的。

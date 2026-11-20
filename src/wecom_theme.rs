@@ -159,7 +159,7 @@ pub fn send_disabled_text() -> Rgba {
     rgb(0x7a7a7c)
 }
 pub fn send_enabled() -> Rgba {
-    rgb(0x07c160)
+    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x07c160))
 }
 
 // 通用
@@ -170,7 +170,7 @@ pub fn icon_strong() -> Rgba {
     rgb(0xd8d8da)
 }
 pub fn accent() -> Rgba {
-    rgb(0x07c160)
+    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x07c160))
 }
 pub fn divider() -> Rgba {
     rgb(0x2f2f30)

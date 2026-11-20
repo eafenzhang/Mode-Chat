@@ -366,6 +366,15 @@ fn load_message_width() -> u32 {
         .unwrap_or(80)
 }
 
+fn load_chat_font_size() -> u32 {
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("chat_font_size").and_then(serde_json::Value::as_u64))
+        .map(|value| value.clamp(12, 20) as u32)
+        .unwrap_or(14)
+}
+
 /// 新建 Bot 的默认模型（prefs.json `new_bot_model`；缺省 = 沿用第一个 Bot）。
 fn load_new_bot_model() -> Option<data::ModelSpec> {
     let value = std::fs::read(ui_prefs_path())
@@ -2657,6 +2666,11 @@ struct PilotApp {
     im_heartbeat_input: Entity<SimpleInput>,
     /// 连接器密钥输入框（按密钥名预建，目录里的 `secrets` 固定）。
     connector_secret_inputs: HashMap<&'static str, Entity<SimpleInput>>,
+    /// 连接器页搜索框与分类筛选（DS 的「搜索 + chips」）。
+    connector_search: Entity<SimpleInput>,
+    connector_query: String,
+    connector_category: Option<String>,
+    _connector_search_sub: gpui::Subscription,
     /// 频道对话框打开后要不要把焦点交给名称输入框（只请求一次）。
     /// 模型选择对话框。
     pending_model_dialog: Option<String>,
@@ -2731,6 +2745,8 @@ struct PilotApp {
     accent: Option<gpui::Rgba>,
     motion: &'static str,
     message_width: u32,
+    /// 会话正文字号（prefs.json chat_font_size；DS「字号大小」）。
+    chat_font_size: u32,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
@@ -2945,6 +2961,7 @@ impl PilotApp {
         let motion = load_motion_pref();
         theme::set_motion(motion);
         let message_width = load_message_width();
+        let chat_font_size = load_chat_font_size();
         let enter_to_send = load_ui_bool("enter_to_send", true);
         let input = cx.new(|cx| {
             ComposerInput::new(
@@ -2979,6 +2996,13 @@ impl PilotApp {
                     )
                 })
                 .collect();
+        let connector_search = cx.new(|cx| {
+            SimpleInput::new(i18n::t("搜索连接器"), theme::ink_tertiary, cx)
+        });
+        let connector_search_sub = cx.observe(&connector_search, |this: &mut Self, input, cx| {
+            this.connector_query = input.read(cx).content().to_string();
+            cx.notify();
+        });
         // 输入框内容变化要驱动外层重渲（过滤列表实时刷新 / 发送按钮态）。
         input.read(cx).focus_handle(cx).tab_stop(true);
         cx.observe(&input, |this: &mut Self, _, cx| {
@@ -3037,6 +3061,10 @@ impl PilotApp {
                 SimpleInput::new(i18n::t("分钟，0 关闭"), theme::ink_tertiary, cx)
             }),
             connector_secret_inputs,
+            connector_search,
+            connector_query: String::new(),
+            connector_category: None,
+            _connector_search_sub: connector_search_sub,
             search_open: false,
             pending_bot_dialog: None,
             settings_open: false,
@@ -3109,6 +3137,7 @@ impl PilotApp {
             accent,
             motion,
             message_width,
+            chat_font_size,
             memory_review_enabled: crate::memory_review::enabled(),
             memory_group: None,
             runtime_status: HashMap::new(),
@@ -7282,10 +7311,9 @@ impl PilotApp {
         }
         let mut appearance_rows: Vec<gpui::AnyElement> = Vec::new();
         appearance_rows.push(self.language_row(cx));
-        if !self.wecom_mode {
-            appearance_rows.push(self.accent_row(cx));
-            appearance_rows.push(self.message_width_row(cx));
-        }
+        appearance_rows.push(self.accent_row(cx));
+        appearance_rows.push(self.message_width_row(cx));
+        appearance_rows.push(self.font_size_row(cx));
         appearance_rows.push(self.motion_row(cx));
         appearance_rows.push(
             settings_row(i18n::t("显示思考过程").to_string(), None)
@@ -7588,9 +7616,42 @@ impl PilotApp {
                     })),
             );
         }
-        settings_row(i18n::t("强调色（经典三栏）").to_string(), None)
-            .child(controls)
-            .into_any_element()
+        settings_row(
+            i18n::t("强调色").to_string(),
+            Some(i18n::t("未读标记、徽标和品牌标志").to_string()),
+        )
+        .child(controls)
+        .into_any_element()
+    }
+
+    fn font_size_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut controls = div().flex().items_center().gap(px(4.));
+        for size in [12u32, 13, 14, 16, 18] {
+            let active = self.chat_font_size == size;
+            controls = controls.child(
+                settings_button(
+                    SharedString::from(format!("chat-font-{size}")),
+                    if active {
+                        format!("{size} ✓")
+                    } else {
+                        size.to_string()
+                    },
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.chat_font_size = size;
+                    save_ui_value("chat_font_size", serde_json::json!(size));
+                    this.wecom_scroller
+                        .update(cx, |state, cx| state.remeasure(cx));
+                    cx.notify();
+                })),
+            );
+        }
+        settings_row(
+            i18n::t("字号大小").to_string(),
+            Some(i18n::t("仅影响会话内容").to_string()),
+        )
+        .child(controls)
+        .into_any_element()
     }
 
     fn motion_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -7661,7 +7722,10 @@ impl PilotApp {
                     },
                 )),
             );
-        settings_row(i18n::t("消息宽度（经典三栏）").to_string(), None)
+        settings_row(
+            i18n::t("气泡宽度").to_string(),
+            Some(i18n::t("会话气泡的最大宽度").to_string()),
+        )
             .child(controls)
             .into_any_element()
     }
@@ -9048,21 +9112,70 @@ impl PilotApp {
             .selected_bot()
             .map(|bot| bot.directory.clone())
             .filter(|directory| !directory.trim().is_empty())
-            .unwrap_or_else(|| {
-                backend::fallback_workspace().to_string_lossy().into_owned()
-            });
-        let mut body = settings_page_body("连接器").child(settings_note(
-            i18n::t("连接器即 MCP 服务器，启用后其工具会注入内嵌引擎的会话。"),
-        ));
+            .unwrap_or_else(|| backend::fallback_workspace().to_string_lossy().into_owned());
+        let mut body = settings_page_body("连接器");
         let state = connectors::state(&data_root);
         let configured = match secrets::list(&data_root) {
             Ok(names) => names,
             Err(error) => {
                 return body
-                    .child(settings_error(tri!("读取密钥库失败：{error}", "Failed to read the secret store: {error}")))
+                    .child(settings_error(tri!(
+                        "读取密钥库失败：{error}",
+                        "Failed to read the secret store: {error}"
+                    )))
                     .into_any_element();
             }
         };
+        let query = self.connector_query.trim().to_lowercase();
+        let category_filter = self.connector_category.clone();
+        let matches = |spec: &&connectors_service::ConnectorSpec| {
+            let category_ok = category_filter
+                .as_deref()
+                .is_none_or(|category| spec.category == category);
+            if !category_ok {
+                return false;
+            }
+            if query.is_empty() {
+                return true;
+            }
+            spec.name.to_lowercase().contains(&query)
+                || spec.about.to_lowercase().contains(&query)
+                || spec.id.contains(&query)
+        };
+        let filtered: Vec<&connectors_service::ConnectorSpec> =
+            connectors_service::CATALOG.iter().filter(matches).collect();
+        // 搜索框：DS 的「搜索连接器」。
+        let wechat = wecom_theme::active();
+        body = body.child(
+            div()
+                .h(px(36.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if wechat {
+                    wecom_theme::panel_divider()
+                } else {
+                    theme::edge()
+                })
+                .bg(if wechat {
+                    wecom_theme::chip_bg()
+                } else {
+                    theme::card()
+                })
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(icons::icon(
+                    icons::Icon::Search,
+                    14.,
+                    if wechat {
+                        wecom_theme::time_label()
+                    } else {
+                        theme::ink_tertiary()
+                    },
+                ))
+                .child(div().flex_1().h_full().child(self.connector_search.clone())),
+        );
         let categories = [
             ("dev", i18n::t("开发")),
             ("docs", i18n::t("文档")),
@@ -9071,64 +9184,112 @@ impl PilotApp {
             ("search", i18n::t("搜索")),
             ("design", i18n::t("设计")),
         ];
+        let mut chips = div().flex().flex_wrap().gap(px(6.)).child(
+            connector_chip(
+                "connector-chip-all",
+                i18n::t("全部"),
+                category_filter.is_none(),
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.connector_category = None;
+                cx.notify();
+            })),
+        );
         for (category, label) in categories {
-            if !connectors_service::CATALOG
+            let active = category_filter.as_deref() == Some(category);
+            let id = SharedString::from(format!("connector-chip-{category}"));
+            chips = chips.child(
+                connector_chip(id, label, active).on_click(cx.listener(
+                    move |this, _event, _window, cx| {
+                        this.connector_category = Some(category.to_string());
+                        cx.notify();
+                    },
+                )),
+            );
+        }
+        body = body.child(chips);
+        if filtered.is_empty() {
+            return body
+                .child(settings_empty(i18n::t("没有匹配的连接器。")))
+                .into_any_element();
+        }
+        for (category, label) in categories {
+            let specs: Vec<&connectors_service::ConnectorSpec> = filtered
                 .iter()
-                .any(|spec| spec.category == category)
-            {
+                .copied()
+                .filter(|spec| spec.category == category)
+                .collect();
+            if specs.is_empty() {
                 continue;
             }
             body = body.child(settings_section(label));
-            for spec in connectors_service::CATALOG
-                .iter()
-                .filter(|spec| spec.category == category)
-            {
+            let mut cards: Vec<gpui::AnyElement> = Vec::new();
+            let mut secret_blocks: Vec<gpui::AnyElement> = Vec::new();
+            for spec in specs {
                 let on = state.enabled.iter().any(|id| id == spec.id);
                 let missing = connectors::missing_secrets(spec, &configured);
-                let mut actions = div().flex().items_center().gap(px(6.));
+                let toggle_id = spec.id.to_string();
+                let toggle_root = data_root.clone();
+                let toggled_on = !on;
+                let action_label = if on {
+                    i18n::t("已连接")
+                } else {
+                    i18n::t("连接")
+                };
+                let action = settings_action_button(
+                    SharedString::from(format!("connector-toggle-{}", spec.id)),
+                    action_label,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    match connectors::set_enabled(&toggle_root, &toggle_id, toggled_on) {
+                        Ok(_) => {
+                            crate::mcp_host::refresh_all();
+                            this.toast(
+                                if toggled_on {
+                                    i18n::t("已启用连接器；缺密钥请填写").to_string()
+                                } else {
+                                    i18n::t("已停用连接器").to_string()
+                                },
+                                cx,
+                            );
+                        }
+                        Err(message) => this.toast(message, cx),
+                    }
+                    cx.notify();
+                }));
+                let mut bottom = div().flex().items_center().gap(px(10.));
                 if on {
                     let (text, color) = if missing.is_empty() {
                         (i18n::t("已启用"), theme::success())
                     } else {
                         (i18n::t("缺少密钥"), theme::danger())
                     };
-                    actions = actions.child(
+                    bottom = bottom.child(
                         div()
                             .font_family(theme::FONT_FAMILY)
                             .text_size(px(11.))
+                            .line_height(px(16.))
                             .text_color(color)
                             .child(text),
                     );
+                } else {
+                    bottom = bottom.child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(if wechat {
+                                wecom_theme::time_label()
+                            } else {
+                                theme::ink_tertiary()
+                            })
+                            .child(i18n::t("未连接")),
+                    );
                 }
-                let toggle_id = spec.id.to_string();
-                let toggle_root = data_root.clone();
-                actions = actions.child(
-                    switch(
-                        SharedString::from(format!("connector-toggle-{}", spec.id)),
-                        on,
-                    )
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        match connectors::set_enabled(&toggle_root, &toggle_id, !on) {
-                            Ok(_) => {
-                                crate::mcp_host::refresh_all();
-                                this.toast(
-                                    if on {
-                                        i18n::t("已停用连接器").to_string()
-                                    } else {
-                                        i18n::t("已启用连接器；缺密钥请填写").to_string()
-                                    },
-                                    cx,
-                                );
-                            }
-                            Err(message) => this.toast(message, cx),
-                        }
-                        cx.notify();
-                    })),
-                );
+                bottom = bottom.child(div().flex_1());
                 if let Some(url) = connector_sign_in_url(spec.id) {
                     let url = url.to_string();
-                    actions = actions.child(
+                    bottom = bottom.child(
                         connector_link(
                             SharedString::from(format!("connector-signin-{}", spec.id)),
                             i18n::t("获取密钥"),
@@ -9142,10 +9303,10 @@ impl PilotApp {
                 }
                 let test_id = spec.id.to_string();
                 let test_workspace = workspace.clone();
-                actions = actions.child(
+                bottom = bottom.child(
                     connector_link(
                         SharedString::from(format!("connector-test-{}", spec.id)),
-                        i18n::t("测试连接"),
+                        i18n::t("测试"),
                     )
                     .on_click(cx.listener(move |_this, _event, _window, cx| {
                         let id = test_id.clone();
@@ -9163,14 +9324,71 @@ impl PilotApp {
                         .detach();
                     })),
                 );
-                let mut connector_card: Vec<gpui::AnyElement> = Vec::new();
-                connector_card.push(
-                    settings_row(
-                        spec.name.to_string(),
-                        Some(format!("{} · {}", spec.about, spec.id)),
-                    )
-                    .child(actions)
-                    .into_any_element(),
+                cards.push(
+                    div()
+                        .flex_1()
+                        .min_w(px(260.))
+                        .max_w(px(430.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(if wechat {
+                            wecom_theme::panel_divider()
+                        } else {
+                            theme::edge()
+                        })
+                        .bg(if wechat {
+                            wecom_theme::panel_bg()
+                        } else {
+                            theme::card()
+                        })
+                        .p(px(12.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .gap(px(8.))
+                                .child(connector_icon(spec.category))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(13.))
+                                                .line_height(px(18.))
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(if wechat {
+                                                    wecom_theme::chat_title()
+                                                } else {
+                                                    theme::ink()
+                                                })
+                                                .child(spec.name),
+                                        )
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(11.))
+                                                .line_height(px(16.))
+                                                .text_color(if wechat {
+                                                    wecom_theme::list_preview()
+                                                } else {
+                                                    theme::ink_secondary()
+                                                })
+                                                .child(spec.about),
+                                        ),
+                                )
+                                .child(action),
+                        )
+                        .child(bottom)
+                        .into_any_element(),
                 );
                 if on && !spec.secrets.is_empty() {
                     let mut secret_block = div()
@@ -9182,9 +9400,7 @@ impl PilotApp {
                         .flex()
                         .flex_col()
                         .gap(px(6.))
-                        .child(settings_note(
-                            i18n::t("密钥只写不读，保存后清空输入框。"),
-                        ));
+                        .child(settings_note(i18n::t("密钥只写不读，保存后清空输入框。")));
                     for secret in spec.secrets {
                         let saved = configured.iter().any(|name| name == secret.name);
                         let mut field = div()
@@ -9210,9 +9426,7 @@ impl PilotApp {
                                     .bg(theme::bg())
                                     .px(px(8.))
                                     .children(
-                                        self.connector_secret_inputs
-                                            .get(secret.name)
-                                            .cloned(),
+                                        self.connector_secret_inputs.get(secret.name).cloned(),
                                     ),
                             );
                         if saved {
@@ -9265,7 +9479,17 @@ impl PilotApp {
                                     Some(message) => this.toast(message, cx),
                                     None if saved > 0 => {
                                         crate::mcp_host::refresh_all();
-                                        this.toast(if i18n::is_en() { format!("Saved {}", i18n::n(saved, "secret", "secrets")) } else { format!("已保存 {saved} 个密钥") }, cx)
+                                        this.toast(
+                                            if i18n::is_en() {
+                                                format!(
+                                                    "Saved {}",
+                                                    i18n::n(saved, "secret", "secrets")
+                                                )
+                                            } else {
+                                                format!("已保存 {saved} 个密钥")
+                                            },
+                                            cx,
+                                        )
                                     }
                                     None => this.toast(i18n::t("没有填写新密钥"), cx),
                                 }
@@ -9273,9 +9497,30 @@ impl PilotApp {
                             })),
                         ),
                     );
-                    connector_card.push(secret_block.into_any_element());
+                    secret_blocks.push(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(section_label(tri!(
+                                "{} · 密钥",
+                                "{} · Secrets",
+                                spec.name
+                            )))
+                            .child(secret_block)
+                            .into_any_element(),
+                    );
                 }
-                body = body.child(settings_group(connector_card));
+            }
+            body = body.child(div().flex().flex_wrap().gap(px(8.)).children(cards));
+            if !secret_blocks.is_empty() {
+                body = body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .children(secret_blocks),
+                );
             }
         }
         body.into_any_element()
@@ -9671,9 +9916,200 @@ impl PilotApp {
         let todo_count = chat.map(|chat| chat.todos.len()).unwrap_or(0);
         // 快照只在切到本页/打开设置时重读：扫全部 JSONL 不能进每帧渲染路径。
         let totals = *self.get_or_load_usage_totals();
-        let mut body = settings_page_body("用量").child(settings_note(
-            i18n::t("只读统计，来自会话 JSONL 的 assistant usage 与待办。"),
-        ));
+        let summary = totals.or(usage);
+        let daily = crate::rpi_engine::usage_daily(7);
+        let wechat = wecom_theme::active();
+        let card_bg = if wechat {
+            wecom_theme::panel_bg()
+        } else {
+            theme::card()
+        };
+        let card_edge = if wechat {
+            wecom_theme::panel_divider()
+        } else {
+            theme::edge()
+        };
+        let muted = if wechat {
+            wecom_theme::list_preview()
+        } else {
+            theme::ink_secondary()
+        };
+        let title_color = if wechat {
+            wecom_theme::chat_title()
+        } else {
+            theme::ink()
+        };
+        let tile = |value: String, label: &'static str| -> gpui::AnyElement {
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .rounded(px(12.))
+                .border_1()
+                .border_color(card_edge)
+                .bg(card_bg)
+                .p(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(22.))
+                        .line_height(px(28.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(title_color)
+                        .child(value),
+                )
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(muted)
+                        .child(i18n::t(label)),
+                )
+                .into_any_element()
+        };
+        let mut body = settings_page_body("用量");
+        let tiles = div()
+            .flex()
+            .gap(px(8.))
+            .child(tile(
+                summary
+                    .map(|usage| usage.turns.to_string())
+                    .unwrap_or_else(|| "—".to_string()),
+                "回合",
+            ))
+            .child(tile(
+                summary
+                    .map(|usage| session_db::format_tokens(usage.total_tokens))
+                    .unwrap_or_else(|| "—".to_string()),
+                "总 tokens",
+            ))
+            .child(tile(
+                summary
+                    .map(|usage| session_db::format_tokens(usage.input_tokens))
+                    .unwrap_or_else(|| "—".to_string()),
+                "输入",
+            ))
+            .child(tile(
+                summary
+                    .map(|usage| session_db::format_tokens(usage.output_tokens))
+                    .unwrap_or_else(|| "—".to_string()),
+                "输出",
+            ));
+        body = body
+            .child(settings_section(i18n::t("概览")))
+            .child(tiles);
+        // 最近 7 天堆叠柱：输出 / 输入 / 缓存命中。
+        let max = daily
+            .iter()
+            .map(|(_, input, output, cache)| input + output + cache)
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        let accent = if wechat {
+            wecom_theme::send_enabled()
+        } else {
+            theme::accent()
+        };
+        let cache_color = Rgba {
+            r: accent.r,
+            g: accent.g,
+            b: accent.b,
+            a: 0.18,
+        };
+        let mut columns = div().flex().items_end().gap(px(8.)).h(px(132.));
+        for (day, input, output, cache) in &daily {
+            let total = input + output + cache;
+            let bar_h = (total as f32 / max as f32 * 108.).max(if total > 0 { 2. } else { 0. });
+            let part = |value: i64, color: Rgba| {
+                let height = if total > 0 {
+                    bar_h * value as f32 / total as f32
+                } else {
+                    0.
+                };
+                div().w_full().h(px(height)).bg(color)
+            };
+            columns = columns.child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(108.))
+                            .flex()
+                            .flex_col()
+                            .justify_end()
+                            .overflow_hidden()
+                            .rounded(px(3.))
+                            .child(part(*cache, cache_color))
+                            .child(part(*input, theme::success()))
+                            .child(part(*output, accent)),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(10.))
+                            .line_height(px(14.))
+                            .text_color(muted)
+                            .child(SharedString::from(
+                                day.get(5..).unwrap_or(day.as_str()).to_string(),
+                            )),
+                    ),
+            );
+        }
+        let legend_dot = |color: Rgba, label: &'static str| -> gpui::AnyElement {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .child(div().size(px(8.)).rounded_full().bg(color))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(muted)
+                        .child(i18n::t(label)),
+                )
+                .into_any_element()
+        };
+        body = body.child(settings_section(i18n::t("最近 7 天")));
+        if daily
+            .iter()
+            .all(|(_, input, output, cache)| input + output + cache == 0)
+        {
+            body = body.child(settings_empty(i18n::t("最近 7 天还没有用量。")));
+        } else {
+            body = body.child(
+                div()
+                    .w_full()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(card_edge)
+                    .bg(card_bg)
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(columns)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(14.))
+                            .child(legend_dot(accent, "输出"))
+                            .child(legend_dot(theme::success(), "输入"))
+                            .child(legend_dot(cache_color, "缓存命中")),
+                    ),
+            );
+        }
         body = body
             .child(settings_section(i18n::t("当前会话")))
             .child(settings_group(vec![
@@ -9714,23 +10150,6 @@ impl PilotApp {
                 )
                 .into_any_element(),
                 kv_row(todo_count.to_string(), i18n::t("待办条数")).into_any_element(),
-            ]))
-            .child(settings_section(i18n::t("全库累计")))
-            .child(settings_group(vec![
-                kv_row(
-                    totals
-                        .map(|totals| totals.turns.to_string())
-                        .unwrap_or_else(|| "—".to_string()),
-                    i18n::t("回合"),
-                )
-                .into_any_element(),
-                kv_row(
-                    totals
-                        .map(|totals| session_db::format_tokens(totals.total_tokens))
-                        .unwrap_or_else(|| "—".to_string()),
-                    i18n::t("总 tokens"),
-                )
-                .into_any_element(),
             ]));
         body.into_any_element()
     }
@@ -13559,8 +13978,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .font_family(theme::FONT_FAMILY);
                 let bubble = if is_user {
                     bubble
-                        .text_size(px(14.))
-                        .line_height(px(24.))
+                        .text_size(px(self.chat_font_size as f32))
+                        .line_height(px(self.chat_font_size as f32 + 10.))
                         .child(user_text_with_mentions(&text, &mention_names))
                         .children(message_attachments(&message.attachments))
                 } else {
@@ -13571,6 +13990,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             format!("classic-group-md-{index}"),
                             &message.text,
                             false,
+                            self.chat_font_size as f32,
                         ))
                 };
                 let author = message
@@ -13837,8 +14257,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .font_family(theme::FONT_FAMILY);
             let bubble = if is_user {
                 bubble
-                    .text_size(px(14.))
-                    .line_height(px(24.))
+                    .text_size(px(self.chat_font_size as f32))
+                    .line_height(px(self.chat_font_size as f32 + 10.))
                     .child(user_text_with_mentions(&text, &private_mention_names))
                     .children(message_attachments(&message.attachments))
                 } else {
@@ -13849,6 +14269,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             format!("classic-private-md-{index}"),
                             &message.text,
                             false,
+                            self.chat_font_size as f32,
                         ))
                 };
             let styled = match message.role {
@@ -15768,11 +16189,14 @@ fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
 }
 
 /// 渲染 `MessageScroller` 的一行（纯函数；不依赖 `Context<PilotApp>`）。
+#[allow(clippy::too_many_arguments)]
 fn wecom_row_el(
     row: &WecomRow,
     index: usize,
     is_group: bool,
     mention_names: &[String],
+    bubble_max: f32,
+    font_size: f32,
     weak: &gpui::WeakEntity<PilotApp>,
     cx: &mut App,
 ) -> gpui::AnyElement {
@@ -15828,14 +16252,14 @@ fn wecom_row_el(
             .items_start()
             .child(
                 div()
-                    .max_w(px(560.))
+                    .max_w(px(bubble_max))
                     .rounded(px(6.))
                     .bg(wecom_theme::bubble_out())
                     .px(px(10.))
                     .py(px(6.))
                     .font_family(wecom_theme::FONT_FAMILY)
-                    .text_size(px(14.))
-                    .line_height(px(22.))
+                    .text_size(px(font_size))
+                    .line_height(px(font_size + 8.))
                     .text_color(wecom_theme::bubble_out_text())
                     .child(user_text_with_mentions(text, mention_names))
                     .children(history_attachment_view(
@@ -15871,16 +16295,21 @@ fn wecom_row_el(
             }
             cell = cell.child(
                 div()
-                    .max_w(px(560.))
+                    .max_w(px(bubble_max))
                     .rounded(px(6.))
                     .bg(wecom_theme::bubble_in())
                     .px(px(10.))
                     .py(px(6.))
                     .font_family(wecom_theme::FONT_FAMILY)
-                    .text_size(px(14.))
-                    .line_height(px(22.))
+                    .text_size(px(font_size))
+                    .line_height(px(font_size + 8.))
                     .text_color(wecom_theme::bubble_text())
-                    .child(kit_markdown_el(format!("wechat-md-{index}"), text, true)),
+                    .child(kit_markdown_el(
+                        format!("wechat-md-{index}"),
+                        text,
+                        true,
+                        font_size,
+                    )),
             );
             let mut row = div().w_full().flex().items_start().gap(px(8.));
             if is_group {
@@ -17155,6 +17584,98 @@ fn connector_link(
         .child(label.into())
 }
 
+/// 连接器卡片的分类图标（DS 用品牌 logo；我们没有素材，用分类图标占位）。
+fn connector_icon(category: &str) -> impl IntoElement {
+    let glyph = match category {
+        "dev" => icons::Icon::Cpu,
+        "docs" => icons::Icon::Folder,
+        "work" => icons::Icon::ListChecks,
+        "data" => icons::Icon::Chart,
+        "search" => icons::Icon::Search,
+        "design" => icons::Icon::Sparkles,
+        _ => icons::Icon::Plug,
+    };
+    let wechat = wecom_theme::active();
+    div()
+        .size(px(26.))
+        .flex_shrink_0()
+        .rounded(px(8.))
+        .bg(if wechat {
+            wecom_theme::chip_bg()
+        } else {
+            theme::hover()
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icons::icon(
+            glyph,
+            14.,
+            if wechat {
+                wecom_theme::icon_strong()
+            } else {
+                theme::ink_secondary()
+            },
+        ))
+}
+
+/// 连接器分类 chips（全部 / 开发 / 文档 / …）。
+fn connector_chip(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+    active: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let wechat = wecom_theme::active();
+    div()
+        .id(id)
+        .h(px(28.))
+        .rounded(px(999.))
+        .border_1()
+        .border_color(if active {
+            if wechat {
+                wecom_theme::send_enabled()
+            } else {
+                theme::accent()
+            }
+        } else {
+            if wechat {
+                wecom_theme::panel_divider()
+            } else {
+                theme::edge()
+            }
+        })
+        .bg(if active {
+            if wechat {
+                wecom_theme::chip_bg()
+            } else {
+                theme::accent_soft()
+            }
+        } else if wechat {
+            wecom_theme::panel_bg()
+        } else {
+            theme::card()
+        })
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .font_family(theme::FONT_FAMILY)
+        .text_size(px(12.))
+        .line_height(px(18.))
+        .text_color(if active {
+            if wechat {
+                wecom_theme::send_enabled()
+            } else {
+                theme::accent()
+            }
+        } else if wechat {
+            wecom_theme::panel_text()
+        } else {
+            theme::ink_secondary()
+        })
+        .child(label.into())
+}
+
 /// 设置页说明文字（12/16 次级色）。
 fn settings_note(text: impl Into<SharedString>) -> impl IntoElement {
     let wechat = wecom_theme::active();
@@ -17677,7 +18198,7 @@ fn pick_option(prompt: &PermissionPrompt, allow: bool) -> Option<String> {
 // ---- markdown 渲染（md 块 → gpui 元素）----
 
 /// gpui-kit 的 Markdown TextView（GFM 表格/列表/代码块/选择复制都由组件负责）。
-fn kit_markdown_el(id: String, text: &str, wechat: bool) -> gpui::AnyElement {
+fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui::AnyElement {
     gpui::component::text::TextView::markdown(id, text.to_string())
         .selectable(true)
         .font_family(if wechat {
@@ -17685,8 +18206,8 @@ fn kit_markdown_el(id: String, text: &str, wechat: bool) -> gpui::AnyElement {
         } else {
             theme::FONT_FAMILY
         })
-        .text_size(px(14.))
-        .line_height(px(if wechat { 22. } else { 24. }))
+        .text_size(px(font_size))
+        .line_height(px(font_size + if wechat { 8. } else { 10. }))
         .text_color(if wechat {
             wecom_theme::bubble_text()
         } else {
@@ -18724,9 +19245,11 @@ impl PilotApp {
             .track_focus(&self.settings_focus)
             .child(
                 div()
-                    .h(px(56.))
                     .flex_shrink_0()
                     .px(px(20.))
+                    .pr(px(56.))
+                    .pt(px(16.))
+                    .pb(px(4.))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -18742,42 +19265,64 @@ impl PilotApp {
                     )
                     .child(
                         div()
-                            .id("wecom-settings-pin")
-                            .h(px(32.))
-                            .px(px(10.))
-                            .rounded(px(999.))
                             .flex()
                             .items_center()
-                            .gap(px(5.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.toggle_pinned_setting(tab, cx);
-                            }))
-                            .child(icons::icon(
-                                icons::Icon::Pin,
-                                13.,
-                                if pinned {
-                                    wecom_theme::send_enabled()
-                                } else {
-                                    wecom_theme::panel_text()
-                                },
-                            ))
+                            .gap(px(8.))
+                            .child(
+                                settings_action_button(
+                                    "wecom-settings-config",
+                                    i18n::t("打开配置文件"),
+                                )
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    let root = data::data_root();
+                                    let config = root.join("v2").join("provider_config.json");
+                                    let target = if config.is_file() { config } else { root };
+                                    if let Err(message) =
+                                        crate::shell_open::open_path(&target.to_string_lossy())
+                                    {
+                                        this.toast(message, cx);
+                                    }
+                                })),
+                            )
                             .child(
                                 div()
-                                    .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(12.))
-                                    .line_height(px(18.))
-                                    .text_color(if pinned {
-                                        wecom_theme::send_enabled()
-                                    } else {
-                                        wecom_theme::panel_text()
-                                    })
-                                    .child(if pinned {
-                                        i18n::t("从侧栏移除")
-                                    } else {
-                                        i18n::t("添加到侧栏")
-                                    }),
+                                    .id("wecom-settings-pin")
+                                    .h(px(32.))
+                                    .px(px(10.))
+                                    .rounded(px(999.))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.toggle_pinned_setting(tab, cx);
+                                    }))
+                                    .child(icons::icon(
+                                        icons::Icon::Pin,
+                                        13.,
+                                        if pinned {
+                                            wecom_theme::send_enabled()
+                                        } else {
+                                            wecom_theme::panel_text()
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .font_family(wecom_theme::FONT_FAMILY)
+                                            .text_size(px(12.))
+                                            .line_height(px(18.))
+                                            .text_color(if pinned {
+                                                wecom_theme::send_enabled()
+                                            } else {
+                                                wecom_theme::panel_text()
+                                            })
+                                            .child(if pinned {
+                                                i18n::t("从侧栏移除")
+                                            } else {
+                                                i18n::t("添加到侧栏")
+                                            }),
+                                    ),
                             ),
                     ),
             )
@@ -18789,13 +19334,12 @@ impl PilotApp {
                     .min_h(px(0.))
                     .overflow_y_scroll()
                     .scrollbar_width(px(6.))
-                    .px(px(24.))
-                    .py(px(16.))
+                    .px(px(20.))
+                    .pt(px(12.))
+                    .pb(px(24.))
                     .child(
                         div()
                             .w_full()
-                            .max_w(px(920.))
-                            .mx_auto()
                             .child(
                                 div()
                                     .relative()
@@ -19092,6 +19636,8 @@ impl PilotApp {
         }
         let turn_rows = std::sync::Arc::new(turn_rows);
         let rows = std::sync::Arc::new(rows);
+        let bubble_max = (560. * self.message_width as f32 / 100.).clamp(240., 560.);
+        let chat_font_size = self.chat_font_size as f32;
         let render_rows = rows.clone();
         let weak = cx.weak_entity();
         let scroller = gpui::component::message_scroller::MessageScroller::new(
@@ -19103,6 +19649,8 @@ impl PilotApp {
                     index,
                     is_group,
                     &mention_names,
+                    bubble_max,
+                    chat_font_size,
                     &weak,
                     cx,
                 )

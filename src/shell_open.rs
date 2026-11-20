@@ -64,6 +64,34 @@ mod win {
     }
 }
 
+/// 用系统默认程序打开本地文件/目录（设置页「打开配置文件」）。
+pub fn open_path(value: &str) -> Result<(), String> {
+    let path = std::path::Path::new(value.trim());
+    if !path.exists() {
+        return Err(format!("路径不存在：{}", path.display()));
+    }
+    #[cfg(windows)]
+    {
+        win::open(&path.to_string_lossy())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("调用 open 失败：{error}"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("调用 xdg-open 失败：{error}"))
+    }
+}
+
 pub fn open_url(value: &str) -> Result<(), String> {
     let url = validate_url(value)?;
     #[cfg(windows)]

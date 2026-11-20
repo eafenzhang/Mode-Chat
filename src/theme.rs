@@ -320,6 +320,11 @@ fn accent_override() -> Option<Rgba> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// 当前强调色覆盖（供微信皮肤优先使用用户选的颜色；None = 微信绿）。
+pub fn accent_custom() -> Option<Rgba> {
+    accent_override()
+}
+
 /// 运行时强调色覆盖（None = 跟随深浅主题默认值）。
 pub fn set_accent(value: Option<Rgba>) {
     *ACCENT_OVERRIDE
