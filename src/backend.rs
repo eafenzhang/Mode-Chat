@@ -233,26 +233,6 @@ pub fn local_engine() -> Option<String> {
     crate::acp::engine_command(&raw)
 }
 
-/// 当前引擎展示名（设置 → 智能体 页用）。
-pub fn active_engine_label() -> String {
-    local_engine()
-        .map(|command| acp_engine_label(&command))
-        .unwrap_or_else(|| "内置引擎（Pi-Rust）".to_string())
-}
-
-fn acp_engine_label(command: &str) -> String {
-    let stem = std::path::Path::new(command)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if stem == "hermes" || stem == "hermes-acp" {
-        "Hermes Agent（ACP）".to_string()
-    } else {
-        command.to_string()
-    }
-}
-
 /// 有效引擎：每个 Bot 的选择优先，其次环境变量，最后内嵌 pi-rust。
 pub enum EngineChoice {
     /// 内嵌 pi-rust（Mode Chat 默认）。

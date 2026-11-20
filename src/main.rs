@@ -7256,9 +7256,7 @@ impl PilotApp {
     }
 
     fn settings_page_browser(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut body = settings_page_body("浏览器").child(settings_note(
-            i18n::t("内嵌引擎通过 CDP 直接控制本机 Edge/Chrome；Bot 可用 browser_open / snapshot / screenshot / click / type / eval。"),
-        ));
+        let mut body = settings_page_body("浏览器");
         let status = crate::browser_tools::browser_path()
             .map(|path| format!("已找到：{path}"))
             .unwrap_or_else(|| i18n::t("未找到 Edge/Chrome，浏览器控制不可用").to_string());
@@ -7333,9 +7331,6 @@ impl PilotApp {
     fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let (width, height) = crate::computer_tools::screen_size();
         let body = settings_page_body(i18n::t("电脑操控"))
-            .child(settings_note(i18n::t(
-                "内嵌引擎用 Win32 直接截屏与注入鼠标键盘；Bot 可用 computer_screenshot / click / type / key / scroll。",
-            )))
             .child(settings_section(i18n::t("状态")))
             .child(settings_group(vec![
                 kv_row(format!("{width} × {height}"), i18n::t("主屏幕")).into_any_element(),
@@ -7386,15 +7381,8 @@ impl PilotApp {
             ("试点状态文件", state::state_path().display().to_string()),
         ];
         let mut body = settings_page_body("通用")
-            .child(settings_note(
-                i18n::t("名册与产品共享，会话与记忆保存在本机隔离目录。"),
-            ))
             .child(settings_section(i18n::t("外观")));
-        if self.wecom_mode {
-            body = body.child(settings_note(
-                i18n::t("可在外观里选择主题；BOT_PILOT_CLASSIC_UI=1 回到经典三栏。"),
-            ));
-        } else {
+        if !self.wecom_mode {
             body = body.child(self.theme_picker(cx));
         }
         let mut appearance_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -8237,20 +8225,9 @@ impl PilotApp {
     }
 
     fn settings_page_models(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let current = self
-            .selected_bot()
-            .map(|bot| match &bot.model {
-                Some(model) => model_label(model),
-                None => i18n::t("跟随默认").to_string(),
-            })
-            .unwrap_or_else(|| i18n::t("未选中 Bot").to_string());
         let providers = data::provider_entries();
-        let mut body = settings_page_body("模型").child(settings_note(
-            i18n::t("模型在 Bot/频道详情里切换，这里管理 provider 与 API Key。"),
-        ));
+        let mut body = settings_page_body("模型");
         body = body
-            .child(settings_section(i18n::t("当前 Bot")))
-            .child(settings_group(vec![kv_row(current, i18n::t("当前选择")).into_any_element()]))
             .child(settings_section_action(
                 tri!("Provider 与模型 · {}", "Providers & models · {}", providers.len()),
                 settings_action_button("provider-add", i18n::t("+ 添加服务商")).on_click(
@@ -8261,7 +8238,7 @@ impl PilotApp {
             ));
         if providers.is_empty() {
             body = body.child(settings_empty(
-                i18n::t("没有读到 provider_config.json（缺失或没有已配置的 provider）"),
+                i18n::t("还没有配置 provider。"),
             ));
         } else {
             for provider in providers {
@@ -8270,9 +8247,9 @@ impl PilotApp {
                     "api-key" | "zhipu-coding-plan-api-key"
                 );
                 let status = if provider.has_api_key {
-                    i18n::t("已配置 API Key")
+                    i18n::t("已设置 key")
                 } else {
-                    i18n::t("未配置 API Key")
+                    i18n::t("未设置 key")
                 };
                 let mut row = settings_row(
                     format!("{} · {}", provider.provider_name, provider.provider_id),
@@ -8452,8 +8429,9 @@ impl PilotApp {
     /// 插件市场：内嵌引擎暂不提供插件宿主（MCP 桥接另立）。
     fn settings_page_plugins(&mut self, _cx: &mut Context<Self>) -> gpui::AnyElement {
         settings_page_body("插件")
-            .child(settings_note(i18n::t(
-                "插件市场尚未接入内嵌引擎；MCP 连接器已在「连接器」页可用。",
+            .child(settings_section(i18n::t("插件")))
+            .child(settings_empty(i18n::t(
+                "暂未接入插件宿主；MCP 连接器见「连接器」。",
             )))
             .into_any_element()
     }
@@ -8508,16 +8486,7 @@ impl PilotApp {
                 .map(|agent| agent.name.to_string())
                 .unwrap_or_else(|| current.clone())
         };
-        let mut body = settings_page_body("智能体").child(settings_note(
-            i18n::t("内置引擎是进程内 Pi-Rust（无 Node/Mode Agent）；本地 Pi/DeepSeek/Hermes/ZCode 通过 ACP 接入。"),
-        ));
-        if backend::local_engine().is_some() {
-            body = body.child(settings_note(tri!(
-                "环境变量 BOT_PILOT_ENGINE 生效中：{}（未单独设置引擎的 Bot 用它）",
-                "BOT_PILOT_ENGINE is active: {} (used by bots without their own engine)",
-                backend::active_engine_label()
-            )));
-        }
+        let mut body = settings_page_body("智能体");
         if let Some(bot) = &bot {
             body = body
                 .child(settings_section(i18n::t("当前 Bot")))
@@ -8528,7 +8497,15 @@ impl PilotApp {
         } else {
             body = body.child(settings_empty(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
         }
-        body = body.child(settings_section(i18n::t("支持的引擎")));
+        body = body.child(settings_section_action(
+            i18n::t("已检测到的 Agent"),
+            settings_action_button("agents-refresh", i18n::t("刷新")).on_click(
+                cx.listener(|this, _event, _window, cx| {
+                    cx.notify();
+                    let _ = this;
+                }),
+            ),
+        ));
         let mut engine_rows: Vec<gpui::AnyElement> = Vec::new();
         for agent in agents {
             let is_current = current == agent.command
@@ -8639,13 +8616,10 @@ impl PilotApp {
         if !engine_rows.is_empty() {
             body = body.child(settings_group(engine_rows));
         }
-        body.child(settings_note(
-            i18n::t("切换后会重建会话；本地 ACP 引擎不支持附件，审批与提问卡已接通。"),
-        ))
-        .into_any_element()
+        body.into_any_element()
     }
 
-    fn settings_page_bots(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn settings_page_bots(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let bots = self.roster.bots.clone();
         let hidden = self.roster.hidden_bots.clone();
         let mut body = settings_page_body("Bot");
@@ -8663,6 +8637,7 @@ impl PilotApp {
         let mut bot_rows: Vec<gpui::AnyElement> = Vec::new();
         for bot in &bots {
             let bot_id = bot.id.clone();
+            let delete_id = bot.id.clone();
             let detail = if bot.role.trim().is_empty() {
                 i18n::t("未设角色").to_string()
             } else {
@@ -8671,13 +8646,28 @@ impl PilotApp {
             bot_rows.push(
                 settings_row(bot.name.clone(), Some(detail))
                     .child(
-                        settings_button(
-                            SharedString::from(format!("settings-edit-bot-{}", bot.id)),
-                            i18n::t("编辑"),
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.open_edit_dialog(bot_id.clone(), cx);
-                        })),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                settings_button(
+                                    SharedString::from(format!("settings-edit-bot-{}", bot.id)),
+                                    i18n::t("编辑"),
+                                )
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.open_edit_dialog(bot_id.clone(), cx);
+                                })),
+                            )
+                            .child(
+                                settings_button(
+                                    SharedString::from(format!("settings-delete-bot-{}", bot.id)),
+                                    i18n::t("删除"),
+                                )
+                                .on_click(cx.listener(move |this, _event, window, cx| {
+                                    this.open_delete_bot_dialog(delete_id.clone(), window, cx);
+                                })),
+                            ),
                     )
                     .into_any_element(),
             );
@@ -8720,7 +8710,7 @@ impl PilotApp {
         body.into_any_element()
     }
 
-    fn settings_page_channels(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn settings_page_channels(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let groups = self.roster.groups.clone();
         let hidden = self.roster.hidden_groups.clone();
         let archived = self.roster.archived_groups.clone();
@@ -8739,19 +8729,35 @@ impl PilotApp {
         let mut group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &groups {
             let group_id = group.id.clone();
+            let delete_id = group.id.clone();
             group_rows.push(
                 settings_row(
                     group.name.clone(),
                     Some(count_members(group.member_ids.len())),
                 )
                 .child(
-                    settings_button(
-                        SharedString::from(format!("settings-edit-group-{}", group.id)),
-                        i18n::t("编辑"),
-                    )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.open_edit_group_dialog(group_id.clone(), cx);
-                    })),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            settings_button(
+                                SharedString::from(format!("settings-edit-group-{}", group.id)),
+                                i18n::t("编辑"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.open_edit_group_dialog(group_id.clone(), cx);
+                            })),
+                        )
+                        .child(
+                            settings_button(
+                                SharedString::from(format!("settings-delete-group-{}", group.id)),
+                                i18n::t("删除"),
+                            )
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                this.open_delete_group_dialog(delete_id.clone(), window, cx);
+                            })),
+                        ),
                 )
                 .into_any_element(),
             );
@@ -8848,9 +8854,7 @@ impl PilotApp {
         self.ensure_im_ticker(cx);
         let data_root = self.roster.data_root.clone();
         let service = im_service::handle();
-        let mut body = settings_page_body("IM").child(settings_note(
-            i18n::t("微信/企微机器人的扫码、运行与回合都在本进程执行。"),
-        ));
+        let mut body = settings_page_body("IM");
         let rows = match im::list(&data_root) {
             Ok(rows) => rows,
             Err(error) => {
@@ -8907,7 +8911,7 @@ impl PilotApp {
                 )),
         );
         if rows.is_empty() {
-            body = body.child(settings_empty(i18n::t("还没有 IM 机器人；点上方按钮新建并扫码。")));
+            body = body.child(settings_empty(i18n::t("还没有 IM 机器人。")));
             return body.into_any_element();
         }
         body = body.child(settings_section(count_bots(rows.len())));
@@ -9483,9 +9487,6 @@ impl PilotApp {
     /// 团队记忆独立成页（原先挂在「通用」底部，条目多时把通用页撑得很长）。
     fn settings_page_team_memory(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let mut body = settings_page_body("团队记忆")
-            .child(settings_note(
-                i18n::t("团队共享的长期事实，每次会话都会注入。"),
-            ))
             .child(settings_section(i18n::t("自动回顾")))
             .child(settings_group(vec![
                 settings_row(
@@ -10158,7 +10159,7 @@ impl PilotApp {
     fn settings_page_secrets(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
         let mut body = settings_page_body("密钥").child(settings_note(
-            i18n::t("值只写不读，供 ${secret:NAME} 引用；名称仅限字母、数字、下划线，最多 64 字符。"),
+            i18n::t("值只写不读，供 ${secret:NAME} 引用。"),
         ));
         let names = match secrets::list(&data_root) {
             Ok(names) => names,
@@ -10320,9 +10321,7 @@ impl PilotApp {
 
     /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
     fn settings_page_capabilities(&self) -> gpui::AnyElement {
-        let mut body = settings_page_body("能力").child(settings_note(
-            i18n::t("宿主能力集：只列出真实接入的能力，未接线项不会对 Agent 生效。"),
-        ));
+        let mut body = settings_page_body("能力");
         let mut capability_rows: Vec<gpui::AnyElement> = Vec::new();
         for row in capabilities::rows() {
             let color = if row.wired {
@@ -10606,7 +10605,7 @@ impl PilotApp {
     }
 
     fn settings_page_about(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut body = settings_page_body("关于")
+        let body = settings_page_body("关于")
             .child(settings_section(i18n::t("版本")))
             .child(settings_group(vec![
                 kv_row(update::current_version(), i18n::t("当前版本")).into_any_element(),
@@ -10624,14 +10623,7 @@ impl PilotApp {
                     .py(px(10.))
                     .child(self.update_section(cx))
                     .into_any_element(),
-            ]))
-            .child(settings_note(
-                i18n::t("下载后校验 SHA-256，退出后替换并在失败时回滚。"),
-            ));
-        body = body.child(settings_section(i18n::t("发布源"))).child(value_box(
-            update::RELEASES_PAGE.to_string(),
-            None,
-        ));
+            ]));
         body.into_any_element()
     }
 
@@ -10798,9 +10790,6 @@ impl PilotApp {
         })
         .collect();
         settings_page_body("更多")
-            .child(settings_note(
-                i18n::t("以下能力仍受宿主限制。"),
-            ))
             .child(settings_section(i18n::t("尚未覆盖")))
             .child(settings_group(rows))
             .child(settings_section(i18n::t("数据")))
@@ -10829,9 +10818,6 @@ impl PilotApp {
             "Mode Chat {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.10 / gpui-pre 0.3.12)",
         );
         let body = settings_page_body("反馈")
-            .child(settings_note(
-                i18n::t("复制诊断信息，连同复现步骤发到发布页。"),
-            ))
             .child(settings_section(i18n::t("诊断信息")))
             .child(value_box(truncate_chars(&diagnostics, 300), None))
             .child(
@@ -11024,7 +11010,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         );
         if entries.is_empty() {
             body = body.child(settings_empty(
-                i18n::t("还没有团队记忆；新增后会在下一次对话时注入（与主程序同一份）。"),
+                i18n::t("还没有团队记忆。"),
             ));
         }
         let mut entry_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -11132,12 +11118,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         )),
                 ),
         );
-        body = body.child(settings_note(
-            i18n::t("自动回顾写入，下一轮群聊会注入。"),
-        ));
         if entries.is_empty() {
             body = body.child(settings_empty(
-                i18n::t("还没有频道记忆；回合结束后自动回顾会沉淀，也可以手动新增。"),
+                i18n::t("还没有频道记忆。"),
             ));
         }
         let mut entry_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -12404,7 +12387,28 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         let entries = self.filtered_palette(cx);
         let viewport_height = f32::from(window.viewport_size().height);
 
-        let mut body = div().w_full().flex().flex_col().gap(px(6.)).child(
+        let mut body = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(15.))
+                            .line_height(px(24.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme::ink())
+                            .child(i18n::t("命令面板")),
+                    )
+                    .child(dialog_close_hint("palette-close-hint")),
+            )
+            .child(
             div()
                 .id("palette-input")
                 .key_context("Palette")
@@ -12470,7 +12474,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .child(i18n::t("↑/↓ 选择 · Enter 执行 · Esc 关闭")),
         );
 
-        let card = dialog_card(Some("model-close-card"), 460.)
+        let card = dialog_card(460.)
             .max_h(px((viewport_height - 96.).max(320.)))
             .child(
                 div()
@@ -12599,7 +12603,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             }
         }
 
-        let card = dialog_card(Some("allowlist-close-card"), 520.)
+        let card = dialog_card(520.)
             .max_h(px((viewport_height - 96.).max(320.)))
             .child(
                 div()
@@ -12610,19 +12614,13 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .child(
                         div()
                             .font_family(theme::FONT_FAMILY)
-                            .text_size(px(16.))
+                            .text_size(px(15.))
                             .line_height(px(24.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(theme::ink())
                             .child(i18n::t("搜索历史消息")),
                     )
-                    .child(
-                        div()
-                            .font_family(theme::FONT_FAMILY)
-                            .text_size(px(11.))
-                            .text_color(theme::ink_tertiary())
-                            .child(i18n::t("Esc 关闭")),
-                    ),
+                    .child(dialog_close_hint("find-close-hint")),
             )
             .child(
                 div()
@@ -17268,43 +17266,64 @@ fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stat
 /// 对话框卡片外壳（宽度可变）：圆角/描边/底色/内边距/纵向布局一站式，
 /// 三个 overlay（新建、设置、删除确认）共用，避免各写一套又慢慢漂移。
 /// 对话框右上角关闭钮：统一走根部的 Esc 关闭链（最上层浮层优先）。
-fn dialog_close(id: &'static str) -> gpui::Stateful<gpui::Div> {
+/// 弹窗头部的「Esc 关闭」（可点击；与所有对话框一致的关闭入口）。
+fn dialog_close_hint(id: &'static str) -> impl IntoElement {
+    let wechat = wecom_theme::active();
     div()
         .id(id)
-        .absolute()
-        .top(px(12.))
-        .right(px(12.))
-        .size(px(32.))
-        .rounded_full()
-        .bg(theme::hover())
+        .h(px(24.))
+        .px(px(8.))
+        .rounded(px(6.))
         .flex()
         .items_center()
-        .justify_center()
         .cursor_pointer()
-        .hover(|style| style.bg(theme::raised_hover()))
+        .hover(|style| {
+            style.bg(if wechat {
+                wecom_theme::nav_item_hover_bg()
+            } else {
+                theme::hover()
+            })
+        })
+        .font_family(if wechat {
+            wecom_theme::FONT_FAMILY
+        } else {
+            theme::FONT_FAMILY
+        })
+        .text_size(px(11.))
+        .line_height(px(16.))
+        .text_color(if wechat {
+            wecom_theme::time_label()
+        } else {
+            theme::ink_tertiary()
+        })
         .on_click(|_, window, cx| {
             window.dispatch_action(Box::new(CloseOverlay), cx);
         })
-        .child(icons::icon(icons::Icon::X, 16., theme::ink_secondary()))
+        .child(i18n::t("Esc 关闭"))
 }
 
-fn dialog_card(close_id: Option<&'static str>, width: f32) -> gpui::Div {
-    let card = div()
+fn dialog_card(width: f32) -> gpui::Div {
+    let wechat = wecom_theme::active();
+    div()
         .relative()
         .w(px(width))
-        .rounded(px(theme::RADIUS_DIALOG))
+        .rounded(px(12.))
         .border_1()
-        .border_color(theme::edge())
-        .bg(theme::app())
+        .border_color(if wechat {
+            wecom_theme::panel_divider()
+        } else {
+            theme::edge()
+        })
+        .bg(if wechat {
+            wecom_theme::panel_card_bg()
+        } else {
+            theme::app()
+        })
         .shadow(theme::shadow_4())
         .p(px(16.))
         .flex()
         .flex_col()
-        .gap(px(10.));
-    match close_id {
-        Some(id) => card.child(dialog_close(id)),
-        None => card,
-    }
+        .gap(px(10.))
 }
 
 /// 日期分隔条（今天 / 昨天 / 2026-11-12），居中 10px 次级文字。
@@ -17924,7 +17943,6 @@ fn settings_section(title: impl Into<SharedString>) -> impl IntoElement {
     let wechat = wecom_theme::active();
     div()
         .w_full()
-        .px(px(4.))
         .pt(px(10.))
         .font_family(if wechat {
             wecom_theme::FONT_FAMILY
@@ -17950,7 +17968,6 @@ fn settings_section_action(
     let wechat = wecom_theme::active();
     div()
         .w_full()
-        .px(px(4.))
         .pt(px(10.))
         .flex()
         .items_center()
@@ -19711,7 +19728,6 @@ impl PilotApp {
                 div()
                     .flex_shrink_0()
                     .px(px(20.))
-                    .pr(px(56.))
                     .pt(px(16.))
                     .pb(px(4.))
                     .flex()
@@ -19732,22 +19748,6 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(
-                                settings_action_button(
-                                    "wecom-settings-config",
-                                    i18n::t("打开配置文件"),
-                                )
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    let root = data::data_root();
-                                    let config = root.join("v2").join("provider_config.json");
-                                    let target = if config.is_file() { config } else { root };
-                                    if let Err(message) =
-                                        crate::shell_open::open_path(&target.to_string_lossy())
-                                    {
-                                        this.toast(message, cx);
-                                    }
-                                })),
-                            )
                             .child(
                                 div()
                                     .id("wecom-settings-pin")
