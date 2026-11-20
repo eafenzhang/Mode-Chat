@@ -87,6 +87,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "time"] }
+tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 附件上传（v4 sendText）：分片 base64 + sha256 校验。

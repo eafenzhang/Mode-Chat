@@ -1,0 +1,49 @@
+                    EngineChoice::Rpi => {
+                        match open_rpi_session(
+                            &key,
+                            &workspace,
+                            &identity,
+                            model.clone(),
+                            None,
+                            &events,
+                        )
+                        .await
+                        {
+                            Ok((session, spec)) => {
+                                let path = session.path.clone();
+                                sessions.insert(
+                                    key.clone(),
+                                    SessionCtx {
+                                        target: AgentWorkspaceTarget::new(workspace.clone())
+                                            .with_identity(identity),
+                                        session_id: path.clone(),
+                                        model: Some(message_model(&spec)),
+                                        member: None,
+                                        engine: SessionEngine::Rpi(Arc::new(session)),
+                                        turn_started: std::sync::Arc::new(
+                                            std::sync::atomic::AtomicBool::new(false),
+                                        ),
+                                    },
+                                );
+                                active_internal.insert(key.clone(), key.clone());
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Ready {
+                                        session_id: path,
+                                        slot: None,
+                                    },
+                                });
+                            }
+                            Err(message) => {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Error {
+                                        member: None,
+                                        message,
+                                    },
+                                });
+                            }
+                        }
+                        continue;
+                    }
+                    EngineChoice::Mode => {}

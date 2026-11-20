@@ -429,8 +429,10 @@ fn acp_engine_label(command: &str) -> String {
     }
 }
 
-/// 有效引擎：每个 Bot 的选择优先，其次环境变量，最后 Mode Agent。
+/// 有效引擎：每个 Bot 的选择优先，其次环境变量，最后内嵌 pi-rust。
 pub enum EngineChoice {
+    /// 内嵌 pi-rust（Mode Chat 默认）。
+    Rpi,
     Mode,
     Acp(String),
 }
@@ -445,13 +447,52 @@ pub fn resolve_engine(selected: Option<&str>) -> EngineChoice {
     }
     match local_engine() {
         Some(command) => EngineChoice::Acp(command),
-        None => EngineChoice::Mode,
+        None => {
+            // 迁移期逃生门：MODE_CHAT_ENGINE=v4 仍可回退旧的 Mode Agent 链路。
+            if std::env::var("MODE_CHAT_ENGINE").ok().as_deref() == Some("v4") {
+                EngineChoice::Mode
+            } else {
+                EngineChoice::Rpi
+            }
+        }
     }
 }
 
-/// 该 Bot 的回合是否由 Mode Agent（v4）执行（附件/频道能力判断用）。
+/// 该 Bot 的回合是否由完整引擎执行（内嵌 rpi 或旧 Mode Agent；ACP 引擎能力受限）。
 pub fn engine_is_mode(selected: Option<&str>) -> bool {
-    matches!(resolve_engine(selected), EngineChoice::Mode)
+    !matches!(resolve_engine(selected), EngineChoice::Acp(_))
+}
+
+/// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
+async fn open_rpi_session(
+    key: &str,
+    workspace: &str,
+    identity: &str,
+    model: Option<ModelSpec>,
+    resume: Option<String>,
+    events: &UnboundedSender<BackendEvent>,
+) -> Result<(crate::rpi_engine::RpiSession, ModelSpec), String> {
+    let spec = model
+        .or_else(env_model)
+        .or_else(|| crate::rpi_engine::default_model_spec(identity, workspace))
+        .ok_or_else(|| "未选择模型：请先在右栏或设置里为这个 Bot 选一个模型".to_string())?;
+    let engine_model = crate::rpi_engine::resolve_model(&spec)?;
+    let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, workspace);
+    let system_prompt = crate::rpi_engine::system_prompt_for(std::path::Path::new(workspace));
+    let options = crate::rpi_engine::OpenOptions {
+        workspace: workspace.into(),
+        resume_path: resume.filter(|path| std::path::Path::new(path).is_file()),
+        model: engine_model,
+        thinking: crate::rpi_engine::thinking_level_for(&spec),
+        system_prompt,
+        events: events.clone(),
+        key: key.to_string(),
+        member: None,
+        approval_level,
+        allowlist,
+    };
+    let session = crate::rpi_engine::RpiSession::open(options).await?;
+    Ok((session, spec))
 }
 
 /// 启动一个 ACP 会话并把事件转成 BackendEvent。
@@ -499,11 +540,11 @@ fn spawn_acp_session(
     handle
 }
 
-fn v4_selftest() -> bool {
+pub(crate) fn v4_selftest() -> bool {
     std::env::var("BOT_PILOT_SELFTEST").ok().as_deref() == Some("1")
 }
 
-fn v4_selftest_delta(text: &str) {
+pub(crate) fn v4_selftest_delta(text: &str) {
     if v4_selftest() {
         use std::io::Write as _;
         print!("{text}");
@@ -511,7 +552,7 @@ fn v4_selftest_delta(text: &str) {
     }
 }
 
-fn v4_selftest_done() {
+pub(crate) fn v4_selftest_done() {
     if v4_selftest() {
         println!("
 [selftest] turn completed");
@@ -1827,9 +1868,10 @@ struct SessionRef {
     member: Option<String>,
 }
 
-/// 会话引擎：Mode Agent 走 v4；本地智能体（ACP）走 acp 模块。
+/// 会话引擎：内嵌 pi-rust / 旧 Mode Agent（v4）/ 本地智能体（ACP）。
 #[derive(Clone)]
 enum SessionEngine {
+    Rpi(Arc<crate::rpi_engine::RpiSession>),
     V4,
     Acp(crate::acp::AcpHandle),
 }
@@ -2073,6 +2115,104 @@ async fn run_agent(
                         active_internal.insert(key.clone(), key.clone());
                         continue;
                     }
+                    EngineChoice::Rpi => {
+                        let spec = model
+                            .clone()
+                            .or_else(env_model)
+                            .or_else(|| {
+                                crate::rpi_engine::default_model_spec(&identity, &workspace)
+                            });
+                        let Some(spec) = spec else {
+                            let _ = events.send(BackendEvent::Session {
+                                key: key.clone(),
+                                event: SessionEvent::Error {
+                                    member: None,
+                                    message: "未选择模型：请先在右栏或设置里为这个 Bot 选一个模型"
+                                        .to_string(),
+                                },
+                            });
+                            continue;
+                        };
+                        let engine_model = match crate::rpi_engine::resolve_model(&spec) {
+                            Ok(model) => model,
+                            Err(message) => {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Error {
+                                        member: None,
+                                        message,
+                                    },
+                                });
+                                continue;
+                            }
+                        };
+                        let (approval_level, allowlist) =
+                            crate::rpi_engine::approval_policy(&identity, &workspace);
+                        let system_prompt = crate::rpi_engine::system_prompt_for(
+                            std::path::Path::new(&workspace),
+                        );
+                        let resume_path = resume_id
+                            .clone()
+                            .filter(|path| std::path::Path::new(path).is_file());
+                        let options = crate::rpi_engine::OpenOptions {
+                            workspace: workspace.clone().into(),
+                            resume_path,
+                            model: engine_model,
+                            thinking: crate::rpi_engine::thinking_level_for(&spec),
+                            system_prompt,
+                            events: events.clone(),
+                            key: key.clone(),
+                            member: None,
+                            approval_level,
+                            allowlist,
+                        };
+                        match crate::rpi_engine::RpiSession::open(options).await {
+                            Ok(session) => {
+                                let session = Arc::new(session);
+                                let path = session.path.clone();
+                                sessions.insert(
+                                    key.clone(),
+                                    SessionCtx {
+                                        target: AgentWorkspaceTarget::new(workspace.clone())
+                                            .with_identity(identity),
+                                        session_id: path.clone(),
+                                        model: Some(message_model(&spec)),
+                                        member: None,
+                                        engine: SessionEngine::Rpi(Arc::clone(&session)),
+                                        turn_started: std::sync::Arc::new(
+                                            std::sync::atomic::AtomicBool::new(false),
+                                        ),
+                                    },
+                                );
+                                active_internal.insert(key.clone(), key.clone());
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Ready {
+                                        session_id: path,
+                                        slot: None,
+                                    },
+                                });
+                                if auto != AutoMode::None && !auto_sent {
+                                    auto_sent = true;
+                                    let prompt = std::env::var("BOT_PILOT_PROMPT")
+                                        .unwrap_or_else(|_| "只回复两个字：收到".to_string());
+                                    tokio::spawn(async move {
+                                        session.send(prompt, Vec::new()).await;
+                                    });
+                                }
+                            }
+                            Err(message) => {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Error {
+                                        member: None,
+                                        message,
+                                    },
+                                });
+                            }
+                        }
+                        continue;
+                    }
                     EngineChoice::Mode => {}
                 }
                                 let target = AgentWorkspaceTarget::new(workspace).with_identity(identity);
@@ -2238,6 +2378,54 @@ async fn run_agent(
                         active_internal.insert(key.clone(), key.clone());
                         continue;
                     }
+                    EngineChoice::Rpi => {
+                        match open_rpi_session(
+                            &key,
+                            &workspace,
+                            &identity,
+                            model.clone(),
+                            None,
+                            &events,
+                        )
+                        .await
+                        {
+                            Ok((session, spec)) => {
+                                let path = session.path.clone();
+                                sessions.insert(
+                                    key.clone(),
+                                    SessionCtx {
+                                        target: AgentWorkspaceTarget::new(workspace.clone())
+                                            .with_identity(identity),
+                                        session_id: path.clone(),
+                                        model: Some(message_model(&spec)),
+                                        member: None,
+                                        engine: SessionEngine::Rpi(Arc::new(session)),
+                                        turn_started: std::sync::Arc::new(
+                                            std::sync::atomic::AtomicBool::new(false),
+                                        ),
+                                    },
+                                );
+                                active_internal.insert(key.clone(), key.clone());
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Ready {
+                                        session_id: path,
+                                        slot: None,
+                                    },
+                                });
+                            }
+                            Err(message) => {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Error {
+                                        member: None,
+                                        message,
+                                    },
+                                });
+                            }
+                        }
+                        continue;
+                    }
                     EngineChoice::Mode => {}
                 }
                                 let target = AgentWorkspaceTarget::new(workspace).with_identity(identity);
@@ -2348,6 +2536,55 @@ async fn run_agent(
                         // 这里不能提前发：load 失败时 UI 会误以为会话已就绪。
                         continue;
                     }
+                    EngineChoice::Rpi => {
+                        sessions.remove(&key);
+                        match open_rpi_session(
+                            &key,
+                            &workspace,
+                            &identity,
+                            model.clone(),
+                            Some(session_id.clone()),
+                            &events,
+                        )
+                        .await
+                        {
+                            Ok((session, spec)) => {
+                                let path = session.path.clone();
+                                sessions.insert(
+                                    key.clone(),
+                                    SessionCtx {
+                                        target: AgentWorkspaceTarget::new(workspace.clone())
+                                            .with_identity(identity),
+                                        session_id: path.clone(),
+                                        model: Some(message_model(&spec)),
+                                        member: None,
+                                        engine: SessionEngine::Rpi(Arc::new(session)),
+                                        turn_started: std::sync::Arc::new(
+                                            std::sync::atomic::AtomicBool::new(false),
+                                        ),
+                                    },
+                                );
+                                active_internal.insert(key.clone(), key.clone());
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Ready {
+                                        session_id: path,
+                                        slot: None,
+                                    },
+                                });
+                            }
+                            Err(message) => {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::Error {
+                                        member: None,
+                                        message,
+                                    },
+                                });
+                            }
+                        }
+                        continue;
+                    }
                     EngineChoice::Mode => {}
                 }
                                 let target = AgentWorkspaceTarget::new(workspace).with_identity(identity);
@@ -2410,6 +2647,20 @@ async fn run_agent(
                 request_id,
                 option_id,
             } => {
+                // 内嵌 rpi 的审批卡：request_id 是工具调用 id，按会话闸门逐个尝试。
+                let allow = matches!(option_id.as_str(), "allow_once" | "allow_always");
+                let mut resolved = false;
+                for ctx in sessions.values() {
+                    if let SessionEngine::Rpi(session) = &ctx.engine
+                        && session.gate.resolve(&request_id, allow)
+                    {
+                        resolved = true;
+                        break;
+                    }
+                }
+                if resolved {
+                    continue;
+                }
                 let ctx_key = match sessions.get(&key) {
                     Some(_) => key.clone(),
                     None => request_map
@@ -2902,6 +3153,13 @@ async fn run_agent(
                     let Some(ctx) = sessions.get(&internal) else {
                         continue;
                     };
+                    if let SessionEngine::Rpi(session) = &ctx.engine {
+                        let session = Arc::clone(session);
+                        tokio::spawn(async move {
+                            session.abort().await;
+                        });
+                        continue;
+                    }
                     if let SessionEngine::Acp(handle) = &ctx.engine {
                         handle.stop();
                         continue;
@@ -2934,6 +3192,13 @@ async fn run_agent(
                 let Some(ctx) = sessions.get(&internal) else {
                     continue;
                 };
+                if let SessionEngine::Rpi(session) = &ctx.engine {
+                    let session = Arc::clone(session);
+                    tokio::spawn(async move {
+                        session.abort().await;
+                    });
+                    continue;
+                }
                 if let SessionEngine::Acp(handle) = &ctx.engine {
                     handle.stop();
                     continue;
@@ -3469,6 +3734,27 @@ async fn run_agent(
                     });
                     continue;
                 };
+                if let SessionEngine::Rpi(session) = &ctx.engine {
+                    let images = match crate::rpi_engine::images_from_attachments(&attachments) {
+                        Ok(images) => images,
+                        Err(message) => {
+                            let _ = events.send(BackendEvent::Session {
+                                key,
+                                event: SessionEvent::Error {
+                                    member: None,
+                                    message,
+                                },
+                            });
+                            continue;
+                        }
+                    };
+                    let session = Arc::clone(session);
+                    let text = text.clone();
+                    tokio::spawn(async move {
+                        session.send(text, images).await;
+                    });
+                    continue;
+                }
                                 if let SessionEngine::Acp(handle) = &ctx.engine {
                     if !attachments.is_empty() {
                         let _ = events.send(BackendEvent::Session {

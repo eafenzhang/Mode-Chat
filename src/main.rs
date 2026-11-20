@@ -31,6 +31,7 @@ mod im_heartbeat;
 mod im_runtime;
 mod im_service;
 mod instance;
+mod rpi_engine;
 mod memory_review;
 mod automations;
 mod automation_bridge;
