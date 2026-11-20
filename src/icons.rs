@@ -63,12 +63,13 @@ pub enum Icon {
     Sun,
     Moon,
     Monitor,
+    ChevronDown,
 }
 
 impl Icon {
     /// 全部图标（测试与清单用；顺序与 `svg()` 无关）。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const ALL: [Icon; 49] = [
+    pub const ALL: [Icon; 50] = [
         Icon::Search,
         Icon::Plus,
         Icon::Ellipsis,
@@ -118,6 +119,7 @@ impl Icon {
         Icon::Sun,
         Icon::Moon,
         Icon::Monitor,
+        Icon::ChevronDown,
     ];
 
     /// 图标对应的 SVG 原文。
@@ -174,6 +176,7 @@ impl Icon {
             Icon::Sun => include_bytes!("../assets/icons/sun.svg"),
             Icon::Moon => include_bytes!("../assets/icons/moon.svg"),
             Icon::Monitor => include_bytes!("../assets/icons/monitor.svg"),
+            Icon::ChevronDown => include_bytes!("../assets/icons/chevron-down.svg"),
         }
     }
 }
@@ -207,6 +210,6 @@ mod tests {
 
     #[test]
     fn icon_set_matches_design_inventory() {
-        assert_eq!(Icon::ALL.len(), 49);
+        assert_eq!(Icon::ALL.len(), 50);
     }
 }

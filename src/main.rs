@@ -2807,6 +2807,9 @@ struct PilotApp {
     message_layout: String,
     /// 主题：light / dark / system（prefs.json theme）。
     theme_pref: String,
+    /// 消息布局下拉菜单（点击位置锚定的小浮层）。
+    layout_menu_open: bool,
+    layout_menu_pos: Option<gpui::Point<gpui::Pixels>>,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
@@ -3202,6 +3205,8 @@ impl PilotApp {
             chat_font_size,
             message_layout,
             theme_pref,
+            layout_menu_open: false,
+            layout_menu_pos: None,
             memory_review_enabled: crate::memory_review::enabled(),
             memory_group: None,
             runtime_status: HashMap::new(),
@@ -5705,6 +5710,11 @@ impl PilotApp {
         if self.ime_composing(cx) {
             return;
         }
+        if self.layout_menu_open {
+            self.layout_menu_open = false;
+            cx.notify();
+            return;
+        }
         if self.mention_context(cx).is_some() {
             self.mention_dismissed = true;
             cx.notify();
@@ -7849,33 +7859,186 @@ impl PilotApp {
     }
 
     fn message_layout_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut controls = div().flex().items_center().gap(px(4.));
-        for (value, label) in [("bubble", "气泡"), ("flat", "平铺")] {
-            let active = self.message_layout == value;
-            controls = controls.child(
-                settings_button(
-                    SharedString::from(format!("message-layout-{value}")),
-                    if active {
-                        format!("{} ✓", i18n::t(label))
+        let wechat = wecom_theme::active();
+        let current = if self.message_layout == "flat" {
+            i18n::t("平铺")
+        } else {
+            i18n::t("气泡")
+        };
+        let trigger = div()
+            .id("message-layout-select")
+            .h(px(30.))
+            .min_w(px(112.))
+            .px(px(10.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if wechat {
+                wecom_theme::panel_divider()
+            } else {
+                theme::edge()
+            })
+            .bg(if wechat {
+                wecom_theme::chip_bg()
+            } else {
+                theme::card()
+            })
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.))
+            .cursor_pointer()
+            .hover(|style| style.opacity(0.9))
+            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
+                if let gpui::ClickEvent::Mouse(mouse) = event {
+                    this.layout_menu_pos = Some(mouse.up.position);
+                }
+                this.layout_menu_open = true;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
                     } else {
-                        i18n::t(label).to_string()
-                    },
-                )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.message_layout = value.to_string();
-                    save_ui_value("message_layout", serde_json::json!(value));
-                    this.wecom_scroller
-                        .update(cx, |state, cx| state.remeasure(cx));
-                    cx.notify();
-                })),
-            );
-        }
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(if wechat {
+                        wecom_theme::chat_title()
+                    } else {
+                        theme::ink()
+                    })
+                    .child(current),
+            )
+            .child(icons::icon(
+                icons::Icon::ChevronDown,
+                14.,
+                if wechat {
+                    wecom_theme::panel_text()
+                } else {
+                    theme::ink_secondary()
+                },
+            ));
         settings_row(
             i18n::t("消息布局").to_string(),
             Some(i18n::t("气泡或平铺").to_string()),
         )
-        .child(controls)
+        .child(trigger)
         .into_any_element()
+    }
+
+    /// 应用消息布局（下拉菜单选项）。
+    fn apply_message_layout(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.message_layout = value.to_string();
+        save_ui_value("message_layout", serde_json::json!(value));
+        self.layout_menu_open = false;
+        self.wecom_scroller
+            .update(cx, |state, cx| state.remeasure(cx));
+        cx.notify();
+    }
+
+    /// 消息布局下拉浮层（按点击位置锚定，点外面或 Esc 关闭）。
+    fn settings_dropdown_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.layout_menu_open {
+            return None;
+        }
+        let position = self.layout_menu_pos?;
+        let wechat = wecom_theme::active();
+        let current = self.message_layout.clone();
+        let mut menu = div()
+            .w(px(148.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if wechat {
+                wecom_theme::panel_divider()
+            } else {
+                theme::edge()
+            })
+            .bg(if wechat {
+                wecom_theme::panel_card_bg()
+            } else {
+                theme::menu()
+            })
+            .shadow(theme::shadow_4())
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|_this, _event, _window, cx| {
+                    cx.stop_propagation();
+                }),
+            );
+        for (value, label) in [("bubble", "气泡"), ("flat", "平铺")] {
+            let active = current == value;
+            menu = menu.child(
+                div()
+                    .id(SharedString::from(format!("layout-option-{value}")))
+                    .h(px(28.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.apply_message_layout(value, cx);
+                    }))
+                    .child(icons::icon(
+                        icons::Icon::Check,
+                        13.,
+                        if active {
+                            if wechat {
+                                wecom_theme::send_enabled()
+                            } else {
+                                theme::accent()
+                            }
+                        } else {
+                            gpui::rgba(0x00000000)
+                        },
+                    ))
+                    .child(
+                        div()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .text_color(if wechat {
+                                wecom_theme::chat_title()
+                            } else {
+                                theme::ink()
+                            })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+        Some(
+            gpui::deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.layout_menu_open = false;
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        gpui::anchored()
+                            .position(position)
+                            .offset(gpui::point(px(0.), px(6.)))
+                            .child(menu),
+                    ),
+            )
+            .into_any_element(),
+        )
     }
 
     fn motion_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -17757,14 +17920,14 @@ fn settings_action_button(
     let wechat = wecom_theme::active();
     div()
         .id(id)
-        .h(px(32.))
+        .h(px(28.))
         .rounded(px(999.))
         .bg(if wechat {
             wecom_theme::chip_bg()
         } else {
             theme::hover()
         })
-        .px(px(12.))
+        .px(px(10.))
         .flex()
         .items_center()
         .justify_center()
@@ -17777,7 +17940,7 @@ fn settings_action_button(
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(13.))
+                .text_size(px(12.))
                 .line_height(px(18.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
@@ -17966,14 +18129,14 @@ fn settings_button(
     let wechat = wecom_theme::active();
     div()
         .id(id)
-        .h(px(36.))
+        .h(px(30.))
         .rounded(px(999.))
         .bg(if wechat {
             wecom_theme::chip_bg()
         } else {
             theme::hover()
         })
-        .px(px(16.))
+        .px(px(12.))
         .flex()
         .items_center()
         .cursor_pointer()
@@ -17985,8 +18148,8 @@ fn settings_button(
                 } else {
                     theme::FONT_FAMILY
                 })
-                .text_size(px(14.))
-                .line_height(px(20.))
+                .text_size(px(13.))
+                .line_height(px(18.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
                     wecom_theme::chat_title()
@@ -20285,6 +20448,7 @@ impl Render for PilotApp {
             .child(self.shell(window, cx))
             .children(self.image_preview_overlay(cx))
             .children(self.settings_overlay(window, cx))
+            .children(self.settings_dropdown_overlay(cx))
             .children(self.footer_menu_overlay(cx))
             .children(None::<gpui::AnyElement>)
             .children(self.find_dialog_overlay(window, cx))
