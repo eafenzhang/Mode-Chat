@@ -1,6 +1,7 @@
-//! 微信 4.x 深色皮肤 token（取自 `2026-11-16` 现场截图：896×648 窗口像素采样）。
+//! 微信 4.x 皮肤 token（深色为 2026-11-16 现场截图采样；2026-11-21 增加浅色与跟随系统）。
 //!
 //! 仅用于 `BOT_PILOT_WECHAT_UI` 三栏外壳；经典三栏仍走 `theme.rs`。
+//! 主题色（accent）由设置页选择，默认微信绿；气泡/选中行/图标都跟随。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -22,6 +23,7 @@ const fn rgba(value: u32, a: u8) -> Rgba {
 pub const FONT_FAMILY: &str = "Microsoft YaHei UI";
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static LIGHT: AtomicBool = AtomicBool::new(false);
 
 /// 启动时由 main 置位；设置页/对话框 helper 用它切到微信表面。
 pub fn set_active(active: bool) {
@@ -30,6 +32,42 @@ pub fn set_active(active: bool) {
 
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// 浅色/深色皮肤（设置页「主题」，跟随系统时由启动逻辑解析）。
+pub fn set_light(light: bool) {
+    LIGHT.store(light, Ordering::Relaxed);
+}
+
+pub fn light() -> bool {
+    LIGHT.load(Ordering::Relaxed)
+}
+
+fn pick(dark: u32, light_value: u32) -> Rgba {
+    rgb(if light() { light_value } else { dark })
+}
+
+fn pick_alpha(dark: u32, dark_a: u8, light_value: u32, light_a: u8) -> Rgba {
+    if light() {
+        rgba(light_value, light_a)
+    } else {
+        rgba(dark, dark_a)
+    }
+}
+
+/// 用户选择的主题色；默认微信绿（不再固定绿色）。
+fn accent_color() -> Rgba {
+    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x07c160))
+}
+
+/// 在给定底色上选可读的文字色（深色底用白字）。
+fn contrast_ink(color: Rgba) -> Rgba {
+    let luma = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+    if luma < 0.55 {
+        rgb(0xffffff)
+    } else {
+        rgb(0x1a1a1a)
+    }
 }
 
 // 布局（微信 4.x 896×648 实测）
@@ -45,155 +83,158 @@ pub const COMPOSER_HEIGHT: f32 = 176.0;
 
 // 窗口 / 标题栏
 pub fn window_bg() -> Rgba {
-    rgb(0x1e1e1f)
+    pick(0x1e1e1f, 0xf3f3f3)
 }
 pub fn titlebar_bg() -> Rgba {
-    rgb(0x252526)
+    pick(0x252526, 0xebebeb)
 }
 
 // 左导轨
 pub fn nav_item_selected_bg() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xdedede)
 }
 pub fn nav_item_hover_bg() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xd8d8d8)
 }
 pub fn nav_text() -> Rgba {
-    rgb(0xc8c8c8)
+    pick(0xc8c8c8, 0x4a4a4a)
 }
 pub fn nav_text_active() -> Rgba {
-    rgb(0xededed)
+    pick(0xededed, 0x1a1a1a)
 }
 pub fn nav_icon() -> Rgba {
-    rgb(0x9a9a9c)
+    pick(0x9a9a9c, 0x666666)
 }
 pub fn nav_icon_active() -> Rgba {
-    rgb(0x00a361)
+    accent_color()
 }
 pub fn nav_badge_bg() -> Rgba {
-    rgb(0xe24747)
+    pick(0xe24747, 0xfa5151)
 }
 pub fn nav_separator() -> Rgba {
-    rgb(0x3a3a3b)
+    pick(0x3a3a3b, 0xd2d2d2)
 }
 
 // 会话列表
 pub fn list_hover() -> Rgba {
-    rgb(0x3a3a3b)
+    pick(0x3a3a3b, 0xe8e8e8)
 }
 pub fn list_title() -> Rgba {
-    rgb(0xe8e8e8)
+    pick(0xe8e8e8, 0x1a1a1a)
 }
 pub fn list_title_selected() -> Rgba {
-    rgb(0xffffff)
+    pick(0xffffff, 0x1a1a1a)
 }
 pub fn list_preview() -> Rgba {
-    rgb(0x8a8a8c)
+    pick(0x8a8a8c, 0x8a8a8a)
 }
 pub fn list_preview_selected() -> Rgba {
-    rgba(0xffffff, 0xd9)
+    pick_alpha(0xffffff, 0xd9, 0x4a4a4a, 255)
 }
 pub fn list_time() -> Rgba {
-    rgb(0x7a7a7c)
+    pick(0x7a7a7c, 0xb0b0b0)
 }
 pub fn list_time_selected() -> Rgba {
-    rgba(0xffffff, 0xa6)
+    pick_alpha(0xffffff, 0xa6, 0x666666, 255)
 }
 pub fn search_bg() -> Rgba {
-    rgb(0x454547)
+    pick(0x454547, 0xe2e2e2)
 }
 pub fn star() -> Rgba {
-    rgb(0xfbc224)
+    pick(0xfbc224, 0xf5a623)
 }
 
 // 会话区
 pub fn chat_bg() -> Rgba {
-    rgb(0x1e1e1f)
+    pick(0x1e1e1f, 0xf5f5f5)
 }
 pub fn chat_title() -> Rgba {
-    rgb(0xededed)
+    pick(0xededed, 0x1a1a1a)
 }
 pub fn chat_subtitle() -> Rgba {
-    rgb(0x8a8a8c)
+    pick(0x8a8a8c, 0x8a8a8a)
 }
 pub fn bubble_in() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xffffff)
 }
 pub fn bubble_out() -> Rgba {
-    rgb(0x35d28d)
+    // 默认微信气泡（浅色是经典浅绿）；用户选了主题色则直接使用主题色。
+    crate::theme::accent_custom().unwrap_or_else(|| pick(0x35d28d, 0x95ec69))
 }
 pub fn bubble_text() -> Rgba {
-    rgb(0xd8d8d8)
+    pick(0xd8d8d8, 0x1a1a1a)
 }
-/// 微信发送气泡是绿底黑字。
+/// 发送气泡文字：默认绿底黑字；自定义主题色按底色明暗取黑/白。
 pub fn bubble_out_text() -> Rgba {
-    rgb(0x1a1a1a)
+    crate::theme::accent_custom()
+        .map(contrast_ink)
+        .unwrap_or_else(|| rgb(0x1a1a1a))
 }
 pub fn sender_label() -> Rgba {
-    rgb(0x8a8a8c)
+    pick(0x8a8a8c, 0x8a8a8a)
 }
 pub fn time_label() -> Rgba {
-    rgb(0x7a7a7c)
+    pick(0x7a7a7c, 0x9a9a9a)
 }
 pub fn chip_bg() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xe8e8e8)
 }
 pub fn chip_text() -> Rgba {
-    rgb(0xa0a0a2)
+    pick(0xa0a0a2, 0x555555)
 }
 
 // 输入区
 pub fn composer_bg() -> Rgba {
-    rgb(0x1e1e1f)
+    pick(0x1e1e1f, 0xffffff)
 }
 pub fn composer_border() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xe3e3e3)
 }
 pub fn composer_placeholder() -> Rgba {
-    rgb(0x7a7a7c)
+    pick(0x7a7a7c, 0xb0b0b0)
 }
 pub fn send_disabled_bg() -> Rgba {
-    rgb(0x3a3a3b)
+    pick(0x3a3a3b, 0xe5e5e5)
 }
 pub fn send_disabled_text() -> Rgba {
-    rgb(0x7a7a7c)
+    pick(0x7a7a7c, 0x999999)
 }
 pub fn send_enabled() -> Rgba {
-    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x07c160))
+    accent_color()
 }
 
 // 通用
 pub fn icon() -> Rgba {
-    rgb(0xa8a8aa)
+    pick(0xa8a8aa, 0x666666)
 }
 pub fn icon_strong() -> Rgba {
-    rgb(0xd8d8da)
+    pick(0xd8d8da, 0x333333)
 }
 pub fn accent() -> Rgba {
-    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x07c160))
+    accent_color()
 }
 pub fn divider() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xe2e2e2)
 }
 
 // 信息栏（本皮肤默认不显示；保留 token 供以后做聊天信息面板）
 pub fn panel_bg() -> Rgba {
-    rgb(0x252526)
+    pick(0x252526, 0xfafafa)
 }
 pub fn panel_title() -> Rgba {
-    rgb(0xd8d8da)
+    pick(0xd8d8da, 0x1a1a1a)
 }
 pub fn panel_text() -> Rgba {
-    rgb(0xa9a9ab)
+    pick(0xa9a9ab, 0x555555)
 }
 pub fn panel_card_bg() -> Rgba {
-    rgb(0x2f2f30)
+    pick(0x2f2f30, 0xffffff)
 }
 pub fn panel_divider() -> Rgba {
-    rgb(0x3a3a3b)
+    pick(0x3a3a3b, 0xe5e5e5)
 }
 pub fn online_dot() -> Rgba {
-    rgb(0x07c160)
+    accent_color()
 }
 pub fn watermark() -> Rgba {
     rgba(0xffffff, 0)
@@ -201,27 +242,34 @@ pub fn watermark() -> Rgba {
 
 /// 导轨/列表背景：微信是纯色，这里仍返回 Background 方便调用点统一。
 pub fn nav_gradient() -> Background {
+    let color = pick(0x252526, 0xe7e7e7);
     linear_gradient(
         180.0,
-        linear_color_stop(rgb(0x252526), 0.0),
-        linear_color_stop(rgb(0x252526), 1.0),
+        linear_color_stop(color, 0.0),
+        linear_color_stop(color, 1.0),
     )
 }
 
 pub fn list_gradient() -> Background {
+    let color = pick(0x2f2f30, 0xf7f7f7);
     linear_gradient(
         180.0,
-        linear_color_stop(rgb(0x2f2f30), 0.0),
-        linear_color_stop(rgb(0x2f2f30), 1.0),
+        linear_color_stop(color, 0.0),
+        linear_color_stop(color, 1.0),
     )
 }
 
-/// 选中会话行：微信是整行纯绿。
+/// 选中会话行：深色整行主题绿；浅色微信是灰色选中行。
 pub fn selected_gradient() -> Background {
+    let color = if light() {
+        rgb(0xd9d9d9)
+    } else {
+        crate::theme::accent_custom().unwrap_or_else(|| rgb(0x0da869))
+    };
     linear_gradient(
         90.0,
-        linear_color_stop(rgb(0x0da869), 0.0),
-        linear_color_stop(rgb(0x0da869), 1.0),
+        linear_color_stop(color, 0.0),
+        linear_color_stop(color, 1.0),
     )
 }
 

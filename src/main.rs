@@ -380,6 +380,48 @@ fn load_message_layout() -> String {
         .unwrap_or_else(|| "bubble".to_string())
 }
 
+fn load_theme_pref() -> String {
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("theme")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .filter(|value| matches!(value.as_str(), "light" | "dark" | "system"))
+        .unwrap_or_else(|| "system".to_string())
+}
+
+/// Windows 个性化里的「应用模式」是否浅色（跟随系统时用）。
+fn system_prefers_light() -> bool {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "/v",
+                "AppsUseLightTheme",
+            ])
+            .output();
+        if let Ok(output) = output {
+            let text = String::from_utf8_lossy(&output.stdout);
+            return text.contains("0x1");
+        }
+    }
+    false
+}
+
+fn theme_light_for(pref: &str) -> bool {
+    match pref {
+        "light" => true,
+        "dark" => false,
+        _ => system_prefers_light(),
+    }
+}
+
 fn load_chat_font_size() -> u32 {
     std::fs::read(ui_prefs_path())
         .ok()
@@ -2763,6 +2805,8 @@ struct PilotApp {
     chat_font_size: u32,
     /// 消息布局：bubble / flat（prefs.json message_layout）。
     message_layout: String,
+    /// 主题：light / dark / system（prefs.json theme）。
+    theme_pref: String,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
@@ -2979,6 +3023,7 @@ impl PilotApp {
         let message_width = load_message_width();
         let chat_font_size = load_chat_font_size();
         let message_layout = load_message_layout();
+        let theme_pref = load_theme_pref();
         let enter_to_send = load_ui_bool("enter_to_send", true);
         let input = cx.new(|cx| {
             ComposerInput::new(
@@ -3156,6 +3201,7 @@ impl PilotApp {
             message_width,
             chat_font_size,
             message_layout,
+            theme_pref,
             memory_review_enabled: crate::memory_review::enabled(),
             memory_group: None,
             runtime_status: HashMap::new(),
@@ -7322,12 +7368,13 @@ impl PilotApp {
             .child(settings_section(i18n::t("外观")));
         if self.wecom_mode {
             body = body.child(settings_note(
-                i18n::t("微信皮肤固定深色，可用 BOT_PILOT_CLASSIC_UI=1 回到经典三栏。"),
+                i18n::t("可在外观里选择主题；BOT_PILOT_CLASSIC_UI=1 回到经典三栏。"),
             ));
         } else {
             body = body.child(self.theme_picker(cx));
         }
         let mut appearance_rows: Vec<gpui::AnyElement> = Vec::new();
+        appearance_rows.push(self.theme_picker_row(cx));
         appearance_rows.push(self.language_row(cx));
         appearance_rows.push(self.accent_row(cx));
         appearance_rows.push(self.message_width_row(cx));
@@ -7559,6 +7606,128 @@ impl PilotApp {
         body.into_any_element()
     }
 
+    /// DS 的三张主题卡：浅色 / 深色 / 跟随系统。
+    fn theme_picker_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let wechat = wecom_theme::active();
+        let mut cards = div().flex().gap(px(8.)).w_full();
+        for (value, label, icon) in [
+            ("light", "浅色", icons::Icon::Sun),
+            ("dark", "深色", icons::Icon::Moon),
+            ("system", "跟随系统", icons::Icon::Monitor),
+        ] {
+            let active = self.theme_pref == value;
+            cards = cards.child(
+                div()
+                    .id(SharedString::from(format!("theme-{value}")))
+                    .flex_1()
+                    .h(px(76.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(if active {
+                        if wechat {
+                            wecom_theme::send_enabled()
+                        } else {
+                            theme::accent()
+                        }
+                    } else if wechat {
+                        wecom_theme::panel_divider()
+                    } else {
+                        theme::edge()
+                    })
+                    .bg(if active {
+                        if wechat {
+                            wecom_theme::chip_bg()
+                        } else {
+                            theme::accent_soft()
+                        }
+                    } else if wechat {
+                        wecom_theme::panel_bg()
+                    } else {
+                        theme::card()
+                    })
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.))
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.set_theme_pref(value, cx);
+                    }))
+                    .child(icons::icon(
+                        icon,
+                        18.,
+                        if active {
+                            if wechat {
+                                wecom_theme::send_enabled()
+                            } else {
+                                theme::accent()
+                            }
+                        } else if wechat {
+                            wecom_theme::panel_text()
+                        } else {
+                            theme::ink_secondary()
+                        },
+                    ))
+                    .child(
+                        div()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .text_color(if active {
+                                if wechat {
+                                    wecom_theme::chat_title()
+                                } else {
+                                    theme::ink()
+                                }
+                            } else if wechat {
+                                wecom_theme::panel_text()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+        div()
+            .w_full()
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(cards)
+            .into_any_element()
+    }
+
+    fn set_theme_pref(&mut self, pref: &str, cx: &mut Context<Self>) {
+        if self.theme_pref == pref {
+            return;
+        }
+        self.theme_pref = pref.to_string();
+        save_ui_value("theme", serde_json::json!(pref));
+        let light = theme_light_for(pref);
+        theme::set_light_runtime(light);
+        wecom_theme::set_light(light);
+        gpui::component::Theme::change(
+            if light {
+                gpui::component::ThemeMode::Light
+            } else {
+                gpui::component::ThemeMode::Dark
+            },
+            None,
+            cx,
+        );
+        configure_kit_theme(cx);
+        self.wecom_scroller
+            .update(cx, |state, cx| state.remeasure(cx));
+        cx.notify();
+    }
+
     fn language_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let mut controls = div().flex().items_center().gap(px(4.));
         for (lang, label) in [("zh", "简体中文"), ("en", "English")] {
@@ -7591,6 +7760,12 @@ impl PilotApp {
         let mut controls = div().flex().items_center().gap(px(6.));
         let default_active = self.accent.is_none();
         // 默认按钮照原版：蓝/炭黑对角分割的圆片，不是文字。
+        let wechat = wecom_theme::active();
+        let (default_a, default_b) = if wechat {
+            (0x07c160, 0x07c160)
+        } else {
+            (0x4d6bfe, 0x1f1f1f)
+        };
         controls = controls.child(
             div()
                 .id("accent-default")
@@ -7600,8 +7775,8 @@ impl PilotApp {
                 .border_color(if default_active { theme::ink() } else { theme::edge() })
                 .bg(gpui::linear_gradient(
                     135.,
-                    gpui::linear_color_stop(gpui::rgba(0x4d6bfe), 0.5),
-                    gpui::linear_color_stop(gpui::rgba(0x1f1f1f), 0.5),
+                    gpui::linear_color_stop(gpui::rgba(default_a), 0.5),
+                    gpui::linear_color_stop(gpui::rgba(default_b), 0.5),
                 ))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -20252,6 +20427,10 @@ fn configure_kit_theme(cx: &mut App) {
         theme.danger_foreground = gpui::Hsla::from(wecom_theme::nav_text_active());
         theme.ring = gpui::Hsla::from(wecom_theme::send_enabled());
         theme.caret = gpui::Hsla::from(wecom_theme::chat_title());
+        // 滚动条：浅色皮肤默认深色滑块，会像一条黑杠。
+        theme.scrollbar = gpui::Hsla::from(gpui::rgba(0x00000000));
+        theme.scrollbar_thumb = gpui::Hsla::from(wecom_theme::time_label());
+        theme.scrollbar_thumb_hover = gpui::Hsla::from(wecom_theme::icon_strong());
         theme.font_family = wecom_theme::FONT_FAMILY.into();
         theme.font_size = px(13.);
     });
@@ -20266,9 +20445,8 @@ fn main() {
     let _ = BOOT_AT.set(std::time::Instant::now());
     // 主题偏好（深色/浅色）要在建窗口前读好，否则首帧会闪一下。
     theme::load_preference();
-    // 企微皮肤是深色专属；只改运行期，不覆盖用户的浅色偏好。
+    // 微信皮肤置位；浅色/深色/跟随系统由 prefs 在 application run 里应用。
     if std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1") {
-        theme::force_dark();
         wecom_theme::set_active(true);
     }
     // 崩溃先落盘（早于任何 UI/后台线程）：日志在试点状态目录，不碰产品数据。
@@ -20291,8 +20469,21 @@ fn main() {
     gpui::application().run(|cx: &mut App| {
         // gpui-kit 的主题/组件/对话框状态必须先初始化，否则组件拿不到 theme。
         gpui::init(cx);
-        // 微信皮肤是深色专属；gpui-kit 默认 Light，会导致 TextView/代码块用浅色 token。
-        gpui::component::Theme::change(gpui::component::ThemeMode::Dark, None, cx);
+        // 主题（浅色/深色/跟随系统）先落到两套 token，再同步 gpui-kit；
+        // 组件默认 Light，必须显式切换，否则 TextView/代码块与皮肤不一致。
+        let saved_theme = load_theme_pref();
+        let saved_light = theme_light_for(&saved_theme);
+        theme::set_light_runtime(saved_light);
+        wecom_theme::set_light(saved_light);
+        gpui::component::Theme::change(
+            if saved_light {
+                gpui::component::ThemeMode::Light
+            } else {
+                gpui::component::ThemeMode::Dark
+            },
+            None,
+            cx,
+        );
         configure_kit_theme(cx);
         // Geist 是原版 UI 的主字体（SIL OFL，随包 assets/fonts）。DirectWrite 只认 TTF/OTF。
         let _ = cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!(

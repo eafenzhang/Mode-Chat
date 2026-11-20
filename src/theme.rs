@@ -139,6 +139,11 @@ pub fn force_dark() {
     LIGHT.store(false, Ordering::Relaxed);
 }
 
+/// 只切运行期模式、不落盘（模式偏好由 main 的 prefs `theme` 统一管理）。
+pub fn set_light_runtime(light: bool) {
+    LIGHT.store(light, Ordering::Relaxed);
+}
+
 /// 切换主题（同时落盘，下次启动沿用）。返回切换后的模式。
 pub fn set_light(light: bool) -> bool {
     LIGHT.store(light, Ordering::Relaxed);
