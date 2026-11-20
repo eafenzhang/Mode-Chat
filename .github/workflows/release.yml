@@ -77,6 +77,9 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "Mode Chat version: $version"
 
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
       - name: Package
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -106,6 +109,7 @@ jobs:
           fi
 
       - name: Publish update feed
+        if: ${{ secrets.UPDATE_REPO_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.UPDATE_REPO_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -116,8 +120,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::缺少 UPDATE_REPO_TOKEN（需要能写 eafenzhang/Mode-Chat-Releases 的 PAT）"
-            exit 1
+            echo "::warning::缺少 UPDATE_REPO_TOKEN，跳过公开更新源（安装包只在私库 Release）"
+            exit 0
           fi
           repo="eafenzhang/Mode-Chat-Releases"
           if gh release view "$TAG" --repo "$repo" >/dev/null 2>&1; then
