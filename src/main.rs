@@ -366,6 +366,20 @@ fn load_message_width() -> u32 {
         .unwrap_or(80)
 }
 
+fn load_message_layout() -> String {
+    std::fs::read(ui_prefs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("message_layout")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .filter(|value| value == "flat")
+        .unwrap_or_else(|| "bubble".to_string())
+}
+
 fn load_chat_font_size() -> u32 {
     std::fs::read(ui_prefs_path())
         .ok()
@@ -2747,6 +2761,8 @@ struct PilotApp {
     message_width: u32,
     /// 会话正文字号（prefs.json chat_font_size；DS「字号大小」）。
     chat_font_size: u32,
+    /// 消息布局：bubble / flat（prefs.json message_layout）。
+    message_layout: String,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
@@ -2962,6 +2978,7 @@ impl PilotApp {
         theme::set_motion(motion);
         let message_width = load_message_width();
         let chat_font_size = load_chat_font_size();
+        let message_layout = load_message_layout();
         let enter_to_send = load_ui_bool("enter_to_send", true);
         let input = cx.new(|cx| {
             ComposerInput::new(
@@ -3138,6 +3155,7 @@ impl PilotApp {
             motion,
             message_width,
             chat_font_size,
+            message_layout,
             memory_review_enabled: crate::memory_review::enabled(),
             memory_group: None,
             runtime_status: HashMap::new(),
@@ -7314,6 +7332,7 @@ impl PilotApp {
         appearance_rows.push(self.accent_row(cx));
         appearance_rows.push(self.message_width_row(cx));
         appearance_rows.push(self.font_size_row(cx));
+        appearance_rows.push(self.message_layout_row(cx));
         appearance_rows.push(self.motion_row(cx));
         appearance_rows.push(
             settings_row(i18n::t("显示思考过程").to_string(), None)
@@ -7649,6 +7668,36 @@ impl PilotApp {
         settings_row(
             i18n::t("字号大小").to_string(),
             Some(i18n::t("仅影响会话内容").to_string()),
+        )
+        .child(controls)
+        .into_any_element()
+    }
+
+    fn message_layout_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut controls = div().flex().items_center().gap(px(4.));
+        for (value, label) in [("bubble", "气泡"), ("flat", "平铺")] {
+            let active = self.message_layout == value;
+            controls = controls.child(
+                settings_button(
+                    SharedString::from(format!("message-layout-{value}")),
+                    if active {
+                        format!("{} ✓", i18n::t(label))
+                    } else {
+                        i18n::t(label).to_string()
+                    },
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.message_layout = value.to_string();
+                    save_ui_value("message_layout", serde_json::json!(value));
+                    this.wecom_scroller
+                        .update(cx, |state, cx| state.remeasure(cx));
+                    cx.notify();
+                })),
+            );
+        }
+        settings_row(
+            i18n::t("消息布局").to_string(),
+            Some(i18n::t("气泡或平铺").to_string()),
         )
         .child(controls)
         .into_any_element()
@@ -16197,6 +16246,7 @@ fn wecom_row_el(
     mention_names: &[String],
     bubble_max: f32,
     font_size: f32,
+    flat: bool,
     weak: &gpui::WeakEntity<PilotApp>,
     cx: &mut App,
 ) -> gpui::AnyElement {
@@ -16253,14 +16303,22 @@ fn wecom_row_el(
             .child(
                 div()
                     .max_w(px(bubble_max))
-                    .rounded(px(6.))
-                    .bg(wecom_theme::bubble_out())
-                    .px(px(10.))
-                    .py(px(6.))
+                    .rounded(px(if flat { 0. } else { 6. }))
+                    .bg(if flat {
+                        gpui::rgba(0x00000000)
+                    } else {
+                        wecom_theme::bubble_out()
+                    })
+                    .px(px(if flat { 2. } else { 10. }))
+                    .py(px(if flat { 2. } else { 6. }))
                     .font_family(wecom_theme::FONT_FAMILY)
                     .text_size(px(font_size))
                     .line_height(px(font_size + 8.))
-                    .text_color(wecom_theme::bubble_out_text())
+                    .text_color(if flat {
+                        wecom_theme::bubble_text()
+                    } else {
+                        wecom_theme::bubble_out_text()
+                    })
                     .child(user_text_with_mentions(text, mention_names))
                     .children(history_attachment_view(
                         attachments,
@@ -16269,7 +16327,7 @@ fn wecom_row_el(
                         cx,
                     )),
             )
-            .child(wechat_bubble_tail())
+            .children((!flat).then(wechat_bubble_tail))
             .into_any_element(),
         WecomRow::Assistant {
             text,
@@ -16296,10 +16354,14 @@ fn wecom_row_el(
             cell = cell.child(
                 div()
                     .max_w(px(bubble_max))
-                    .rounded(px(6.))
-                    .bg(wecom_theme::bubble_in())
-                    .px(px(10.))
-                    .py(px(6.))
+                    .rounded(px(if flat { 0. } else { 6. }))
+                    .bg(if flat {
+                        gpui::rgba(0x00000000)
+                    } else {
+                        wecom_theme::bubble_in()
+                    })
+                    .px(px(if flat { 0. } else { 10. }))
+                    .py(px(if flat { 0. } else { 6. }))
                     .font_family(wecom_theme::FONT_FAMILY)
                     .text_size(px(font_size))
                     .line_height(px(font_size + 8.))
@@ -19638,6 +19700,7 @@ impl PilotApp {
         let rows = std::sync::Arc::new(rows);
         let bubble_max = (560. * self.message_width as f32 / 100.).clamp(240., 560.);
         let chat_font_size = self.chat_font_size as f32;
+        let flat_layout = self.message_layout == "flat";
         let render_rows = rows.clone();
         let weak = cx.weak_entity();
         let scroller = gpui::component::message_scroller::MessageScroller::new(
@@ -19651,6 +19714,7 @@ impl PilotApp {
                     &mention_names,
                     bubble_max,
                     chat_font_size,
+                    flat_layout,
                     &weak,
                     cx,
                 )
