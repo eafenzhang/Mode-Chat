@@ -123,22 +123,22 @@ pub fn list_title() -> Rgba {
     pick(0xe8e8e8, 0x1a1a1a)
 }
 pub fn list_title_selected() -> Rgba {
-    pick(0xffffff, 0x1a1a1a)
+    pick(0xffffff, 0xffffff)
 }
 pub fn list_preview() -> Rgba {
     pick(0x8a8a8c, 0x8a8a8a)
 }
 pub fn list_preview_selected() -> Rgba {
-    pick_alpha(0xffffff, 0xd9, 0x4a4a4a, 255)
+    pick_alpha(0xffffff, 0xd9, 0xffffff, 0xd9)
 }
 pub fn list_time() -> Rgba {
     pick(0x7a7a7c, 0xb0b0b0)
 }
 pub fn list_time_selected() -> Rgba {
-    pick_alpha(0xffffff, 0xa6, 0x666666, 255)
+    pick_alpha(0xffffff, 0xa6, 0xffffff, 0xa6)
 }
 pub fn search_bg() -> Rgba {
-    pick(0x3a3a3b, 0xe2e2e2)
+    pick(0x3a3a3b, 0xffffff)
 }
 pub fn star() -> Rgba {
     pick(0xfbc224, 0xf5a623)
@@ -264,12 +264,10 @@ pub fn list_gradient() -> Background {
     )
 }
 
-/// 选中会话行：深色整行主题绿；浅色微信是灰色选中行。
+/// 选中会话行：浅色微信是整行实心主题色；深色仍是 22% 淡染。
 pub fn selected_gradient() -> Background {
-    // 深色不做整行实心绿（太吵）：主题色 22% 叠在列表底色上；
-    // 浅色沿用微信灰色选中行。
     let color = if light() {
-        rgb(0xd9d9d9)
+        accent_color()
     } else {
         let accent = accent_color();
         Rgba {
