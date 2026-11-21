@@ -20016,7 +20016,7 @@ impl PilotApp {
         let gap = 1.0;
         let inner = size - pad * 2.0;
         let cell = |id: &String, w: f32, h: f32| -> gpui::AnyElement {
-            avatar::bot_avatar_rect(id, w, h, 2.5).into_any_element()
+            avatar::bot_avatar_rect(id, w, h, 6.0).into_any_element()
         };
         let mut grid = div()
             .size(px(size))
@@ -20034,13 +20034,17 @@ impl PilotApp {
                 grid = grid.child(cell(members[0], inner, inner));
             }
             2 => {
-                let width = (inner - gap) / 2.0;
+                // 两个成员也保持正方形，整体在灰白底上居中。
+                let side = (inner - gap) / 2.0;
                 grid = grid.child(
                     div()
+                        .flex_1()
                         .flex()
+                        .items_center()
+                        .justify_center()
                         .gap(px(gap))
-                        .child(cell(members[0], width, inner))
-                        .child(cell(members[1], width, inner)),
+                        .child(cell(members[0], side, side))
+                        .child(cell(members[1], side, side)),
                 );
             }
             3 => {
