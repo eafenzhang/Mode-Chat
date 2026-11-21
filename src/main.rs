@@ -21191,17 +21191,17 @@ impl PilotApp {
             )
             .child(
                 div()
-                    // 32 图标按钮上下各 12；发送 30 高，上下各 13。
-                    .h(px(56.))
+                    // 28 图标按钮上下各 12；发送 26 高，上下各 13。
+                    .h(px(52.))
                     .flex_shrink_0()
                     .px(px(8.))
                     .flex()
                     .items_center()
-                    .gap(px(2.))
+                    .gap(px(8.))
                     .child(
                         div()
                             .id("wechat-tool-smile")
-                            .size(px(32.))
+                            .size(px(28.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21214,12 +21214,12 @@ impl PilotApp {
                                     input.set_content(format!("{content}🙂"), cx);
                                 });
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Smile, 24., wecom_theme::icon(), 1.5)),
+                            .child(icons::icon_with_stroke(icons::Icon::Smile, 22., wecom_theme::icon(), 1.2)),
                     )
                     .child(
                         div()
                             .id("wechat-tool-folder")
-                            .size(px(32.))
+                            .size(px(28.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21229,12 +21229,12 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.stage_attachments(cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Folder, 24., wecom_theme::icon(), 1.5)),
+                            .child(icons::icon_with_stroke(icons::Icon::Folder, 22., wecom_theme::icon(), 1.2)),
                     )
                     .child(
                         div()
                             .id("wechat-tool-scissors")
-                            .size(px(32.))
+                            .size(px(28.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21244,12 +21244,12 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.paste_clipboard_image(cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Scissors, 24., wecom_theme::icon(), 1.5)),
+                            .child(icons::icon_with_stroke(icons::Icon::Scissors, 22., wecom_theme::icon(), 1.2)),
                     )
                     .child(
                         div()
                             .id("wechat-tool-mic")
-                            .size(px(32.))
+                            .size(px(28.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21259,7 +21259,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toast(i18n::t("语音暂未接入"), cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Mic, 24., wecom_theme::icon(), 1.5)),
+                            .child(icons::icon_with_stroke(icons::Icon::Mic, 22., wecom_theme::icon(), 1.2)),
                     )
                     .child(div().flex_1())
                     .child(
@@ -21267,8 +21267,8 @@ impl PilotApp {
                             .id("wechat-send")
                             // 右缘与文字 12 视觉边距对齐（工具条 8 + 4）。
                             .mr(px(4.))
-                            .h(px(30.))
-                            .px(px(18.))
+                            .h(px(26.))
+                            .px(px(14.))
                             .rounded(px(4.))
                             .bg(send_bg)
                             .flex()
