@@ -20467,10 +20467,10 @@ impl PilotApp {
                         }))
                         .child(menu_icons::menu_icon(
                             settings_page_icon(index),
-                            active,
+                            false,
                             menu_icons::SETTINGS_SIZE,
                             if active {
-                                gpui::rgba(0xffffff)
+                                gpui::rgb(0xffffff)
                             } else if secondary {
                                 wecom_theme::time_label()
                             } else {
@@ -20486,7 +20486,7 @@ impl PilotApp {
                                 .text_size(px(13.))
                                 .line_height(px(18.))
                                 .text_color(if active {
-                                    gpui::rgba(0xffffff)
+                                    gpui::rgb(0xffffff)
                                 } else if secondary {
                                     wecom_theme::time_label()
                                 } else {
@@ -20513,7 +20513,9 @@ impl PilotApp {
                                 .child(icons::icon(
                                     icons::Icon::Pin,
                                     13.,
-                                    if pinned {
+                                    if active {
+                                        gpui::rgb(0xffffff)
+                                    } else if pinned {
                                         wecom_theme::send_enabled()
                                     } else {
                                         wecom_theme::panel_text()
