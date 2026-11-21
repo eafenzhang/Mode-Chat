@@ -49,6 +49,7 @@ pub enum Icon {
     Building,
     Smile,
     Shield,
+    Terminal,
     Folder,
     Scissors,
     Mic,
@@ -70,7 +71,7 @@ pub enum Icon {
 impl Icon {
     /// 全部图标（测试与清单用；顺序与 `svg()` 无关）。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const ALL: [Icon; 51] = [
+    pub const ALL: [Icon; 52] = [
         Icon::Search,
         Icon::Plus,
         Icon::Ellipsis,
@@ -106,6 +107,7 @@ impl Icon {
         Icon::Building,
         Icon::Smile,
         Icon::Shield,
+        Icon::Terminal,
         Icon::Folder,
         Icon::Scissors,
         Icon::Mic,
@@ -162,6 +164,7 @@ impl Icon {
             Icon::Building => include_bytes!("../assets/icons/building.svg"),
             Icon::Smile => include_bytes!("../assets/icons/smile.svg"),
             Icon::Shield => include_bytes!("../assets/icons/shield.svg"),
+            Icon::Terminal => include_bytes!("../assets/icons/square-terminal.svg"),
             Icon::Folder => include_bytes!("../assets/icons/folder.svg"),
             Icon::Scissors => include_bytes!("../assets/icons/scissors.svg"),
             Icon::Mic => include_bytes!("../assets/icons/mic.svg"),
@@ -228,6 +231,6 @@ mod tests {
 
     #[test]
     fn icon_set_matches_design_inventory() {
-        assert_eq!(Icon::ALL.len(), 51);
+        assert_eq!(Icon::ALL.len(), 52);
     }
 }

@@ -694,6 +694,8 @@ struct Message {
     streaming: bool,
     /// 消息时间（本地毫秒时间戳；历史来自会话库，实时消息取当前时间）。0 = 未知。
     at: u64,
+    /// 思考过程耗时（毫秒；仅实时回合有）。
+    duration_ms: Option<u64>,
     /// 群聊成员名（群聊助手消息；私聊 None）。
     member: Option<String>,
     /// 用户消息附带的附件文件名。
@@ -725,6 +727,7 @@ impl Message {
             text: text.into(),
             streaming,
             at: time::now_ms(),
+            duration_ms: None,
             member,
             attachments: Vec::new(),
             attachment_meta: Vec::new(),
@@ -749,6 +752,7 @@ impl Message {
             text: String::new(),
             streaming: false,
             at: time::now_ms(),
+            duration_ms: None,
             member: None,
             attachments: Vec::new(),
             attachment_meta: Vec::new(),
@@ -772,6 +776,8 @@ struct ChatState {
     /// 本轮思考过程下标：成员名（私聊为空串）→ messages 下标。
     reasoning_index: HashMap<String, usize>,
     streaming: bool,
+    /// 本轮开始时间（工作中行的计时）。
+    turn_started: Option<u64>,
     ready: bool,
     status: String,
     error: bool,
@@ -2399,6 +2405,8 @@ impl ChatState {
             }
             if done {
                 message.streaming = false;
+                message.duration_ms =
+                    Some(time::now_ms().saturating_sub(message.at));
                 self.reasoning_index.remove(&key);
             }
             return;
@@ -2430,6 +2438,8 @@ impl ChatState {
             // 只有一个空段：直接结束，不留索引。
             if let Some(message) = self.messages.get_mut(index) {
                 message.streaming = false;
+                message.duration_ms =
+                    Some(time::now_ms().saturating_sub(message.at));
             }
         } else {
             self.reasoning_index.insert(key, index);
@@ -2442,6 +2452,8 @@ impl ChatState {
             && let Some(message) = self.messages.get_mut(index)
         {
             message.streaming = false;
+            message.duration_ms =
+                Some(time::now_ms().saturating_sub(message.at));
         }
     }
 
@@ -2882,6 +2894,8 @@ struct PilotApp {
     im_qr_page: Option<String>,
     /// 设置 → IM 的状态轮询任务是否已启动（只启动一次）。
     im_tick_started: bool,
+    /// 工作中计时行的一次性 1s ticker。
+    working_tick_started: bool,
     /// 设置 → IM：机器人心跳间隔（分钟，0 关闭）。
     im_heartbeat_input: Entity<SimpleInput>,
     /// 连接器密钥输入框（按密钥名预建，目录里的 `secrets` 固定）。
@@ -3178,6 +3192,7 @@ enum WecomRow {
         member: Option<String>,
         streaming: bool,
         expanded: bool,
+        duration_ms: Option<u64>,
     },
     Tool(Message),
 }
@@ -3299,6 +3314,7 @@ impl PilotApp {
             im_create: None,
             im_qr_page: None,
             im_tick_started: false,
+            working_tick_started: false,
             im_heartbeat_input: cx.new(|cx| {
                 SimpleInput::new(i18n::t("分钟，0 关闭"), theme::ink_tertiary, cx)
             }),
@@ -4490,6 +4506,7 @@ impl PilotApp {
                     }
                     SessionEvent::UserEcho(text) => {
                         chat.push_user(text);
+                        chat.turn_started = Some(time::now_ms());
                         chat.status = i18n::t("等待回复…").to_string();
                         chat.error = false;
                     }
@@ -4497,6 +4514,9 @@ impl PilotApp {
                         match &member {
                             Some(name) => chat.push_member_delta(name, &text),
                             None => chat.push_delta(&text),
+                        }
+                        if chat.turn_started.is_none() {
+                            chat.turn_started = Some(time::now_ms());
                         }
                         chat.status = i18n::t("生成中…").to_string();
                         chat.error = false;
@@ -4508,6 +4528,9 @@ impl PilotApp {
                         reset,
                     } => {
                         chat.push_reasoning(member.as_deref(), &text, done, reset);
+                        if chat.turn_started.is_none() {
+                            chat.turn_started = Some(time::now_ms());
+                        }
                         if !done {
                             chat.status = i18n::t("思考中…").to_string();
                         }
@@ -4534,6 +4557,7 @@ impl PilotApp {
                         }
                         chat.ready = true;
                         if !chat.streaming {
+                            chat.turn_started = None;
                             chat.status = i18n::t("就绪").to_string();
                         }
                         chat.error = false;
@@ -4679,6 +4703,9 @@ impl PilotApp {
                         match &member {
                             Some(name) => chat.finish_member(name),
                             None => chat.finish(),
+                        }
+                        if member.is_none() {
+                            chat.turn_started = None;
                         }
                         chat.status = message.clone();
                         chat.error = true;
@@ -5074,6 +5101,7 @@ impl PilotApp {
         if let Some(chat) = self.chats.get_mut(&key) {
             // Stop 会把挂起的权限/表单在 ACP 侧一并 cancel；卡片立即收走。
             chat.elicitations.clear();
+            chat.turn_started = None;
         }
         // 群任务台账：停止本轮所有开放任务，避免列表停在 Running。
         if let Some(Selection::Group(index)) = self.selection
@@ -10175,6 +10203,30 @@ impl PilotApp {
     }
 
     /// IM 设置页停在页面上时每 800ms 重绘一次（运行态/扫码状态由后台任务更新）。
+    /// 工作中行每秒刷新一次（只在有会话 streaming 时 notify）。
+    fn ensure_working_ticker(&mut self, cx: &mut Context<Self>) {
+        if self.working_tick_started {
+            return;
+        }
+        self.working_tick_started = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(1000))
+                    .await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.chats.values().any(|chat| chat.turn_started.is_some()) {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn ensure_im_ticker(&mut self, cx: &mut Context<Self>) {
         if self.im_tick_started {
             return;
@@ -17876,11 +17928,12 @@ fn wecom_row_el(
             member,
             streaming,
             expanded,
+            duration_ms,
         } => {
             let key = key.clone();
             let expanded = *expanded;
             let streaming = *streaming;
-            let chars = text.chars().count();
+            let duration_ms = *duration_ms;
             let toggle_key = key.clone();
             let weak = weak.clone();
             let mut header = div()
@@ -17902,12 +17955,8 @@ fn wecom_row_el(
                     });
                 })
                 .child(icons::icon(
-                    if expanded {
-                        icons::Icon::ChevronLeft
-                    } else {
-                        icons::Icon::ChevronRight
-                    },
-                    12.,
+                    icons::Icon::Brain,
+                    14.,
                     wecom_theme::icon(),
                 ));
             if is_group && let Some(name) = member {
@@ -17919,18 +17968,32 @@ fn wecom_row_el(
                         .child(SharedString::from(name.clone())),
                 );
             }
-            header = header
-                .child(
+            header = header.child(
+                div()
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(wecom_theme::chat_title())
+                    .child(if streaming {
+                        i18n::t("思考中…").to_string()
+                    } else {
+                        i18n::t("思考").to_string()
+                    }),
+            );
+            if let Some(ms) = duration_ms {
+                let text = if i18n::is_en() {
+                    format!("for {}", elapsed_label(ms))
+                } else {
+                    format!("持续了 {}", elapsed_label(ms))
+                };
+                header = header.child(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)
                         .text_size(px(11.))
-                        .text_color(wecom_theme::list_preview())
-                        .child(if streaming {
-                            i18n::t("思考中…").to_string()
-                        } else {
-                            if i18n::is_en() { format!("Thinking · {}", i18n::n(chars, "char", "chars")) } else { format!("思考过程 · {chars} 字") }
-                        }),
+                        .text_color(wecom_theme::time_label())
+                        .child(SharedString::from(text)),
                 );
+            }
             let mut block = div()
                 .w_full()
                 .flex()
@@ -18450,6 +18513,7 @@ impl Default for ChatState {
             member_stream: HashMap::new(),
             reasoning_index: HashMap::new(),
             streaming: false,
+            turn_started: None,
             ready: false,
             status: String::new(),
             error: false,
@@ -20068,11 +20132,27 @@ fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
         .into_any_element()
 }
 
+/// 时长文案：秒 / 分秒（与 WebView 的「2 分 20 秒」一致）。
+fn elapsed_label(ms: u64) -> String {
+    let secs = ms / 1000;
+    if i18n::is_en() {
+        if secs < 60 {
+            format!("{secs}s")
+        } else {
+            format!("{}m {}s", secs / 60, secs % 60)
+        }
+    } else if secs < 60 {
+        format!("{secs} 秒")
+    } else {
+        format!("{} 分 {} 秒", secs / 60, secs % 60)
+    }
+}
+
 fn tool_state_label(state: &str) -> &'static str {
     match state {
         "pending" => i18n::t("排队中"),
-        "running" => i18n::t("运行中"),
-        "done" => i18n::t("完成"),
+        "running" => i18n::t("执行中"),
+        "done" => i18n::t("已执行"),
         "error" => i18n::t("失败"),
         _ => "",
     }
@@ -20094,18 +20174,17 @@ fn wecom_tool_card(
     weak: &gpui::WeakEntity<PilotApp>,
 ) -> impl IntoElement {
     let state_label = tool_state_label(&message.tool_state);
-    let state_color = if message.tool_state == "error" {
-        wecom_theme::nav_badge_bg()
-    } else {
-        wecom_theme::chip_text()
+    let (status_color, icon_color) = match message.tool_state.as_str() {
+        "running" => (wecom_theme::send_enabled(), wecom_theme::send_enabled()),
+        "error" => (wecom_theme::nav_badge_bg(), wecom_theme::nav_badge_bg()),
+        "done" => (wecom_theme::chat_title(), wecom_theme::chip_text()),
+        _ => (wecom_theme::time_label(), wecom_theme::chip_text()),
     };
-    let (accent, glyph) = if message.tool_state == "error" {
-        (wecom_theme::nav_badge_bg(), icons::Icon::X)
+    let title = if message.tool_title.trim().is_empty() {
+        message.tool_name.trim()
     } else {
-        (wecom_theme::chip_text(), icons::Icon::Settings)
+        message.tool_title.trim()
     };
-    let preview = message.tool_title.trim();
-    let show_preview = !preview.is_empty() && preview != message.tool_name.trim();
     let has_detail = !message.tool_detail.trim().is_empty();
     let call_id = message.tool_call_id.clone();
     let toggle_id = SharedString::from(format!("tool-toggle-{call_id}"));
@@ -20116,6 +20195,8 @@ fn wecom_tool_card(
         .flex()
         .items_center()
         .gap(px(6.))
+        .px(px(2.))
+        .py(px(2.))
         .when(has_detail, |el| {
             el.cursor_pointer()
                 .hover(|style| style.opacity(0.9))
@@ -20129,55 +20210,41 @@ fn wecom_tool_card(
                     });
                 })
         })
-            .child(icons::icon(glyph, 12., accent))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .font_family(wecom_theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .line_height(px(16.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(wecom_theme::chip_text())
-                    .child(SharedString::from(message.tool_name.clone())),
+        .child(icons::icon(icons::Icon::Terminal, 14., icon_color))
+        .children((!state_label.is_empty()).then(|| {
+            div()
+                .flex_shrink_0()
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(status_color)
+                .child(i18n::t(state_label))
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .truncate()
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(wecom_theme::list_preview())
+                .child(SharedString::from(title.to_string())),
+        )
+        .children(has_detail.then(|| {
+            icons::icon(
+                if expanded {
+                    icons::Icon::ChevronLeft
+                } else {
+                    icons::Icon::ChevronRight
+                },
+                12.,
+                wecom_theme::icon(),
             )
-            .children(show_preview.then(|| {
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .truncate()
-                    .font_family(theme::FONT_MONO)
-                    .text_size(px(11.))
-                    .line_height(px(16.))
-                    .text_color(wecom_theme::chip_text())
-                    .child(SharedString::from(preview.to_string()))
-            }))
-            .children((!state_label.is_empty()).then(|| {
-                div()
-                    .flex_shrink_0()
-                    .font_family(wecom_theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .line_height(px(16.))
-                    .text_color(state_color)
-                    .child(i18n::t(state_label))
-            }))
-            .children(has_detail.then(|| {
-                icons::icon(
-                    if expanded {
-                        icons::Icon::ChevronLeft
-                    } else {
-                        icons::Icon::ChevronRight
-                    },
-                    12.,
-                    wecom_theme::icon(),
-                )
-            }));
+        }));
     div().w_full().flex().justify_start().child(
         div()
             .max_w(px(560.))
-            .rounded(px(6.))
-            .bg(wecom_theme::chip_bg())
-            .px(px(10.))
-            .py(px(5.))
             .flex()
             .flex_col()
             .gap(px(4.))
@@ -20185,7 +20252,7 @@ fn wecom_tool_card(
             .children((expanded && has_detail).then(|| {
                 div()
                     .w_full()
-                    .rounded(px(4.))
+                    .rounded(px(6.))
                     .bg(wecom_theme::panel_card_bg())
                     .px(px(8.))
                     .py(px(6.))
@@ -21355,6 +21422,7 @@ impl PilotApp {
                     ),
             )
             .child(self.wecom_transcript(window, cx))
+            .children(self.wecom_working_row(cx))
             .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
@@ -21450,6 +21518,7 @@ impl PilotApp {
                     text: message.text.clone(),
                     member: message.member.clone(),
                     streaming: message.streaming,
+                    duration_ms: message.duration_ms,
                 });
                 continue;
             }
@@ -21654,6 +21723,65 @@ impl PilotApp {
             container = container.child(nav);
         }
         container.into_any_element()
+    }
+
+    /// 转录底部的「工作中 N 秒」行（streaming 时显示，1s ticker 刷新）。
+    fn wecom_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let (started, waiting) = {
+            let chat = self.chats.get(&key)?;
+            (
+                chat.turn_started,
+                !chat.permissions.is_empty()
+                    || !chat.questions.is_empty()
+                    || !chat.elicitations.is_empty(),
+            )
+        };
+        if waiting {
+            return None;
+        }
+        let started = started?;
+        self.ensure_working_ticker(cx);
+        let elapsed = time::now_ms().saturating_sub(started);
+        let spinner = gpui::svg()
+            .data(include_bytes!("../assets/icons/spinner.svg"))
+            .size(px(14.))
+            .text_color(wecom_theme::time_label())
+            .with_animation(
+                "wecom-working-spin",
+                gpui::Animation::new(Duration::from_millis(1200)).repeat(),
+                |svg, delta| {
+                    svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                        delta * std::f32::consts::TAU,
+                    )))
+                },
+            );
+        Some(
+            div()
+                .w_full()
+                .px(px(14.))
+                .pb(px(4.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(spinner)
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(wecom_theme::chat_title())
+                        .child(i18n::t("工作中")),
+                )
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wecom_theme::time_label())
+                        .child(SharedString::from(elapsed_label(elapsed))),
+                )
+                .into_any_element(),
+        )
     }
 
     fn wecom_composer(
