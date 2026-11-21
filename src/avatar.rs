@@ -9,8 +9,8 @@
 use std::sync::{Arc, OnceLock};
 
 use gpui::{
-    div, hsla, img, linear_color_stop, linear_gradient, px, svg, BoxShadow, Hsla, Image,
-    ImageFormat, IntoElement, ParentElement, Rgba, Styled,
+    div, hsla, img, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
+    Image, ImageFormat, IntoElement, ParentElement, Rgba, Styled,
 };
 
 use crate::theme;
@@ -87,8 +87,91 @@ fn shell(hue: f32, width: f32, height: f32, radius: f32) -> gpui::Div {
         .justify_center()
 }
 
-/// Bot 头像。
-pub fn bot_avatar(id: &str, size: f32) -> impl IntoElement {
+/// 自定义图标头像：近黑圆角底 + 染色面罩机器人（与 App 图标同族）。
+pub fn bot_icon_tile(icon: &str, color: &str, size: f32, radius: f32) -> AnyElement {
+    bot_icon_tile_rect(icon, color, size, size, radius)
+}
+
+/// 任意宽高版本（群头像单元格）：近黑底板 + 头部/面罩/眼睛/嘴分层拼装。
+pub fn bot_icon_tile_rect(
+    icon: &str,
+    color: &str,
+    width: f32,
+    height: f32,
+    radius: f32,
+) -> AnyElement {
+    let size = width.min(height);
+    // 设计稿 640×640（viewBox 192..832 / 152..792），按边长缩放。
+    let k = size / 640.0;
+    let tint = crate::bot_icon::parse_color(color);
+    let dark = gpui::rgb(0x0a0b0c);
+    let mut glyph = div()
+        .relative()
+        .size(px(size))
+        .child(
+            svg()
+                .data(crate::bot_icon::head_svg())
+                .size(px(size))
+                .text_color(tint),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(120. * k))
+                .top(px(286. * k))
+                .w(px(400. * k))
+                .h(px(172. * k))
+                .rounded(px(86. * k))
+                .bg(dark)
+                .flex()
+                .items_center()
+                .justify_center()
+                // 眼睛放进面罩内部，保证在面罩底色之上。
+                .child(
+                    svg()
+                        .data(crate::bot_icon::eyes_svg(icon))
+                        .w(px(400. * k))
+                        .h(px(172. * k))
+                        .text_color(tint),
+                ),
+        );
+    if let Some(mouth) = crate::bot_icon::mouth_svg(icon) {
+        glyph = glyph.child(
+            svg()
+                .data(mouth)
+                .absolute()
+                .left(px(248. * k))
+                .top(px(468. * k))
+                .w(px(144. * k))
+                .h(px(90. * k))
+                .text_color(dark),
+        );
+    }
+    div()
+        .w(px(width))
+        .h(px(height))
+        .flex_shrink_0()
+        .rounded(px(radius))
+        .bg(gpui::rgb(0x111214))
+        .border_1()
+        .border_color(hsla(0., 0., 1., 0.08))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(glyph)
+        .into_any_element()
+}
+
+/// Bot 头像：有自定义表情/颜色时用图标卡，否则沿用 id 色相头像。
+pub fn bot_avatar(id: &str, size: f32) -> AnyElement {
+    if let Some(appearance) = crate::bot_icon::get(id) {
+        return bot_icon_tile(
+            &appearance.icon,
+            &appearance.color,
+            size,
+            (size * 0.24).max(4.),
+        );
+    }
     let hue = avatar_hue(id);
     let fg = if theme::is_light() {
         deg(hue, 0.52, 0.30, 1.)
@@ -96,12 +179,14 @@ pub fn bot_avatar(id: &str, size: f32) -> impl IntoElement {
         deg(hue, 0.65, 0.88, 1.)
     };
     let glyph = (size * 0.52).max(10.0);
-    shell(hue, size, size, size / 2.0).child(
-        svg()
-            .data(bot_face(avatar_variant(id)))
-            .size(px(glyph))
-            .text_color(fg),
-    )
+    shell(hue, size, size, size / 2.0)
+        .child(
+            svg()
+                .data(bot_face(avatar_variant(id)))
+                .size(px(glyph))
+                .text_color(fg),
+        )
+        .into_any_element()
 }
 
 /// 本机用户头像：默认应用图标，圆角与 Bot 方形头像一致。
@@ -124,7 +209,16 @@ pub fn app_avatar(size: f32, radius: f32) -> impl IntoElement {
 }
 
 /// 任意宽高的 Bot 头像（群头像拼图单元格）。
-pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> impl IntoElement {
+pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> AnyElement {
+    if let Some(appearance) = crate::bot_icon::get(id) {
+        return bot_icon_tile_rect(
+            &appearance.icon,
+            &appearance.color,
+            width,
+            height,
+            radius,
+        );
+    }
     let hue = avatar_hue(id);
     let fg = if theme::is_light() {
         deg(hue, 0.52, 0.30, 1.)
@@ -132,12 +226,14 @@ pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> impl I
         deg(hue, 0.65, 0.88, 1.)
     };
     let glyph = (width.min(height) * 0.52).max(8.0);
-    shell(hue, width, height, radius).child(
-        svg()
-            .data(bot_face(avatar_variant(id)))
-            .size(px(glyph))
-            .text_color(fg),
-    )
+    shell(hue, width, height, radius)
+        .child(
+            svg()
+                .data(bot_face(avatar_variant(id)))
+                .size(px(glyph))
+                .text_color(fg),
+        )
+        .into_any_element()
 }
 
 /// 频道头像（同一套色相，前景 `#`）。

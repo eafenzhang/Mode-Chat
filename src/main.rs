@@ -17,6 +17,7 @@ mod acp;
 mod avatar;
 mod autostart;
 mod backend;
+mod bot_icon;
 mod capabilities;
 mod connectors;
 mod data;
@@ -2554,6 +2555,9 @@ struct BotFormState {
     role: Entity<SimpleInput>,
     directory: Entity<SimpleInput>,
     identity_on: bool,
+    /// 新建时的图标表情（k1..k9）与染色；编辑旧 Bot 不展示。
+    icon: String,
+    color: String,
     error: Option<String>,
 }
 
@@ -2566,6 +2570,107 @@ impl Render for BotFormState {
             .child(dialog_field("bot-name", i18n::t("名字"), &self.name))
             .child(dialog_field("bot-role", i18n::t("角色"), &self.role))
             .child(dialog_field("bot-dir", i18n::t("工作目录"), &self.directory));
+        if self.editing_id.is_none() {
+            let transparent = gpui::rgba(0x00000000);
+            let mut icon_tiles: Vec<gpui::AnyElement> = Vec::new();
+            for (key, _label) in bot_icon::ICONS {
+                let selected = self.icon == key;
+                icon_tiles.push(
+                    div()
+                        .id(SharedString::from(format!("bot-icon-{key}")))
+                        .size(px(38.))
+                        .rounded(px(10.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .border_2()
+                        .border_color(if selected {
+                            theme::accent()
+                        } else {
+                            transparent
+                        })
+                        .hover(|style| style.bg(theme::hover()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.icon = key.to_string();
+                            this.error = None;
+                            cx.notify();
+                        }))
+                        .child(avatar::bot_icon_tile(key, &self.color, 33., 8.))
+                        .into_any_element(),
+                );
+            }
+            let mut color_swatches: Vec<gpui::AnyElement> = Vec::new();
+            for (hex, label) in bot_icon::COLORS {
+                let selected = self.color.eq_ignore_ascii_case(hex);
+                color_swatches.push(
+                    div()
+                        .id(SharedString::from(format!("bot-color-{label}")))
+                        .size(px(24.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .border_2()
+                        .border_color(if selected { theme::ink() } else { transparent })
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.color = hex.to_string();
+                            this.error = None;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .size(px(18.))
+                                .rounded_full()
+                                .bg(bot_icon::parse_color(hex)),
+                        )
+                        .into_any_element(),
+                );
+            }
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .text_color(theme::ink_tertiary())
+                                    .child(SharedString::from(format!(
+                                        "{} · {}",
+                                        i18n::t("图标"),
+                                        bot_icon::icon_label(&self.icon)
+                                    ))),
+                            )
+                            .child(avatar::bot_icon_tile(&self.icon, &self.color, 56., 13.)),
+                    )
+                    .child(div().flex().gap(px(5.)).children(icon_tiles))
+                    .child(
+                        div()
+                            .mt(px(2.))
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .text_color(theme::ink_tertiary())
+                            .child(SharedString::from(format!(
+                                "{} · {}",
+                                i18n::t("图标颜色"),
+                                bot_icon::COLORS
+                                    .iter()
+                                    .find(|(hex, _)| self.color.eq_ignore_ascii_case(hex))
+                                    .map(|(_, label)| *label)
+                                    .unwrap_or("绿")
+                            ))),
+                    )
+                    .child(div().flex().gap(px(8.)).children(color_swatches)),
+            );
+        }
         if self.editing_id.is_some() {
             body = body.child(
                 div()
@@ -3080,6 +3185,7 @@ enum FooterMenuAction {
 impl PilotApp {
     fn new(cx: &mut Context<Self>) -> Self {
         i18n::set_lang(load_lang_pref());
+        bot_icon::load();
         let accent = load_accent_pref();
         theme::set_accent(accent);
         let motion = load_motion_pref();
@@ -3984,12 +4090,24 @@ impl PilotApp {
         name.update(cx, |input, cx| input.set_content(name_text, cx));
         role.update(cx, |input, cx| input.set_content(role_text, cx));
         directory.update(cx, |input, cx| input.set_content(directory_text, cx));
+        let (appearance_icon, appearance_color) = editing_id
+            .as_deref()
+            .and_then(bot_icon::get)
+            .map(|appearance| (appearance.icon, appearance.color))
+            .unwrap_or_else(|| {
+                (
+                    bot_icon::DEFAULT_ICON.to_string(),
+                    bot_icon::DEFAULT_COLOR.to_string(),
+                )
+            });
         let form = cx.new(|_| BotFormState {
             editing_id,
             name,
             role,
             directory,
             identity_on,
+            icon: appearance_icon,
+            color: appearance_color,
             error: None,
         });
         let handle = form.read(cx).name.read(cx).focus_handle(cx);
@@ -4011,7 +4129,7 @@ impl PilotApp {
                 .show_cancel(true)
                 .content(move |content, _, _| content.child(form_content.clone()))
                 .on_ok(move |_, _, cx| {
-                    let (name, role, directory, identity_on, editing_id) = {
+                    let (name, role, directory, identity_on, editing_id, icon, color) = {
                         let form = form_ok.read(cx);
                         (
                             form.name.read(cx).content().trim().to_string(),
@@ -4019,6 +4137,8 @@ impl PilotApp {
                             form.directory.read(cx).content().trim().to_string(),
                             form.identity_on,
                             form.editing_id.clone(),
+                            form.icon.clone(),
+                            form.color.clone(),
                         )
                     };
                     let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
@@ -4042,6 +4162,13 @@ impl PilotApp {
                         };
                         match result {
                             Ok(bot) => {
+                                // 新建时落图标/颜色（编辑旧 Bot 不动外观）。
+                                if editing_id.is_none()
+                                    && let Err(message) =
+                                        bot_icon::set(&bot.id, &icon, &color)
+                                {
+                                    this.toast(message, cx);
+                                }
                                 this.roster = Roster::load();
                                 let index = this
                                     .roster
@@ -11933,6 +12060,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         self.sessions.remove_slots_for_bot(bot_id);
         self.sessions.save();
         self.chats.remove(&bot_key(bot_id));
+        bot_icon::remove(bot_id);
         self.roster = Roster::load();
         let still_there = matches!(
             self.selection,
@@ -12172,8 +12300,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 self.reselect_after_roster_change(None, None);
             }
             DetailMenuAction::DuplicateBot(id) => {
+                let appearance = bot_icon::get(&id);
                 match data::duplicate_bot(&id) {
                     Ok(bot) => {
+                        if let Some(appearance) = appearance {
+                            let _ = bot_icon::set(&bot.id, &appearance.icon, &appearance.color);
+                        }
                         self.roster = Roster::load();
                         if let Some(index) = self
                             .roster
@@ -20043,7 +20175,10 @@ impl PilotApp {
     }
 
     /// 企业微信的彩色首字方块头像（10px 圆角）。
-    fn wecom_avatar(id: &str, name: &str, size: f32) -> impl IntoElement {
+    fn wecom_avatar(id: &str, name: &str, size: f32) -> gpui::AnyElement {
+        if let Some(appearance) = bot_icon::get(id) {
+            return avatar::bot_icon_tile(&appearance.icon, &appearance.color, size, 6.);
+        }
         div()
             .size(px(size))
             .flex_shrink_0()
@@ -20060,6 +20195,7 @@ impl PilotApp {
                     .text_color(wecom_theme::nav_text_active())
                     .child(name.chars().next().unwrap_or('B').to_string()),
             )
+            .into_any_element()
     }
 
     /// 微信群头像：灰白底 + 最多 9 个成员头像，按人数自适应布局。
