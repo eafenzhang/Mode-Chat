@@ -1756,7 +1756,6 @@ impl Render for GroupTasksState {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .when(task.parent_task_id.is_some(), |el| el.ml(px(14.)))
                     .child(
                         div()
                             .flex()
