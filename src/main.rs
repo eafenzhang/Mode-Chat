@@ -3356,7 +3356,7 @@ impl PilotApp {
     }
 
     /// 频道 composer 上方的任务条：摘要常驻，展开看最近 6 条任务。
-    fn group_task_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn group_task_bar(&self, embedded: bool, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let Some(Selection::Group(index)) = self.selection else {
             return None;
         };
@@ -3400,7 +3400,7 @@ impl PilotApp {
             .id("group-task-bar")
             .h(px(32.))
             .w_full()
-            .px(px(10.))
+            .px(px(if embedded { 12. } else { 10. }))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -3438,16 +3438,19 @@ impl PilotApp {
             ));
         // 与下方输入框同宽：微信 composer 左右各 14；经典 composer px24 + max_w1008。
         let pad = if wechat { 14. } else { 24. };
-        let mut card = div()
-            .w_full()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(border)
-            .bg(bg)
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .child(header);
+        let mut card = div().w_full();
+        card = if embedded {
+            card.border_b_1()
+                .border_color(border)
+                .bg(gpui::rgba(0x00000000))
+        } else {
+            card.rounded(px(8.))
+                .border_1()
+                .border_color(border)
+                .bg(bg)
+                .overflow_hidden()
+        };
+        let mut card = card.flex().flex_col().child(header);
         if expanded {
             let mut list = div()
                 .w_full()
@@ -3470,7 +3473,7 @@ impl PilotApp {
                         .id(SharedString::from(format!("group-task-{}", task.id)))
                         .h(px(28.))
                         .w_full()
-                        .px(px(10.))
+                        .px(px(if embedded { 12. } else { 10. }))
                         .flex()
                         .items_center()
                         .gap(px(8.))
@@ -3529,7 +3532,7 @@ impl PilotApp {
                     .id("group-task-open")
                     .h(px(28.))
                     .w_full()
-                    .px(px(10.))
+                    .px(px(if embedded { 12. } else { 10. }))
                     .flex()
                     .items_center()
                     .justify_end()
@@ -3556,6 +3559,9 @@ impl PilotApp {
                     ),
             );
             card = card.child(list);
+        }
+        if embedded {
+            return Some(card.into_any_element());
         }
         let mut wrap = div().w_full();
         if !wechat {
@@ -7246,9 +7252,7 @@ impl PilotApp {
             .flex()
             .flex_col()
             .gap(px(2.))
-            // 滚动条占右侧 6px；右内边距减掉，视觉左右一致。
-            .pl(px(8.))
-            .pr(px(2.))
+            // 行本身通栏到侧栏边缘，内容缩进放在行内；滚动条占右侧 6px。
             .py(px(16.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             if index == 15 || index == 16 {
@@ -7268,27 +7272,19 @@ impl PilotApp {
             nav = nav.child(
                 div()
                     .id(SharedString::from(format!("settings-nav-{index}")))
-                    .relative()
                     .h(px(32.))
-                    .rounded(px(8.))
-                    .px(px(8.))
+                    // 滚动条槽占 6px：反向抵消，选中/悬浮底色才铺到面板右缘。
+                    .mr(px(-6.))
+                    .pl(px(16.))
+                    .pr(px(16.))
                     .flex()
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
-                    .when(active, |el| {
-                        el.child(
-                            div()
-                                .absolute()
-                                .top(px(0.))
-                                .bottom(px(0.))
-                                .left(px(-8.))
-                                .right(px(-8.))
-                                .bg(theme::accent()),
-                        )
+                    .when(active, |el| el.bg(theme::accent()))
+                    .when(!active, |el| {
+                        el.hover(|style| style.bg(theme::hover()))
                     })
-                    .when(!active, |el| el.bg(rgba(0x00000000)))
-                    .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.settings_tab = index;
                         this.im_create = None;
@@ -19918,7 +19914,7 @@ impl PilotApp {
                             .children(self.question_cards(cx))
                             .children(self.elicitation_cards(cx))
                             .children(self.approval_cards(cx))
-                            .children(self.group_task_bar(cx))
+                            .children(self.group_task_bar(false, cx))
                             .child(self.composer(window, cx)),
                     )
                     .children(self.right_panel_open.then(|| self.right_panel(window, cx))),
@@ -20556,13 +20552,11 @@ impl PilotApp {
             .flex_col()
             .bg(wecom_theme::list_gradient());
         if self.settings_open {
-            // 设置导航同样有 6px 滚动条槽：右内边距减掉，左右留白一致。
+            // 行本身通栏到侧栏边缘，内容缩进放在行内；滚动条占右侧 6px。
             let mut rows = div()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .pl(px(8.))
-                .pr(px(2.));
+                .gap(px(2.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             // 浏览器 / 电脑操控已并入「插件」页，不再单独占菜单项。
             if index == 15 || index == 16 {
@@ -20584,28 +20578,18 @@ impl PilotApp {
                 rows = rows.child(
                     div()
                         .id(SharedString::from(format!("wechat-set-{index}")))
-                        .relative()
                         .h(px(40.))
-                        .w_full()
-                        .px(px(8.))
-                        .rounded(px(8.))
+                        // 滚动条槽占 6px：反向抵消，选中/悬浮底色才铺到面板右缘。
+                        .mr(px(-6.))
+                        .pl(px(16.))
+                        .pr(px(16.))
                         .flex()
                         .items_center()
                         .gap(px(8.))
                         .cursor_pointer()
-                        .when(active, |el| {
-                            el.child(
-                                div()
-                                    .absolute()
-                                    .top(px(0.))
-                                    .bottom(px(0.))
-                                    .left(px(-8.))
-                                    .right(px(-8.))
-                                    .bg(wecom_theme::send_enabled()),
-                            )
-                        })
+                        .when(active, |el| el.bg(wecom_theme::send_enabled()))
                         .when(!active, |el| {
-                            el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            el.hover(|style| style.bg(wecom_theme::list_hover()))
                         })
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.settings_tab = index;
@@ -20979,7 +20963,6 @@ impl PilotApp {
             .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
-            .children(self.group_task_bar(cx))
             .child(self.wecom_composer(window, cx))
     }
 
@@ -21312,6 +21295,7 @@ impl PilotApp {
             .min_h(px(wecom_theme::COMPOSER_HEIGHT))
             .flex_shrink_0()
             .rounded(px(8.))
+            .overflow_hidden()
             .border_1()
             .border_color(wecom_theme::composer_border())
             .bg(wecom_theme::composer_bg())
@@ -21330,6 +21314,7 @@ impl PilotApp {
             .children(self.mention_panel(cx))
             .children(self.attachment_chips(cx))
             .children(self.error_bar(cx))
+            .children(self.group_task_bar(true, cx))
             .child(
                 div()
                     .id("composer-input")

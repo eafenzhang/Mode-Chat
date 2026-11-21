@@ -146,7 +146,7 @@ pub fn star() -> Rgba {
 
 // 会话区
 pub fn chat_bg() -> Rgba {
-    pick(0x1e1e1f, 0xf5f5f5)
+    pick(0x1e1e1f, 0xffffff)
 }
 pub fn chat_title() -> Rgba {
     pick(0xededed, 0x1a1a1a)
@@ -155,7 +155,7 @@ pub fn chat_subtitle() -> Rgba {
     pick(0x8a8a8c, 0x8a8a8a)
 }
 pub fn bubble_in() -> Rgba {
-    pick(0x2f2f30, 0xffffff)
+    pick(0x2f2f30, 0xf2f2f2)
 }
 pub fn bubble_out() -> Rgba {
     // 默认微信气泡（浅色是经典浅绿）；用户选了主题色则直接使用主题色。
