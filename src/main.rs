@@ -3391,7 +3391,8 @@ impl PilotApp {
                 12.,
                 secondary,
             ));
-        let pad = if wechat { 16. } else { 12. };
+        // 与下方输入框同宽：微信 composer 左右各 8；经典 composer px24 + max_w1008。
+        let pad = if wechat { 8. } else { 24. };
         let mut card = div()
             .w_full()
             .rounded(px(8.))
@@ -3511,10 +3512,12 @@ impl PilotApp {
             );
             card = card.child(list);
         }
+        let mut wrap = div().w_full();
+        if !wechat {
+            wrap = wrap.max_w(px(1008.)).mx_auto();
+        }
         Some(
-            div()
-                .w_full()
-                .px(px(pad))
+            wrap.px(px(pad))
                 .pb(px(6.))
                 .child(card)
                 .into_any_element(),
