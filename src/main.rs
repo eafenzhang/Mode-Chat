@@ -83,7 +83,7 @@ use gpui::component::WindowExt as _;
 use gpui::prelude::*;
 use gpui::size;
 use gpui::{
-    div, img, point, px, rgba, App, Bounds, ClipboardItem, Context, Entity, HighlightStyle, Hsla, IntoElement, KeyBinding, MouseButton, Point, Render, Rgba, ScrollHandle,
+    div, img, px, rgba, App, Bounds, ClipboardItem, Context, Entity, HighlightStyle, Hsla, IntoElement, KeyBinding, MouseButton, Point, Render, Rgba, ScrollHandle,
     SharedString, StyledText, TitlebarOptions, Window, WindowBounds, WindowControlArea,
     WindowOptions,
 };
@@ -17485,7 +17485,6 @@ fn wecom_row_el(
                         cx,
                     )),
             )
-            .children((!flat).then(wechat_bubble_tail))
             .into_any_element(),
         WecomRow::Assistant {
             text,
@@ -17529,11 +17528,7 @@ fn wecom_row_el(
                     true,
                     font_size,
                 ));
-            let mut bubble_row = div().flex().items_start();
-            if !flat {
-                bubble_row = bubble_row.child(wechat_bubble_tail_in());
-            }
-            cell = cell.child(bubble_row.child(bubble));
+            cell = cell.child(bubble);
             // 群聊不再显示头像，只保留气泡上方的成员名称。
             div().w_full().flex().items_start().child(cell).into_any_element()
         }
@@ -19679,52 +19674,6 @@ fn tool_state_color(state: &str) -> Rgba {
         "error" => theme::danger(),
         _ => theme::ink_tertiary(),
     }
-}
-
-/// 微信发送气泡右侧的小尾巴（6×12 三角，贴在气泡右上）。
-fn wechat_bubble_tail() -> impl IntoElement {
-    let color = wecom_theme::bubble_out();
-    gpui::canvas(
-        |bounds, _window, _cx| bounds,
-        move |bounds, _bounds2, window, _cx| {
-            let x = f32::from(bounds.origin.x);
-            let y = f32::from(bounds.origin.y);
-            let mut builder = gpui::PathBuilder::fill();
-            builder.move_to(point(px(x), px(y)));
-            builder.line_to(point(px(x + 6.0), px(y + 6.0)));
-            builder.line_to(point(px(x), px(y + 12.0)));
-            builder.close();
-            if let Ok(path) = builder.build() {
-                window.paint_path(path, gpui::Hsla::from(color));
-            }
-        },
-    )
-    .w(px(6.))
-    .h(px(12.))
-    .mt(px(8.))
-}
-
-/// 左侧（收到消息）气泡尾巴，与右侧发送气泡镜像。
-fn wechat_bubble_tail_in() -> impl IntoElement {
-    let color = wecom_theme::bubble_in();
-    gpui::canvas(
-        |bounds, _window, _cx| bounds,
-        move |bounds, _bounds2, window, _cx| {
-            let x = f32::from(bounds.origin.x);
-            let y = f32::from(bounds.origin.y);
-            let mut builder = gpui::PathBuilder::fill();
-            builder.move_to(point(px(x + 6.0), px(y)));
-            builder.line_to(point(px(x), px(y + 6.0)));
-            builder.line_to(point(px(x + 6.0), px(y + 12.0)));
-            builder.close();
-            if let Ok(path) = builder.build() {
-                window.paint_path(path, gpui::Hsla::from(color));
-            }
-        },
-    )
-    .w(px(6.))
-    .h(px(12.))
-    .mt(px(8.))
 }
 
 /// 企微风格的工具卡：单行 chip，不再用满宽预览撑开。
