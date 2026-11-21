@@ -2977,6 +2977,8 @@ struct PilotApp {
     theme_pref: String,
     /// 打开中的设置下拉框（语言/字号/动效/消息布局）。
     settings_dropdown: Option<SettingsDropdownState>,
+    /// 输入框权限菜单（点击位置；None = 关闭）。
+    permission_menu: Option<gpui::Point<gpui::Pixels>>,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 浏览器/电脑控制的使用范围（prefs.json，设置页可改）。
@@ -3384,6 +3386,7 @@ impl PilotApp {
             message_layout,
             theme_pref,
             settings_dropdown: None,
+            permission_menu: None,
             memory_review_enabled: crate::memory_review::enabled(),
             browser_enabled: crate::tool_scope::enabled(crate::tool_scope::Family::Browser),
             computer_enabled: crate::tool_scope::enabled(crate::tool_scope::Family::Computer),
@@ -5930,6 +5933,11 @@ impl PilotApp {
             cx.notify();
             return;
         }
+        if self.permission_menu.is_some() {
+            self.permission_menu = None;
+            cx.notify();
+            return;
+        }
         if self.mention_context(cx).is_some() {
             self.mention_dismissed = true;
             cx.notify();
@@ -8352,6 +8360,183 @@ impl PilotApp {
                             .position(position)
                             .offset(gpui::point(px(0.), px(6.)))
                             .child(menu),
+                    ),
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// 输入框权限菜单：三档审批策略，点选即写回当前 Bot。
+    fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let position = self.permission_menu?;
+        let bot = self.selected_bot()?;
+        let bot_id = bot.id.clone();
+        let current = bot.approval_level.clone();
+        let wechat = wecom_theme::active();
+        let accent = if wechat {
+            wecom_theme::send_enabled()
+        } else {
+            theme::accent()
+        };
+        let title_color = if wechat {
+            wecom_theme::chat_title()
+        } else {
+            theme::ink()
+        };
+        let note_color = if wechat {
+            wecom_theme::list_preview()
+        } else {
+            theme::ink_secondary()
+        };
+        let mut menu = div()
+            .w(px(304.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if wechat {
+                wecom_theme::composer_border()
+            } else {
+                theme::edge()
+            })
+            .bg(if wechat {
+                wecom_theme::panel_card_bg()
+            } else {
+                theme::card()
+            })
+            .shadow(theme::shadow_3())
+            .p(px(6.))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|_this, _event, _window, cx| cx.stop_propagation()),
+            )
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
+                    } else {
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(11.))
+                    .text_color(note_color)
+                    .child(i18n::t("权限策略")),
+            );
+        for (level, label) in [
+            ("ask", i18n::t("每次询问")),
+            ("auto", i18n::t("自动只读")),
+            ("full", i18n::t("工作区自动")),
+        ] {
+            let selected = current == level;
+            let bot_id = bot_id.clone();
+            menu = menu.child(
+                div()
+                    .id(SharedString::from(format!("permission-{level}")))
+                    .rounded(px(6.))
+                    .px(px(8.))
+                    .py(px(7.))
+                    .flex()
+                    .items_start()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .hover(|style| {
+                        style.bg(if wechat {
+                            wecom_theme::nav_item_hover_bg()
+                        } else {
+                            theme::hover()
+                        })
+                    })
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.permission_menu = None;
+                        match data::set_bot_approval_level(&bot_id, level) {
+                            Ok(()) => {
+                                // 权限在会话创建时读取；重置会话后续用同一 resume id。
+                                let key = bot_key(&bot_id);
+                                this.backend.reset_session(&key);
+                                this.chats.remove(&key);
+                                this.roster = Roster::load();
+                                if let Some(index) =
+                                    this.roster.bots.iter().position(|bot| bot.id == bot_id)
+                                {
+                                    this.selection = Some(Selection::Bot(index));
+                                    this.ensure_bot(index);
+                                }
+                                let label = i18n::t(label);
+                                this.toast(
+                                    if i18n::is_en() {
+                                        format!("Permissions: {label}")
+                                    } else {
+                                        format!("权限已切换：{label}")
+                                    },
+                                    cx,
+                                );
+                            }
+                            Err(message) => this.toast(message, cx),
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_center()
+                            .child(if selected {
+                                icons::icon(icons::Icon::Check, 14., accent)
+                                    .into_any_element()
+                            } else {
+                                div().size(px(14.)).into_any_element()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .font_family(if wechat {
+                                        wecom_theme::FONT_FAMILY
+                                    } else {
+                                        theme::FONT_FAMILY
+                                    })
+                                    .text_size(px(13.))
+                                    .line_height(px(18.))
+                                    .text_color(title_color)
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .font_family(if wechat {
+                                        wecom_theme::FONT_FAMILY
+                                    } else {
+                                        theme::FONT_FAMILY
+                                    })
+                                    .text_size(px(11.))
+                                    .line_height(px(15.))
+                                    .text_color(note_color)
+                                    .child(approval_note(level)),
+                            ),
+                    ),
+            );
+        }
+        Some(
+            gpui::deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.permission_menu = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        gpui::anchored().position(position).child(menu),
                     ),
             )
             .into_any_element(),
@@ -21482,6 +21667,7 @@ impl PilotApp {
         let pending_approval = chat
             .is_some_and(|chat| !chat.permissions.is_empty() || !chat.questions.is_empty());
         let has_attachments = chat.is_some_and(|chat| !chat.pending_attachments.is_empty());
+        let permission = self.selected_bot().map(|bot| bot.approval_level.clone());
         let is_bot = self.selected_bot().is_some();
         let is_group = self.selected_group().is_some();
         let send_enabled = (is_bot || is_group)
@@ -21552,9 +21738,14 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(
+                    .children(permission.map(|level| {
+                        let color = if level == "ask" {
+                            wecom_theme::icon()
+                        } else {
+                            wecom_theme::send_enabled()
+                        };
                         div()
-                            .id("wechat-tool-smile")
+                            .id("wechat-tool-permission")
                             .size(px(28.))
                             .rounded(px(4.))
                             .flex()
@@ -21562,14 +21753,24 @@ impl PilotApp {
                             .justify_center()
                             .cursor_pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                let content = this.input.read(cx).content().to_string();
-                                this.input.update(cx, |input, cx| {
-                                    input.set_content(format!("{content}🙂"), cx);
-                                });
+                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
+                                if let gpui::ClickEvent::Mouse(mouse) = event {
+                                    // 菜单向上展开：把偏移算进锚点，避免 anchored offset
+                                    // 只移动视觉、不移动命中框。
+                                    this.permission_menu = Some(gpui::point(
+                                        mouse.up.position.x,
+                                        mouse.up.position.y - px(190.),
+                                    ));
+                                }
+                                cx.notify();
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Smile, 18., wecom_theme::icon(), 1.2)),
-                    )
+                            .child(icons::icon_with_stroke(
+                                icons::Icon::Shield,
+                                18.,
+                                color,
+                                1.2,
+                            ))
+                    }))
                     .child(
                         div()
                             .id("wechat-tool-folder")
@@ -21793,6 +21994,7 @@ impl Render for PilotApp {
             .children(self.image_preview_overlay(cx))
             .children(self.settings_overlay(window, cx))
             .children(self.settings_dropdown_overlay(cx))
+            .children(self.permission_menu_overlay(cx))
             .children(self.footer_menu_overlay(cx))
             .children(self.new_menu_overlay(cx))
             .children(None::<gpui::AnyElement>)
