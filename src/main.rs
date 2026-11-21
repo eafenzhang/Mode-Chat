@@ -9620,6 +9620,157 @@ impl PilotApp {
         body.into_any_element()
     }
 
+    /// 连接器密钥：点「连接/填写密钥」弹出统一对话框，保存后自动启用。
+    fn open_connector_secret_dialog(
+        &mut self,
+        connector_id: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(spec) = connectors_service::CATALOG
+            .iter()
+            .find(|spec| spec.id == connector_id)
+        else {
+            return;
+        };
+        if spec.secrets.is_empty() {
+            return;
+        }
+        let title = if i18n::is_en() {
+            format!("{} · Secrets", spec.name)
+        } else {
+            format!("{} · 密钥", spec.name)
+        };
+        let root = self.roster.data_root.clone();
+        let fields: Vec<(&'static str, &'static str, Entity<SimpleInput>)> = spec
+            .secrets
+            .iter()
+            .filter_map(|secret| {
+                self.connector_secret_inputs
+                    .get(secret.name)
+                    .cloned()
+                    .map(|input| (secret.name, secret.label, input))
+            })
+            .collect();
+        if fields.is_empty() {
+            return;
+        }
+        for (_, _, input) in &fields {
+            input.update(cx, |input, cx| input.clear(window, cx));
+        }
+        let first = fields
+            .first()
+            .map(|(_, _, input)| input.read(cx).focus_handle(cx));
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        let content_fields = fields.clone();
+        let ok_fields = fields.clone();
+        let ok_root = root.clone();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let content_fields = content_fields.clone();
+            let ok_fields = ok_fields.clone();
+            let ok_root = ok_root.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            alert
+                .title(SharedString::from(title.clone()))
+                .width(px(460.))
+                .centered()
+                .ok_text(i18n::t("保存密钥"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| {
+                    let mut body = div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .child(settings_note(i18n::t(
+                            "密钥只写不读，保存后清空输入框。",
+                        )));
+                    for (_, label, input) in &content_fields {
+                        body = body.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(12.))
+                                        .line_height(px(18.))
+                                        .text_color(theme::ink_secondary())
+                                        .child(SharedString::from(*label)),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(32.))
+                                        .rounded(px(8.))
+                                        .border_1()
+                                        .border_color(theme::edge())
+                                        .bg(theme::bg())
+                                        .px(px(10.))
+                                        .flex()
+                                        .items_center()
+                                        .child(input.clone()),
+                                ),
+                        );
+                    }
+                    content.child(body)
+                })
+                .on_ok(move |_, window, cx| {
+                    let mut saved = 0usize;
+                    let mut error = None;
+                    for (name, _, input) in &ok_fields {
+                        let value = input.read(cx).content().trim().to_string();
+                        if value.is_empty() {
+                            continue;
+                        }
+                        match secrets::set(&ok_root, name, &value) {
+                            Ok(_) => {
+                                saved += 1;
+                                input.update(cx, |input, cx| input.clear(window, cx));
+                            }
+                            Err(message) => {
+                                error = Some(message);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(message) = error {
+                        let _ = weak.update(cx, |this, cx| this.toast(message, cx));
+                        return false;
+                    }
+                    if saved == 0 {
+                        let _ =
+                            weak.update(cx, |this, cx| this.toast(i18n::t("没有填写新密钥"), cx));
+                        return false;
+                    }
+                    if let Err(message) = connectors::set_enabled(&ok_root, connector_id, true) {
+                        let _ = weak.update(cx, |this, cx| this.toast(message, cx));
+                        return false;
+                    }
+                    crate::mcp_host::refresh_all();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.toast(
+                            if i18n::is_en() {
+                                format!("Saved {saved} secret(s)")
+                            } else {
+                                format!("已保存 {saved} 个密钥")
+                            },
+                            cx,
+                        );
+                        cx.notify();
+                    });
+                    true
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        if let Some(handle) = first {
+            window.defer(cx, move |window, cx| handle.focus(window, cx));
+        }
+    }
+
     fn settings_page_connectors(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
         let workspace = self
@@ -9738,13 +9889,15 @@ impl PilotApp {
             }
             body = body.child(settings_section(label));
             let mut cards: Vec<gpui::AnyElement> = Vec::new();
-            let mut secret_blocks: Vec<gpui::AnyElement> = Vec::new();
             for spec in specs {
                 let on = state.enabled.iter().any(|id| id == spec.id);
                 let missing = connectors::missing_secrets(spec, &configured);
                 let toggle_id = spec.id.to_string();
                 let toggle_root = data_root.clone();
                 let toggled_on = !on;
+                let spec_id = spec.id;
+                let has_secrets = !spec.secrets.is_empty();
+                let needs_secrets = !missing.is_empty();
                 let action_label = if on {
                     i18n::t("已连接")
                 } else {
@@ -9754,7 +9907,11 @@ impl PilotApp {
                     SharedString::from(format!("connector-toggle-{}", spec.id)),
                     action_label,
                 )
-                .on_click(cx.listener(move |this, _event, _window, cx| {
+                .on_click(cx.listener(move |this, _event, window, cx| {
+                    if has_secrets && needs_secrets && !on {
+                        this.open_connector_secret_dialog(spec_id, window, cx);
+                        return;
+                    }
                     match connectors::set_enabled(&toggle_root, &toggle_id, toggled_on) {
                         Ok(_) => {
                             crate::mcp_host::refresh_all();
@@ -9801,6 +9958,18 @@ impl PilotApp {
                     );
                 }
                 bottom = bottom.child(div().flex_1());
+                if has_secrets {
+                    let secret_id = spec.id;
+                    bottom = bottom.child(
+                        connector_link(
+                            SharedString::from(format!("connector-secret-{}", spec.id)),
+                            i18n::t("填写密钥"),
+                        )
+                        .on_click(cx.listener(move |this, _event, window, cx| {
+                            this.open_connector_secret_dialog(secret_id, window, cx);
+                        })),
+                    );
+                }
                 if let Some(url) = connector_sign_in_url(spec.id) {
                     let url = url.to_string();
                     bottom = bottom.child(
@@ -9904,138 +10073,8 @@ impl PilotApp {
                         .child(bottom)
                         .into_any_element(),
                 );
-                if on && !spec.secrets.is_empty() {
-                    let mut secret_block = div()
-                        .rounded(px(theme::RADIUS_CARD))
-                        .border_1()
-                        .border_color(theme::edge())
-                        .bg(theme::card())
-                        .p(px(12.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(settings_note(i18n::t("密钥只写不读，保存后清空输入框。")));
-                    for secret in spec.secrets {
-                        let saved = configured.iter().any(|name| name == secret.name);
-                        let mut field = div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .w(px(170.))
-                                    .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(11.))
-                                    .text_color(theme::ink_secondary())
-                                    .child(SharedString::from(secret.label)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.))
-                                    .h(px(30.))
-                                    .rounded(px(6.))
-                                    .border_1()
-                                    .border_color(theme::edge())
-                                    .bg(theme::bg())
-                                    .px(px(8.))
-                                    .children(
-                                        self.connector_secret_inputs.get(secret.name).cloned(),
-                                    ),
-                            );
-                        if saved {
-                            field = field.child(
-                                div()
-                                    .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(11.))
-                                    .text_color(theme::success())
-                                    .child(i18n::t("已保存")),
-                            );
-                        }
-                        secret_block = secret_block.child(field);
-                    }
-                    let save_root = data_root.clone();
-                    let save_names: Vec<&'static str> =
-                        spec.secrets.iter().map(|secret| secret.name).collect();
-                    let save_id = spec.id;
-                    secret_block = secret_block.child(
-                        div().flex().justify_end().child(
-                            settings_button(
-                                SharedString::from(format!("connector-save-{save_id}")),
-                                i18n::t("保存密钥"),
-                            )
-                            .on_click(cx.listener(move |this, _event, window, cx| {
-                                let mut saved = 0;
-                                let mut error = None;
-                                for name in &save_names {
-                                    let Some(input) = this.connector_secret_inputs.get(name)
-                                    else {
-                                        continue;
-                                    };
-                                    let value = input.read(cx).content().trim().to_string();
-                                    if value.is_empty() {
-                                        continue;
-                                    }
-                                    match secrets::set(&save_root, name, &value) {
-                                        Ok(_) => {
-                                            saved += 1;
-                                            input.update(cx, |input, cx| {
-                                                input.clear(window, cx)
-                                            });
-                                        }
-                                        Err(message) => {
-                                            error = Some(message);
-                                            break;
-                                        }
-                                    }
-                                }
-                                match error {
-                                    Some(message) => this.toast(message, cx),
-                                    None if saved > 0 => {
-                                        crate::mcp_host::refresh_all();
-                                        this.toast(
-                                            if i18n::is_en() {
-                                                format!(
-                                                    "Saved {}",
-                                                    i18n::n(saved, "secret", "secrets")
-                                                )
-                                            } else {
-                                                format!("已保存 {saved} 个密钥")
-                                            },
-                                            cx,
-                                        )
-                                    }
-                                    None => this.toast(i18n::t("没有填写新密钥"), cx),
-                                }
-                                cx.notify();
-                            })),
-                        ),
-                    );
-                    secret_blocks.push(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(section_label(tri!(
-                                "{} · 密钥",
-                                "{} · Secrets",
-                                spec.name
-                            )))
-                            .child(secret_block)
-                            .into_any_element(),
-                    );
-                }
             }
             body = body.child(div().flex().flex_wrap().gap(px(8.)).children(cards));
-            if !secret_blocks.is_empty() {
-                body = body.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        .children(secret_blocks),
-                );
-            }
         }
         body.into_any_element()
     }
