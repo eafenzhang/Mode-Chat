@@ -7225,6 +7225,9 @@ impl PilotApp {
             .pr(px(2.))
             .py(px(16.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
+            if index == 15 || index == 16 {
+                continue;
+            }
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
             if index == 14 {
@@ -8530,12 +8533,16 @@ impl PilotApp {
     }
 
     /// 插件市场：内嵌引擎暂不提供插件宿主（MCP 桥接另立）。
-    fn settings_page_plugins(&mut self, _cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn settings_page_plugins(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         settings_page_body("插件")
             .child(settings_section(i18n::t("插件")))
             .child(settings_empty(i18n::t(
                 "暂未接入插件宿主；MCP 连接器见「连接器」。",
             )))
+            .child(settings_section(i18n::t("浏览器")))
+            .child(self.settings_page_browser(cx))
+            .child(settings_section(i18n::t("电脑操控")))
+            .child(self.settings_page_computer(cx))
             .into_any_element()
     }
 
@@ -20395,6 +20402,10 @@ impl PilotApp {
                 .pl(px(8.))
                 .pr(px(2.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
+            // 浏览器 / 电脑操控已并入「插件」页，不再单独占菜单项。
+            if index == 15 || index == 16 {
+                continue;
+            }
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
             if index == 13 {
