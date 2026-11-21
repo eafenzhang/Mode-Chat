@@ -7428,29 +7428,6 @@ impl PilotApp {
     }
 
     fn settings_page_general(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let data_root = self.roster.data_root.display().to_string();
-        let env_value = |key: &str, fallback: &str| {
-            std::env::var(key)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| fallback.to_string())
-        };
-        let session_db = env_value(
-            "MODE_SESSION_DB_PATH",
-            i18n::t("默认（未设置 MODE_SESSION_DB_PATH，与主程序同库）"),
-        );
-        let storage_dir = env_value("MODE_STORAGE_DIR", i18n::t("默认（未设置 MODE_STORAGE_DIR）"));
-        let rows: Vec<(&'static str, String)> = vec![
-            ("数据根", data_root.clone()),
-            (
-                "名册（共享）",
-                format!("{}\nteammates.json · groups.json", data_root),
-            ),
-            ("会话库（隔离）", session_db),
-            ("记忆存储（隔离）", storage_dir),
-            ("试点状态文件", state::state_path().display().to_string()),
-        ];
         let mut body = settings_page_body("通用")
             .child(settings_section(i18n::t("外观")));
         if !self.wecom_mode {
@@ -7681,11 +7658,7 @@ impl PilotApp {
                         ),
                     )
                     .into_any_element(),
-            ]))
-            .child(settings_section(i18n::t("数据")));
-        for (label, value) in rows {
-            body = body.child(value_box(value, Some(i18n::t(label))));
-        }
+            ]));
         body.into_any_element()
     }
 
@@ -10927,7 +10900,30 @@ impl PilotApp {
     }
 
     fn settings_page_about(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let body = settings_page_body("关于")
+        let data_root = self.roster.data_root.display().to_string();
+        let env_value = |key: &str, fallback: &str| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| fallback.to_string())
+        };
+        let session_db = env_value(
+            "MODE_SESSION_DB_PATH",
+            i18n::t("默认（未设置 MODE_SESSION_DB_PATH，与主程序同库）"),
+        );
+        let storage_dir = env_value("MODE_STORAGE_DIR", i18n::t("默认（未设置 MODE_STORAGE_DIR）"));
+        let data_rows: Vec<(&'static str, String)> = vec![
+            ("数据根", data_root.clone()),
+            (
+                "名册（共享）",
+                format!("{}\nteammates.json · groups.json", data_root),
+            ),
+            ("会话库（隔离）", session_db),
+            ("记忆存储（隔离）", storage_dir),
+            ("试点状态文件", state::state_path().display().to_string()),
+        ];
+        let mut body = settings_page_body("关于")
             .child(settings_section(i18n::t("版本")))
             .child(settings_group(vec![
                 kv_row(update::current_version(), i18n::t("当前版本")).into_any_element(),
@@ -10945,7 +10941,11 @@ impl PilotApp {
                     .py(px(10.))
                     .child(self.update_section(cx))
                     .into_any_element(),
-            ]));
+            ]))
+            .child(settings_section(i18n::t("数据")));
+        for (label, value) in data_rows {
+            body = body.child(value_box(value, Some(i18n::t(label))));
+        }
         body.into_any_element()
     }
 
