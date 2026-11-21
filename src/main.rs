@@ -2682,6 +2682,10 @@ fn display_session_id(raw: &str) -> String {
 struct ImCreateView {
     provider: bots_service::BotProvider,
     name: Entity<SimpleInput>,
+    heartbeat: Entity<SimpleInput>,
+    free_access: bool,
+    group_activation: bots_service::BotGroupActivation,
+    enabled: bool,
 }
 
 struct PilotApp {
@@ -2741,6 +2745,8 @@ struct PilotApp {
     im_delete: Option<String>,
     /// 设置 → IM：新建机器人子页面（None = 列表/详情）。
     im_create: Option<ImCreateView>,
+    /// 设置 → IM：创建后的扫码绑定子页面（存 bot id）。
+    im_qr_page: Option<String>,
     /// 设置 → IM 的状态轮询任务是否已启动（只启动一次）。
     im_tick_started: bool,
     /// 设置 → IM：机器人心跳间隔（分钟，0 关闭）。
@@ -3151,6 +3157,7 @@ impl PilotApp {
             im_selected: None,
             im_delete: None,
             im_create: None,
+            im_qr_page: None,
             im_tick_started: false,
             im_heartbeat_input: cx.new(|cx| {
                 SimpleInput::new(i18n::t("分钟，0 关闭"), theme::ink_tertiary, cx)
@@ -5777,9 +5784,11 @@ impl PilotApp {
         } else if self.footer_menu_open {
             self.footer_menu_open = false;
             return;
-        } else if self.settings_open && self.im_create.is_some() {
-            // IM 新建子页面：Esc 只返回上级页，不直接关设置。
-            self.im_create = None;
+        } else if self.settings_open && (self.im_create.is_some() || self.im_qr_page.is_some()) {
+            // IM 子页面：Esc 只返回上级页，不直接关设置。
+            if self.im_qr_page.take().is_none() {
+                self.im_create = None;
+            }
             self.settings_focus.focus(window, cx);
         } else if self.settings_open {
             self.settings_open = false;
@@ -7103,8 +7112,43 @@ impl PilotApp {
                                             i18n::t("新建微信机器人")
                                         }
                                         Some(_) => i18n::t("新建企业微信机器人"),
+                                        None if self.im_qr_page.is_some() => {
+                                            i18n::t("扫码绑定")
+                                        }
                                         None => i18n::t(SETTINGS_PAGES[self.settings_tab]),
                                     }),
+                            )
+                            .children(
+                                (self.im_create.is_some() || self.im_qr_page.is_some()).then(|| {
+                                    div()
+                                        .id("im-subpage-back")
+                                        .h(px(28.))
+                                        .px(px(10.))
+                                        .rounded(px(999.))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.))
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(theme::hover()))
+                                        .on_click(cx.listener(
+                                            |this, _event, window, cx| {
+                                                this.close_im_subpage(window, cx);
+                                            },
+                                        ))
+                                        .child(icons::icon(
+                                            icons::Icon::ChevronLeft,
+                                            14.,
+                                            theme::ink_secondary(),
+                                        ))
+                                        .child(
+                                            div()
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(12.))
+                                                .line_height(px(18.))
+                                                .text_color(theme::ink_secondary())
+                                                .child(i18n::t("返回")),
+                                        )
+                                }),
                             )
                     )
                     .child(
@@ -7201,6 +7245,7 @@ impl PilotApp {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.settings_tab = index;
                         this.im_create = None;
+                        this.im_qr_page = None;
                         this.automations_view = None;
                         this.usage_totals_view = None;
                         cx.notify();
@@ -8904,27 +8949,50 @@ impl PilotApp {
         let name = cx.new(|cx| {
             SimpleInput::new(i18n::t("机器人名称（可选）"), theme::ink_tertiary, cx)
         });
+        let heartbeat = cx.new(|cx| SimpleInput::new("0", theme::ink_tertiary, cx));
+        heartbeat.update(cx, |input, cx| input.set_content("0", cx));
         let handle = name.read(cx).focus_handle(cx);
-        self.im_create = Some(ImCreateView { provider, name });
+        self.im_create = Some(ImCreateView {
+            provider,
+            name,
+            heartbeat,
+            free_access: true,
+            group_activation: bots_service::BotGroupActivation::Disabled,
+            enabled: true,
+        });
+        self.im_qr_page = None;
         self.im_delete = None;
         cx.notify();
         window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
-    /// 返回 IM 列表页。
-    fn close_im_create_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.im_create = None;
+    /// 返回上一级：扫码页 → IM 详情；创建页 → IM 列表。
+    fn close_im_subpage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.im_qr_page.take().is_none() {
+            self.im_create = None;
+        }
         self.settings_focus.focus(window, cx);
         cx.notify();
     }
 
-    /// 提交创建：沿用原扫码流程，成功后回到 IM 列表并选中新机器人。
+    /// 提交创建：应用访问/群聊/心跳/启用设置，随后进入扫码绑定页。
     fn submit_im_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(view) = self.im_create.as_ref() else {
             return;
         };
         let provider = view.provider;
         let name = view.name.read(cx).content().trim().to_string();
+        let free_access = view.free_access;
+        let activation = view.group_activation;
+        let enabled = view.enabled;
+        let minutes = view
+            .heartbeat
+            .read(cx)
+            .content()
+            .trim()
+            .parse::<i64>()
+            .unwrap_or(0)
+            .max(0);
         let root = self.roster.data_root.clone();
         let created = if provider == bots_service::BotProvider::Weixin {
             im::create_weixin_bot_named(&root, &name)
@@ -8934,8 +9002,29 @@ impl PilotApp {
         match created {
             Ok(bot) => {
                 let bot_id = bot.id.clone();
+                let mut error = None;
+                if !enabled && let Err(message) = im::set_enabled(&root, &bot_id, false) {
+                    error = Some(message);
+                }
+                if error.is_none() && let Err(message) = im::set_access_mode(&root, &bot_id, free_access) {
+                    error = Some(message);
+                }
+                if error.is_none()
+                    && let Err(message) = im::set_group_activation(&root, &bot_id, activation)
+                {
+                    error = Some(message);
+                }
+                if error.is_none()
+                    && minutes > 0
+                    && let Err(message) = im::set_heartbeat(&root, &bot_id, minutes)
+                {
+                    error = Some(message);
+                }
                 self.im_create = None;
                 self.im_selected = Some(bot_id.clone());
+                self.im_qr_page = Some(bot_id.clone());
+                self.im_heartbeat_input
+                    .update(cx, |input, cx| input.set_content(minutes.to_string(), cx));
                 if let Some(service) = im_service::handle() {
                     if provider == bots_service::BotProvider::Weixin {
                         service.start_weixin_qr(&bot_id);
@@ -8945,11 +9034,9 @@ impl PilotApp {
                     service.refresh_runtime();
                 }
                 self.toast(
-                    if provider == bots_service::BotProvider::Weixin {
-                        i18n::t("已新建微信机器人，请扫码登录")
-                    } else {
-                        i18n::t("已新建企业微信机器人，请扫码创建")
-                    },
+                    error.unwrap_or_else(|| {
+                        i18n::t("已创建机器人，请扫码绑定").to_string()
+                    }),
                     cx,
                 );
                 self.settings_focus.focus(window, cx);
@@ -8959,13 +9046,17 @@ impl PilotApp {
         }
     }
 
-    /// 新建机器人子页面：返回按钮 + 名称输入 + 创建/取消。
+    /// 创建页：包含名称、访问模式、群聊方式、心跳与启用开关。
     fn im_create_page(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(view) = self.im_create.as_ref() else {
             return settings_page_body("").into_any_element();
         };
         let provider = view.provider;
-        let input = view.name.clone();
+        let name = view.name.clone();
+        let heartbeat = view.heartbeat.clone();
+        let free_access = view.free_access;
+        let activation = view.group_activation;
+        let enabled = view.enabled;
         let weixin = provider == bots_service::BotProvider::Weixin;
         let hint = if weixin {
             i18n::t("创建后立即显示登录二维码，用微信扫码即可接通。")
@@ -8973,100 +9064,81 @@ impl PilotApp {
             i18n::t("创建后进入企业微信扫码流程，确认后自动写入 Bot ID 与 Secret。")
         };
         let wechat = wecom_theme::active();
-        let back = div()
-            .id("im-create-back")
-            .h(px(24.))
-            .px(px(4.))
-            .rounded(px(6.))
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .cursor_pointer()
-            .hover(move |style| {
-                style.bg(if wechat {
-                    wecom_theme::nav_item_hover_bg()
-                } else {
-                    theme::hover()
-                })
-            })
-            .on_click(cx.listener(|this, _event, window, cx| {
-                this.close_im_create_page(window, cx);
-            }))
-            .child(icons::icon(
-                icons::Icon::ChevronLeft,
-                14.,
-                if wechat {
-                    wecom_theme::chat_subtitle()
-                } else {
-                    theme::ink_secondary()
-                },
-            ))
-            .child(
-                div()
-                    .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
-                    } else {
-                        theme::FONT_FAMILY
-                    })
-                    .text_size(px(12.))
-                    .line_height(px(18.))
-                    .text_color(if wechat {
-                        wecom_theme::chat_subtitle()
-                    } else {
-                        theme::ink_secondary()
-                    })
-                    .child(i18n::t("返回")),
-            );
         let submit_text = if wechat {
             wecom_theme::bubble_out_text()
         } else {
             theme::accent_ink()
         };
+        let mut access = div().flex().flex_wrap().gap(px(6.));
+        for (value, label) in [(true, i18n::t("自由访问")), (false, i18n::t("白名单"))] {
+            let id = if value {
+                "im-create-access-free"
+            } else {
+                "im-create-access-whitelist"
+            };
+            access = access.child(
+                im_choice_button(id, label, free_access == value).on_click(cx.listener(
+                    move |this, _event, _window, cx| {
+                        if let Some(view) = this.im_create.as_mut() {
+                            view.free_access = value;
+                        }
+                        cx.notify();
+                    },
+                )),
+            );
+        }
+        let mut groups = div().flex().flex_wrap().gap(px(6.));
+        for (value, label) in [
+            (
+                bots_service::BotGroupActivation::Disabled,
+                i18n::t("不响应群聊"),
+            ),
+            (
+                bots_service::BotGroupActivation::Mention,
+                i18n::t("仅 @ 时回复"),
+            ),
+            (
+                bots_service::BotGroupActivation::Always,
+                i18n::t("始终回复"),
+            ),
+        ] {
+            let id = SharedString::from(format!("im-create-group-{label}"));
+            groups = groups.child(
+                im_choice_button(id, label, activation == value).on_click(cx.listener(
+                    move |this, _event, _window, cx| {
+                        if let Some(view) = this.im_create.as_mut() {
+                            view.group_activation = value;
+                        }
+                        cx.notify();
+                    },
+                )),
+            );
+        }
         settings_page_body("")
-            // 只让返回按钮本身可点，不铺满整行。
-            .child(div().flex().child(back))
-            .child(settings_section(i18n::t("机器人名称")))
+            .child(settings_section(i18n::t("基本信息")))
+            .child(settings_group(vec![im_field(i18n::t("名称（可选）"), name)]))
+            .child(settings_section(i18n::t("访问与群聊")))
             .child(settings_group(vec![
-                div()
-                    .p(px(12.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
+                settings_row(i18n::t("访问模式").to_string(), None)
+                    .child(access)
+                    .into_any_element(),
+                settings_row(i18n::t("群聊方式").to_string(), None)
+                    .child(groups)
+                    .into_any_element(),
+            ]))
+            .child(settings_section(i18n::t("运行")))
+            .child(settings_group(vec![
+                im_field(i18n::t("心跳间隔（分钟，0 关闭）"), heartbeat),
+                settings_row(i18n::t("创建后启用").to_string(), None)
                     .child(
-                        div()
-                            .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
-                            } else {
-                                theme::FONT_FAMILY
-                            })
-                            .text_size(px(12.))
-                            .line_height(px(18.))
-                            .text_color(if wechat {
-                                wecom_theme::list_preview()
-                            } else {
-                                theme::ink_secondary()
-                            })
-                            .child(i18n::t("名称（可选）")),
-                    )
-                    .child(
-                        div()
-                            .h(px(32.))
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(if wechat {
-                                wecom_theme::composer_border()
-                            } else {
-                                theme::edge()
-                            })
-                            .bg(if wechat {
-                                wecom_theme::composer_bg()
-                            } else {
-                                theme::bg()
-                            })
-                            .px(px(10.))
-                            .flex()
-                            .items_center()
-                            .child(input),
+                        switch("im-create-enabled", enabled).on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                if let Some(view) = this.im_create.as_mut() {
+                                    view.enabled = !view.enabled;
+                                }
+                                cx.notify();
+                            },
+                        )),
                     )
                     .into_any_element(),
             ]))
@@ -9082,7 +9154,7 @@ impl PilotApp {
                     .child(
                         settings_button("im-create-cancel", i18n::t("取消")).on_click(
                             cx.listener(|this, _event, window, cx| {
-                                this.close_im_create_page(window, cx);
+                                this.close_im_subpage(window, cx);
                             }),
                         ),
                     )
@@ -9119,11 +9191,141 @@ impl PilotApp {
             .into_any_element()
     }
 
+    /// 创建后的扫码绑定页（二维码由后台服务刷新，完成即回详情）。
+    fn im_qr_page_view(&mut self, bot_id: &str, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let wecom = im::bot(&self.roster.data_root, bot_id)
+            .ok()
+            .flatten()
+            .map(|bot| bot.provider == bots_service::BotProvider::Wecom)
+            .unwrap_or(false);
+        let service = im_service::handle();
+        let card = self.im_qr_card(bot_id, wecom, service.as_ref(), cx);
+        let done = bot_id.to_string();
+        settings_page_body("")
+            .child(settings_note(if wecom {
+                i18n::t("用企业微信扫码并确认创建机器人；完成后自动写入 Bot ID 与 Secret。")
+            } else {
+                i18n::t("用微信扫码登录；扫码成功后即可在微信里给 Bot 发消息。")
+            }))
+            .child(card)
+            .child(
+                div().flex().justify_end().child(
+                    settings_button("im-qr-done", i18n::t("完成")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            this.im_qr_page = None;
+                            this.im_selected = Some(done.clone());
+                            cx.notify();
+                        },
+                    )),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// 新建机器人入口：图标卡片（微信 / 企业微信）。
+    fn im_platform_card(
+        &self,
+        id: &'static str,
+        icon: icons::Icon,
+        title: &'static str,
+        subtitle: &'static str,
+        provider: bots_service::BotProvider,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let wechat = wecom_theme::active();
+        div()
+            .id(id)
+            .flex_1()
+            .min_w(px(180.))
+            .h(px(84.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(if wechat {
+                wecom_theme::panel_divider()
+            } else {
+                theme::edge()
+            })
+            .bg(if wechat {
+                wecom_theme::panel_card_bg()
+            } else {
+                theme::card()
+            })
+            .px(px(14.))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .cursor_pointer()
+            .hover(|style| {
+                style.bg(if wechat {
+                    wecom_theme::nav_item_hover_bg()
+                } else {
+                    theme::hover()
+                })
+            })
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                this.open_im_create_page(provider, window, cx);
+            }))
+            .child(
+                div()
+                    .size(px(36.))
+                    .rounded_full()
+                    .bg(ui_accent_soft())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icons::icon(icon, 20., ui_accent())),
+            )
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(if wechat {
+                                wecom_theme::chat_title()
+                            } else {
+                                theme::ink()
+                            })
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(if wechat {
+                                wecom_theme::list_preview()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(subtitle),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn settings_page_im(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.ensure_im_ticker(cx);
+        if let Some(bot_id) = self.im_qr_page.clone() {
+            return self.im_qr_page_view(&bot_id, cx);
+        }
         if self.im_create.is_some() {
             return self.im_create_page(cx);
         }
-        self.ensure_im_ticker(cx);
         let data_root = self.roster.data_root.clone();
         let service = im_service::handle();
         let mut body = settings_page_body("IM");
@@ -9135,37 +9337,32 @@ impl PilotApp {
                     .into_any_element();
             }
         };
-        body = body.child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(8.))
-                .child(
-                    settings_button("im-new-weixin", i18n::t("新建微信机器人")).on_click(
-                        cx.listener(|this, _event, window, cx| {
-                            this.open_im_create_page(
-                                bots_service::BotProvider::Weixin,
-                                window,
-                                cx,
-                            );
-                        }),
-                    ),
-                )
-                .child(
-                    settings_button("im-new-wecom", i18n::t("新建企业微信机器人")).on_click(
-                        cx.listener(|this, _event, window, cx| {
-                            this.open_im_create_page(
-                                bots_service::BotProvider::Wecom,
-                                window,
-                                cx,
-                            );
-                        }),
-                    ),
-                )
-                .child(settings_note(
-                    i18n::t("微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。"),
-                )),
-        );
+        body = body
+            .child(settings_section(i18n::t("新建机器人")))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(self.im_platform_card(
+                        "im-new-weixin",
+                        icons::Icon::MessageCircleFilled,
+                        i18n::t("微信"),
+                        i18n::t("扫码登录"),
+                        bots_service::BotProvider::Weixin,
+                        cx,
+                    ))
+                    .child(self.im_platform_card(
+                        "im-new-wecom",
+                        icons::Icon::Building,
+                        i18n::t("企业微信"),
+                        i18n::t("扫码创建"),
+                        bots_service::BotProvider::Wecom,
+                        cx,
+                    )),
+            )
+            .child(settings_note(i18n::t(
+                "微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。",
+            )));
         if rows.is_empty() {
             body = body.child(settings_empty(i18n::t("还没有 IM 机器人。")));
             return body.into_any_element();
@@ -12057,6 +12254,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         self.settings_open = true;
         self.settings_tab = tab.min(SETTINGS_PAGES.len().saturating_sub(1));
         self.im_create = None;
+        self.im_qr_page = None;
         self.automations_view = None;
         self.usage_totals_view = None;
         self.pending_bot_dialog = None;
@@ -18631,6 +18829,108 @@ fn workspace_tail(path: &str) -> String {
 }
 
 /// 设置页的次按钮。
+/// IM 表单里的选项胶囊（访问模式/群聊方式）。
+fn im_choice_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+    active: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let wechat = wecom_theme::active();
+    let label: gpui::SharedString = label.into();
+    div()
+        .id(id)
+        .h(px(28.))
+        .rounded(px(999.))
+        .px(px(10.))
+        .border_1()
+        .border_color(if active {
+            ui_accent()
+        } else {
+            rgba(0x00000000)
+        })
+        .bg(if active {
+            ui_accent_soft()
+        } else if wechat {
+            wecom_theme::chip_bg()
+        } else {
+            theme::hover()
+        })
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .hover(|style| style.opacity(0.9))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(if active {
+                    if wechat {
+                        wecom_theme::send_enabled()
+                    } else {
+                        theme::accent_text()
+                    }
+                } else if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink_secondary()
+                })
+                .child(label),
+        )
+}
+
+/// IM 表单字段：标签 + 单行输入框。
+fn im_field(label: impl Into<gpui::SharedString>, input: Entity<SimpleInput>) -> gpui::AnyElement {
+    let wechat = wecom_theme::active();
+    let label: gpui::SharedString = label.into();
+    div()
+        .p(px(12.))
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(
+            div()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(if wechat {
+                    wecom_theme::list_preview()
+                } else {
+                    theme::ink_secondary()
+                })
+                .child(label),
+        )
+        .child(
+            div()
+                .h(px(32.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if wechat {
+                    wecom_theme::composer_border()
+                } else {
+                    theme::edge()
+                })
+                .bg(if wechat {
+                    wecom_theme::composer_bg()
+                } else {
+                    theme::bg()
+                })
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .child(input),
+        )
+        .into_any_element()
+}
+
 fn settings_button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
@@ -20001,6 +20301,7 @@ impl PilotApp {
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.settings_tab = index;
                             this.im_create = None;
+                            this.im_qr_page = None;
                             // 定时任务页读的是快照：切页必须让它重读，否则 Bot 刚用
                             // automation_create 建的任务在页面上仍显示「还没有定时任务」。
                             this.automations_view = None;
@@ -20175,8 +20476,10 @@ impl PilotApp {
                 i18n::t("新建微信机器人")
             }
             Some(_) => i18n::t("新建企业微信机器人"),
+            None if self.im_qr_page.is_some() => i18n::t("扫码绑定"),
             None => i18n::t(SETTINGS_PAGES[self.settings_tab]),
         };
+        let subpage = self.im_create.is_some() || self.im_qr_page.is_some();
         let tab = self.settings_tab;
         let page = self.settings_page(cx);
         div()
@@ -20207,6 +20510,34 @@ impl PilotApp {
                             .text_color(wecom_theme::chat_title())
                             .child(title),
                     )
+                    .children(subpage.then(|| {
+                        div()
+                            .id("im-subpage-back")
+                            .h(px(28.))
+                            .px(px(10.))
+                            .rounded(px(999.))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.close_im_subpage(window, cx);
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::ChevronLeft,
+                                14.,
+                                wecom_theme::chat_subtitle(),
+                            ))
+                            .child(
+                                div()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .line_height(px(18.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(i18n::t("返回")),
+                            )
+                    }))
             )
             .child(div().h(px(1.)).bg(wecom_theme::divider()))
             .child(
