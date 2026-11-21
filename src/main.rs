@@ -18036,7 +18036,7 @@ fn settings_page_icon(index: usize) -> icons::Icon {
 /// 设置页骨架：页标题 + 纵向间距（调用方继续 `.child` 内容）。
 fn settings_page_body(_title: &'static str) -> gpui::Div {
     // 页标题由设置壳统一渲染（原版 SettingsModal 的 h2），页面只排内容。
-    // gap 10 + settings_section 顶部 10 = 组间 20、标题到卡片 10。
+    // 外边距四向统一 10；区块间距（标题到卡片、卡片到下一标题）也统一 10。
     div().w_full().flex().flex_col().gap(px(10.))
 }
 
@@ -18045,7 +18045,6 @@ fn settings_section(title: impl Into<SharedString>) -> impl IntoElement {
     let wechat = wecom_theme::active();
     div()
         .w_full()
-        .pt(px(10.))
         .font_family(if wechat {
             wecom_theme::FONT_FAMILY
         } else {
@@ -20008,8 +20007,8 @@ impl PilotApp {
                     // 滚动条占右侧 6px；右内边距相应减掉，视觉左右等宽。
                     .pl(px(10.))
                     .pr(px(4.))
-                    .pt(px(6.))
-                    .pb(px(12.))
+                    .pt(px(10.))
+                    .pb(px(10.))
                     .child(
                         div()
                             .w_full()
