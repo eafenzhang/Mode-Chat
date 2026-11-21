@@ -32,7 +32,7 @@ pub fn rows() -> Vec<CapabilityRow> {
             BotCapability::QuietRunV1,
             "bot-quiet-run-v1",
             "静默运行",
-            "频道 quiet 与跨会话整轮合并通知。",
+            "群聊 quiet 与跨会话整轮合并通知。",
         ),
         (
             BotCapability::ComputerV1,

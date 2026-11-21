@@ -1,4 +1,4 @@
-//! Bot / 频道头像（原版色相派生 + 渐变 + 机器人面）。
+//! Bot / 群聊头像（原版色相派生 + 渐变 + 机器人面）。
 //!
 //! 为什么不用「首字色块」：原版的辨识度来自 id → 稳定色相（360 色）+ 145° 渐变 +
 //! 内描边 + 机器人面。手绘圆点会让所有 Bot 看起来一样、浅色下还容易糊字。
@@ -265,7 +265,7 @@ pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> AnyEle
         .into_any_element()
 }
 
-/// 频道头像（同一套色相，前景 `#`）。
+/// 群聊头像（同一套色相，前景 `#`）。
 pub fn channel_avatar(id: &str, size: f32) -> impl IntoElement {
     let hue = avatar_hue(id);
     let fg = if theme::is_light() {

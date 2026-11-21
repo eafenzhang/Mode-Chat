@@ -1,11 +1,11 @@
 //! Bot GPUI 外壳（Rust + GPUI 最终形态的第一步）。
 //!
 //! 当前已接真实数据：
-//! - 左栏：`teammates.json` 的 Bot 名册 + `groups.json` 的频道；
+//! - 左栏：`teammates.json` 的 Bot 名册 + `groups.json` 的群聊；
 //! - 中栏：按 Bot 隔离的 Agent 会话（`workspaceIdentity = mode-bot:teammate:<id>`）；
-//! - 右栏：所选 Bot 的模型 / 最近会话 / 工作目录 / 说明；频道显示成员与资料。
+//! - 右栏：所选 Bot 的模型 / 最近会话 / 工作目录 / 说明；群聊显示成员与资料。
 //!
-//! 频道消息流（v4 群聊编排）尚未接入，中栏先显示频道资料占位。
+//! 群聊消息流（v4 群聊编排）尚未接入，中栏先显示群聊资料占位。
 
 macro_rules! im_log {
     ($($arg:tt)*) => {
@@ -116,7 +116,7 @@ gpui::actions!(
         SearchShortcut,
         /// Ctrl+,：打开设置信息面板。
         SettingsShortcut,
-        /// Alt+↓：选中名册里的下一个条目（Bot 与频道按左栏顺序连成一个环）。
+        /// Alt+↓：选中名册里的下一个条目（Bot 与群聊按左栏顺序连成一个环）。
         SelectNextItem,
         /// Alt+↑：上一个条目。
         SelectPrevItem,
@@ -150,7 +150,7 @@ gpui::actions!(
         FocusPrev,
         /// 焦点在按钮上时 Enter 激活它。
         ActivateTabStop,
-        /// Ctrl+G：新建频道。
+        /// Ctrl+G：新建群聊。
         NewChannelShortcut,
         /// Enter（Dialog 上下文）：提交当前对话框。
         SubmitDialog,
@@ -213,7 +213,7 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
         })
         .unwrap_or_default();
     // 设置页扩容时旧下标整体后移：
-    // v1→v2：团队记忆插在「频道」之后（>=6 +1）；
+    // v1→v2：团队记忆插在「群聊」之后（>=6 +1）；
     // v2→v3：浏览器/电脑操控插在「更多」之前（>=15 +2）。
     let layout = value
         .get("settings_layout")
@@ -693,7 +693,7 @@ struct Message {
     streaming: bool,
     /// 消息时间（本地毫秒时间戳；历史来自会话库，实时消息取当前时间）。0 = 未知。
     at: u64,
-    /// 频道成员名（群聊助手消息；私聊 None）。
+    /// 群聊成员名（群聊助手消息；私聊 None）。
     member: Option<String>,
     /// 用户消息附带的附件文件名。
     attachments: Vec<String>,
@@ -766,7 +766,7 @@ struct ChatState {
     streaming_index: Option<usize>,
     /// call_id → messages 下标（工具卡原地更新）。
     tool_index: HashMap<String, usize>,
-    /// 频道成员名 → 该成员流式消息下标。
+    /// 群聊成员名 → 该成员流式消息下标。
     member_stream: HashMap<String, usize>,
     /// 本轮思考过程下标：成员名（私聊为空串）→ messages 下标。
     reasoning_index: HashMap<String, usize>,
@@ -1748,7 +1748,7 @@ impl Render for GroupTasksState {
                 _ => theme::accent_text(),
             };
             let owner = if task.owner_member_id == bot_team::tasks::GROUP_ROOT_OWNER {
-                i18n::t("整个频道").to_string()
+                i18n::t("整个群聊").to_string()
             } else {
                 self.member_names
                     .get(&task.owner_member_id)
@@ -2155,7 +2155,7 @@ impl Render for ProviderAddState {
     }
 }
 
-/// 「新建/编辑频道」对话框状态（写回 groups.json）。
+/// 「新建/编辑群聊」对话框状态（写回 groups.json）。
 #[derive(Clone)]
 enum GroupFormRequest {
     New,
@@ -2334,7 +2334,7 @@ impl Render for GroupFormState {
             body = body.child(policies);
         }
         body = body
-            .child(dialog_field("group-instructions", i18n::t("频道规则"), &self.instructions))
+            .child(dialog_field("group-instructions", i18n::t("群聊规则"), &self.instructions))
             .child(dialog_field("group-memory", i18n::t("团队记忆"), &self.memory));
         if let Some(error) = &self.error {
             body = body.child(
@@ -2831,7 +2831,7 @@ struct PilotApp {
     settings_tab: usize,
     /// 设置窗口的焦点句柄：打开时拿走焦点，别让按键落到后面的输入框。
     settings_focus: gpui::FocusHandle,
-    /// 每个会话（Bot/频道 key）的未发送草稿：切走再回来不丢。
+    /// 每个会话（Bot/群聊 key）的未发送草稿：切走再回来不丢。
     drafts: HashMap<String, String>,
     /// 会话重命名对话框。
     /// Tab 焦点链的句柄（固定集合：顶部胶囊、composer 按钮、右栏工具栏/分页）。
@@ -2846,7 +2846,7 @@ struct PilotApp {
     /// 删除团队记忆确认：待删文件名与标题。
     /// 右栏「⋯」菜单是否展开（置顶/隐藏/编辑/删除入口）。
     detail_menu_open: bool,
-    /// 左栏「+」弹出的新建菜单（Bot / 频道 / 分组）。
+    /// 左栏「+」弹出的新建菜单（Bot / 群聊 / 分组）。
     new_menu_open: bool,
     /// 侧栏底栏齿轮菜单是否展开。
     footer_menu_open: bool,
@@ -2856,9 +2856,9 @@ struct PilotApp {
     menu_selected: usize,
     /// ⋯ 菜单展开时持有焦点：落在 TextInput 上的话 ↑/↓ 会被输入框吃掉。
     menu_focus: gpui::FocusHandle,
-    /// 新建/编辑频道对话框。
+    /// 新建/编辑群聊对话框。
     pending_group_dialog: Option<GroupFormRequest>,
-    /// 删除频道确认：待删 group id。
+    /// 删除群聊确认：待删 group id。
     /// 删除定时任务确认：任务 id + workspace_key + 标题。
     /// 定时任务运行历史弹层。
 
@@ -2890,7 +2890,7 @@ struct PilotApp {
     connector_query: String,
     connector_category: Option<String>,
     _connector_search_sub: gpui::Subscription,
-    /// 频道对话框打开后要不要把焦点交给名称输入框（只请求一次）。
+    /// 群聊对话框打开后要不要把焦点交给名称输入框（只请求一次）。
     /// 模型选择对话框。
     pending_model_dialog: Option<String>,
     /// 审批白名单编辑对话框。
@@ -2905,7 +2905,7 @@ struct PilotApp {
     pending_provider_url_dialog: Option<(String, String, String)>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
-    /// 频道 composer 上方的任务条缓存。
+    /// 群聊 composer 上方的任务条缓存。
     group_task_bar: Option<GroupTaskBarState>,
     /// 打开中的群任务对话框（结算后刷新列表）。
     group_tasks_view: Option<gpui::WeakEntity<GroupTasksState>>,
@@ -2983,7 +2983,7 @@ struct PilotApp {
     computer_enabled: bool,
     browser_disabled_bots: HashSet<String>,
     computer_disabled_bots: HashSet<String>,
-    /// 设置→团队记忆里正在查看的频道（None = 只看团队记忆）。
+    /// 设置→团队记忆里正在查看的群聊（None = 只看团队记忆）。
     memory_group: Option<String>,
     /// 会话运行状态缓存（侧栏状态点与错误通知去重）。
     runtime_status: HashMap<String, String>,
@@ -3044,7 +3044,7 @@ enum DetailMenuAction {
     CopySessionId(String),
 }
 
-/// 记忆面板作用域：团队共享 / 某个频道的文件记忆。
+/// 记忆面板作用域：团队共享 / 某个群聊的文件记忆。
 #[derive(Clone)]
 enum MemoryScope {
     Team,
@@ -3091,12 +3091,12 @@ impl MemoryScope {
     fn label(&self) -> &'static str {
         match self {
             Self::Team => i18n::t("团队记忆"),
-            Self::Group(_) => i18n::t("频道记忆"),
+            Self::Group(_) => i18n::t("群聊记忆"),
         }
     }
 }
 
-/// 频道 composer 上方的群任务条（摘要 + 可展开最近任务）。
+/// 群聊 composer 上方的群任务条（摘要 + 可展开最近任务）。
 struct GroupTaskBarState {
     group_id: String,
     tasks: Vec<bot_team::tasks::GroupTask>,
@@ -3108,7 +3108,7 @@ struct GroupTaskTurn {    root_id: String,
     members: HashMap<String, String>,
 }
 
-/// 企微四栏皮肤的左导航筛选（消息=全部，频道/机器人只看对应类型）。
+/// 企微四栏皮肤的左导航筛选（消息=全部，群聊/机器人只看对应类型）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WecomNav {
     All,
@@ -3116,7 +3116,7 @@ enum WecomNav {
     Bots,
 }
 
-/// 企微会话列表的一行（Bot 或频道）。
+/// 企微会话列表的一行（Bot 或群聊）。
 #[derive(Clone)]
 struct WecomEntry {
     is_group: bool,
@@ -3451,7 +3451,7 @@ impl PilotApp {
         cx.notify();
     }
 
-    /// 重读频道任务条（发送/结算/任务面板动作后调用）。
+    /// 重读群聊任务条（发送/结算/任务面板动作后调用）。
     fn refresh_group_task_bar(&mut self, group_id: &str) {
         let tasks = group_tasks::list(&data::data_root(), group_id).unwrap_or_default();
         let expanded = self
@@ -3466,7 +3466,7 @@ impl PilotApp {
         });
     }
 
-    /// 频道 composer 上方的任务条：摘要常驻，展开看最近 6 条任务。
+    /// 群聊 composer 上方的任务条：摘要常驻，展开看最近 6 条任务。
     fn group_task_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let Some(Selection::Group(index)) = self.selection else {
             return None;
@@ -3727,7 +3727,7 @@ impl PilotApp {
         }
     }
 
-    /// 新建/编辑频道：只置 pending，下一帧由 render 打开 kit AlertDialog。
+    /// 新建/编辑群聊：只置 pending，下一帧由 render 打开 kit AlertDialog。
     fn open_new_group_dialog(&mut self, cx: &mut Context<Self>) {
         self.detail_menu_open = false;
         self.pending_bot_dialog = None;
@@ -3774,7 +3774,7 @@ impl PilotApp {
                         member_ids,
                         admin_id,
                         "mentions-first".to_string(),
-                        i18n::t("新建频道"),
+                        i18n::t("新建群聊"),
                         i18n::t("创建"),
                     )
                 }
@@ -3800,14 +3800,14 @@ impl PilotApp {
                         } else {
                             group.responder_policy.clone()
                         },
-                        i18n::t("编辑频道"),
+                        i18n::t("编辑群聊"),
                         i18n::t("保存"),
                     )
                 }
             };
-        let name = cx.new(|cx| SimpleInput::new(i18n::t("频道名（必填）"), theme::ink_tertiary, cx));
+        let name = cx.new(|cx| SimpleInput::new(i18n::t("群聊名（必填）"), theme::ink_tertiary, cx));
         let instructions = cx.new(|cx| {
-            SimpleInput::new(i18n::t("频道规则（可选，注入每个成员）"), theme::ink_tertiary, cx)
+            SimpleInput::new(i18n::t("群聊规则（可选，注入每个成员）"), theme::ink_tertiary, cx)
         });
         let memory =
             cx.new(|cx| SimpleInput::new(i18n::t("团队记忆（可选，长期事实）"), theme::ink_tertiary, cx));
@@ -4203,8 +4203,8 @@ impl PilotApp {
         window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
-    /// 频道成员会话懒建：身份 `mode-bot:group:<gid>:member:<tid>`，
-    /// 目录 = 频道共享目录优先，回落成员目录。
+    /// 群聊成员会话懒建：身份 `mode-bot:group:<gid>:member:<tid>`，
+    /// 目录 = 群聊共享目录优先，回落成员目录。
     fn ensure_group(&mut self, index: usize) {
         let Some(group) = self.roster.groups.get(index) else {
             return;
@@ -4242,7 +4242,7 @@ impl PilotApp {
         let member_names = members.iter().map(|member| member.name.clone()).collect();
         let chat = self.chats.entry(key.clone()).or_default();
         chat.status = i18n::t("建立成员会话…").to_string();
-        // 操控分页的只读状态：频道目录优先，回落管理员/首个成员的工作目录。
+        // 操控分页的只读状态：群聊目录优先，回落管理员/首个成员的工作目录。
         chat.control = Some(ControlStatus {
             directory: group
                 .directory
@@ -4467,7 +4467,7 @@ impl PilotApp {
                             );
                             crate::automation_scope::set_active(&bot.directory, Some(identity));
                         }
-                        // 私聊按 botId 存；频道成员按内部槽位键存（重启续用）。
+                        // 私聊按 botId 存；群聊成员按内部槽位键存（重启续用）。
                         let store_key = slot.clone().or_else(|| bot_id.clone());
                         if let Some(store_key) = store_key
                             && self.sessions.set(&store_key, &session_id)
@@ -4842,7 +4842,7 @@ impl PilotApp {
         cx.notify();
     }
 
-    /// 频道发言：一条用户消息，成员回复按成员名各自开流。
+    /// 群聊发言：一条用户消息，成员回复按成员名各自开流。
     fn send_group_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 引用逻辑与私聊一致，见 compose_with_quote（在下面的发送处消费 chat.quote）。
         let Some(Selection::Group(index)) = self.selection else {
@@ -5133,7 +5133,7 @@ impl PilotApp {
         cx.notify();
     }
 
-    /// 频道成员可并发出卡；每张卡独立渲染，卡头标注归属成员（复用群气泡标签样式）。
+    /// 群聊成员可并发出卡；每张卡独立渲染，卡头标注归属成员（复用群气泡标签样式）。
     fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let Some(key) = self.active_key() else {
             return Vec::new();
@@ -6003,7 +6003,7 @@ impl PilotApp {
         });
     }
 
-    /// Ctrl+N：与右栏「新会话」同一条路径（仅私聊；频道没有新会话语义）。
+    /// Ctrl+N：与右栏「新会话」同一条路径（仅私聊；群聊没有新会话语义）。
     fn on_new_session_shortcut(
         &mut self,
         _: &NewSessionShortcut,
@@ -6229,7 +6229,7 @@ impl PilotApp {
         self.open_new_group_dialog(cx);
     }
 
-    /// Enter（Dialog 上下文）：优先提交频道对话框；Bot 对话框走它自己的按钮。
+    /// Enter（Dialog 上下文）：优先提交群聊对话框；Bot 对话框走它自己的按钮。
     fn on_submit_dialog(&mut self, _: &SubmitDialog, _window: &mut Window, _cx: &mut Context<Self>) {
         debug_action("SubmitDialog");
     }
@@ -6298,7 +6298,7 @@ impl PilotApp {
         cx.notify();
     }
 
-    /// 搜索命中属于谁（私聊 Bot / 频道成员）。
+    /// 搜索命中属于谁（私聊 Bot / 群聊成员）。
     fn find_owner_of_session(&self, session_id: &str) -> Option<Selection> {
         for (index, bot) in self.roster.bots.iter().enumerate() {
             if self.sessions.get(&bot.id).as_deref() == Some(session_id)
@@ -6387,7 +6387,7 @@ impl PilotApp {
         self.jump_to_hit(&hit, cx);
     }
 
-    /// 跳到搜索结果：私聊直接切换会话；频道成员会话只切过去（暂不支持换成员会话）。
+    /// 跳到搜索结果：私聊直接切换会话；群聊成员会话只切过去（暂不支持换成员会话）。
     fn jump_to_hit(&mut self, hit: &session_db::SearchHit, cx: &mut Context<Self>) {
         let session_id = hit.session_id.clone();
         // JSONL 历史会话可能不在当前 Bot 的会话映射里（不同 Bot/旧槽位）：退回当前
@@ -6453,7 +6453,7 @@ impl PilotApp {
                 cx.notify();
             }
             Some(Selection::Group(index)) => {
-                // 频道成员会话：切到该频道（成员会话切换不在本批范围）。
+                // 群聊成员会话：切到该群聊（成员会话切换不在本批范围）。
                 self.find_dialog = None;
                 self.select_group(index, cx);
             }
@@ -6465,12 +6465,12 @@ impl PilotApp {
         }
     }
 
-    /// 命令面板的候选（静态动作 + 当前名册里的 Bot/频道）。
+    /// 命令面板的候选（静态动作 + 当前名册里的 Bot/群聊）。
     fn palette_entries(&self) -> Vec<(String, String, PaletteCmd)> {
         let mut entries = vec![
             (i18n::t("新建 Bot").to_string(), "Ctrl+B".to_string(), PaletteCmd::NewBot),
             (i18n::t("编辑当前 Bot").to_string(), "Ctrl+E".to_string(), PaletteCmd::EditBot),
-            (i18n::t("新建频道").to_string(), "Ctrl+G".to_string(), PaletteCmd::NewChannel),
+            (i18n::t("新建群聊").to_string(), "Ctrl+G".to_string(), PaletteCmd::NewChannel),
             (i18n::t("新会话").to_string(), "Ctrl+N".to_string(), PaletteCmd::NewSession),
             (i18n::t("搜索历史消息").to_string(), "Ctrl+F".to_string(), PaletteCmd::FindMessages),
             (i18n::t("选择运行时").to_string(), String::new(), PaletteCmd::PickModel),
@@ -6487,7 +6487,7 @@ impl PilotApp {
         for (index, group) in self.roster.groups.iter().enumerate() {
             entries.push((
                 tri!("切换到 {}", "Switch to {}", group.name),
-                i18n::t("频道").to_string(),
+                i18n::t("群聊").to_string(),
                 PaletteCmd::SelectGroup(index),
             ));
         }
@@ -6651,7 +6651,7 @@ impl PilotApp {
         }
     }
 
-    /// 左栏条目线性顺序：Bot（名册顺序）在前、频道在后。
+    /// 左栏条目线性顺序：Bot（名册顺序）在前、群聊在后。
     fn step_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let bots = self.roster.bots.len();
         let groups = self.roster.groups.len();
@@ -7725,7 +7725,7 @@ impl PilotApp {
             ]))
             .child(settings_section(i18n::t("侧栏分组")));
         if self.sidebar_sections.sections.is_empty() {
-            body = body.child(settings_empty(i18n::t("还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/频道移入")));
+            body = body.child(settings_empty(i18n::t("还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/群聊移入")));
         } else {
             let mut section_rows: Vec<gpui::AnyElement> = Vec::new();
             for section in self.sidebar_sections.sections.clone() {
@@ -8977,17 +8977,17 @@ impl PilotApp {
         let groups = self.roster.groups.clone();
         let hidden = self.roster.hidden_groups.clone();
         let archived = self.roster.archived_groups.clone();
-        let mut body = settings_page_body("频道");
+        let mut body = settings_page_body("群聊");
         body = body.child(settings_section_action(
-            tri!("全部频道 · {}", "All channels · {}", groups.len()),
-            settings_action_button("settings-new-group", i18n::t("新建频道")).on_click(
+            tri!("全部群聊 · {}", "All group chats · {}", groups.len()),
+            settings_action_button("settings-new-group", i18n::t("新建群聊")).on_click(
                 cx.listener(|this, _event, _window, cx| {
                     this.open_new_group_dialog(cx);
                 }),
             ),
         ));
         if groups.is_empty() {
-            body = body.child(settings_empty(i18n::t("还没有频道")));
+            body = body.child(settings_empty(i18n::t("还没有群聊")));
         }
         let mut group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &groups {
@@ -9034,7 +9034,7 @@ impl PilotApp {
             for group in &hidden {
                 let group_id = group.id.clone();
                 hidden_rows.push(
-                    settings_row(tri!("{}（频道）", "{} (channel)", group.name), None)
+                    settings_row(tri!("{}（群聊）", "{} (group chat)", group.name), None)
                         .child(
                             settings_button(
                                 SharedString::from(format!("restore-group-{}", group.id)),
@@ -9045,7 +9045,7 @@ impl PilotApp {
                                 if let Err(message) =
                                     data::set_group_flags(&group_id, None, Some(false))
                                 {
-                                    eprintln!("[settings] 恢复频道失败：{message}");
+                                    eprintln!("[settings] 恢复群聊失败：{message}");
                                 }
                                 this.roster = Roster::load();
                                 this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
@@ -9058,7 +9058,7 @@ impl PilotApp {
             body = body.child(settings_group(hidden_rows));
         }
         if !archived.is_empty() {
-            body = body.child(settings_section(i18n::t("已归档频道")));
+            body = body.child(settings_section(i18n::t("已归档群聊")));
             let mut archived_rows: Vec<gpui::AnyElement> = Vec::new();
             for group in &archived {
                 let group_id = group.id.clone();
@@ -9515,12 +9515,12 @@ impl PilotApp {
         }
         let data_root = self.roster.data_root.clone();
         let service = im_service::handle();
-        let mut body = settings_page_body("IM");
+        let mut body = settings_page_body("IM频道");
         let rows = match im::list(&data_root) {
             Ok(rows) => rows,
             Err(error) => {
                 return body
-                    .child(settings_error(tri!("读取 IM 配置失败：{error}", "Failed to read IM config: {error}")))
+                    .child(settings_error(tri!("读取 IM频道配置失败：{error}", "Failed to read IM channel config: {error}")))
                     .into_any_element();
             }
         };
@@ -9551,7 +9551,7 @@ impl PilotApp {
                 "微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。",
             )));
         if rows.is_empty() {
-            body = body.child(settings_empty(i18n::t("还没有 IM 机器人。")));
+            body = body.child(settings_empty(i18n::t("还没有 IM频道机器人。")));
             return body.into_any_element();
         }
         body = body.child(settings_section(count_bots(rows.len())));
@@ -9910,7 +9910,7 @@ impl PilotApp {
                         settings_button("im-bind-code", i18n::t("生成绑定码")).on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 let Some(service) = im_service::handle() else {
-                                    this.toast(i18n::t("IM 服务尚未就绪"), cx);
+                                    this.toast(i18n::t("IM频道服务尚未就绪"), cx);
                                     return;
                                 };
                                 match service.create_bind_code(&bind_id) {
@@ -10021,7 +10021,7 @@ impl PilotApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let Some(service) = service else {
-            return settings_note(i18n::t("IM 服务尚未就绪（Agent 控制面还在启动）。")).into_any_element();
+            return settings_note(i18n::t("IM频道服务尚未就绪（Agent 控制面还在启动）。")).into_any_element();
         };
         let start_label = if wecom { i18n::t("扫码创建") } else { i18n::t("扫码登录") };
         let hint = if wecom {
@@ -10132,7 +10132,7 @@ impl PilotApp {
                 settings_row(
                     i18n::t("群记忆自动回顾").to_string(),
                     Some(
-                        i18n::t("群回合结束 5s 后由管理员模型整理频道记忆。")
+                        i18n::t("群回合结束 5s 后由管理员模型整理群聊记忆。")
                             .to_string(),
                     ),
                 )
@@ -10159,9 +10159,9 @@ impl PilotApp {
             ]))
             .child(settings_section(i18n::t("团队文件记忆")))
             .child(self.team_memory_section(cx))
-            .child(settings_section(i18n::t("频道文件记忆")));
+            .child(settings_section(i18n::t("群聊文件记忆")));
         if self.roster.groups.is_empty() {
-            body = body.child(settings_empty(i18n::t("名册里还没有频道")));
+            body = body.child(settings_empty(i18n::t("名册里还没有群聊")));
         }
         let mut memory_group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &self.roster.groups {
@@ -11812,7 +11812,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         body
     }
 
-    /// 频道文件记忆区（自动回顾写入；挂在频道详情下）。
+    /// 群聊文件记忆区（自动回顾写入；挂在群聊详情下）。
     fn group_memory_section(&self, group_id: &str, cx: &mut Context<Self>) -> gpui::Div {
         let scope = MemoryScope::Group(group_id.to_string());
         let entries = data::group_memory_entries(group_id);
@@ -11822,7 +11822,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .items_center()
                 .justify_between()
                 .gap(px(8.))
-                .child(section_label(tri!("频道记忆（{} 条）", "Channel memory ({})", entries.len())))
+                .child(section_label(tri!("群聊记忆（{} 条）", "Group chat memory ({})", entries.len())))
                 .child(
                     div()
                         .flex()
@@ -11853,7 +11853,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         );
         if entries.is_empty() {
             body = body.child(settings_empty(
-                i18n::t("还没有频道记忆。"),
+                i18n::t("还没有群聊记忆。"),
             ));
         }
         let mut entry_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -12221,7 +12221,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     ),
                     (i18n::t("隐藏").to_string(), false, DetailMenuAction::HideGroup(group.id.clone())),
                     (
-                        i18n::t("编辑频道").to_string(),
+                        i18n::t("编辑群聊").to_string(),
                         false,
                         DetailMenuAction::EditGroup(group.id.clone()),
                     ),
@@ -12241,7 +12241,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         DetailMenuAction::ToggleArchiveGroup(group.id.clone(), group.archived),
                     ),
                     (
-                        i18n::t("删除频道").to_string(),
+                        i18n::t("删除群聊").to_string(),
                         true,
                         DetailMenuAction::DeleteGroup(group.id.clone()),
                     ),
@@ -12252,7 +12252,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     })
                 }) {
                     entries.push((
-                        i18n::t("复制频道记录为 Markdown").to_string(),
+                        i18n::t("复制群聊记录为 Markdown").to_string(),
                         false,
                         DetailMenuAction::ShareConversation(key.clone()),
                     ));
@@ -12701,7 +12701,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 .child(info_row(i18n::t("版本"), format!("v{version}")))
                                 .child(info_row(
                                     i18n::t("名册"),
-                                    if i18n::is_en() { format!("{} · {}", i18n::n(bots, "bot", "bots"), i18n::n(groups, "channel", "channels")) } else { format!("{bots} 个 Bot · {groups} 个频道") },
+                                    if i18n::is_en() { format!("{} · {}", i18n::n(bots, "bot", "bots"), i18n::n(groups, "group chat", "group chats")) } else { format!("{bots} 个 Bot · {groups} 个群聊") },
                                 ))
                                 .child(info_row(i18n::t("数据根"), data_root)),
                         )
@@ -12737,7 +12737,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         )
     }
 
-    /// 左栏「+」菜单：新建 Bot / 频道 / 分组（DS 的三类新建入口）。
+    /// 左栏「+」菜单：新建 Bot / 群聊 / 分组（DS 的三类新建入口）。
     fn new_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         if !self.new_menu_open {
             return None;
@@ -12832,7 +12832,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             }),
                         ))
                         .child(
-                            item("new-menu-channel", icons::Icon::Hash, i18n::t("新建频道")).on_click(
+                            item("new-menu-channel", icons::Icon::Hash, i18n::t("新建群聊")).on_click(
                                 cx.listener(|this, _event, _window, cx| {
                                     this.new_menu_open = false;
                                     this.open_new_group_dialog(cx);
@@ -13379,7 +13379,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .roster
                         .groups
                         .get(index)
-                        .map(|group| tri!("{}（频道）", "{} (channel)", group.name))
+                        .map(|group| tri!("{}（群聊）", "{} (group chat)", group.name))
                         .unwrap_or_default(),
                     None => i18n::t("未知归属").to_string(),
                 };
@@ -14276,9 +14276,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             let restore = restore.clone();
             let group_id = group_id.clone();
             alert
-                .title(i18n::t("删除频道"))
+                .title(i18n::t("删除群聊"))
                 .description(format!(
-                    "确定删除「{name}」吗？只移除频道条目，成员的会话与历史仍在会话库里。"
+                    "确定删除「{name}」吗？只移除群聊条目，成员的会话与历史仍在会话库里。"
                 ))
                 .width(px(420.))
                 .centered()
@@ -14650,7 +14650,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         let bots = &self.roster.bots;
         let groups = &self.roster.groups;
         let selection = self.selection;
-        // 搜索：按名字/角色/说明过滤名册；频道按名字过滤。
+        // 搜索：按名字/角色/说明过滤名册；群聊按名字过滤。
         let query = self.search_input.read(cx).content().trim().to_lowercase();
         let query_active = self.search_open && !query.is_empty();
         let bots_visible: Vec<usize> = bots
@@ -14712,9 +14712,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
 
         let mut group_rows = div().flex().flex_col().gap(px(2.));
         if groups.is_empty() {
-            group_rows = group_rows.child(hint_row(i18n::t("暂无频道")));
+            group_rows = group_rows.child(hint_row(i18n::t("暂无群聊")));
         } else if groups_visible.is_empty() {
-            group_rows = group_rows.child(hint_row(i18n::t("无匹配频道")));
+            group_rows = group_rows.child(hint_row(i18n::t("无匹配群聊")));
         }
         for index in &groups_visible {
             let index = *index;
@@ -14841,7 +14841,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .text_color(theme::ink())
                     .child(self.search_input.clone())
             }))
-            // 名册可滚动：Bot/频道多了以后不能靠 flex_1 空白把条目挤出窗口。
+            // 名册可滚动：Bot/群聊多了以后不能靠 flex_1 空白把条目挤出窗口。
             .child(
                 div()
                     .id("sidebar-list")
@@ -14866,7 +14866,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(section_label(i18n::t("频道")))
+                            .child(section_label(i18n::t("群聊")))
                             .child(
                                 div()
                                     .id("group-new")
@@ -15215,7 +15215,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .unwrap_or_else(|| i18n::t("管理员").to_string());
                 return list.items_center().justify_center().child(empty_state_badged(
                     Some(avatar::channel_avatar(&group.id, 44.).into_any_element()),
-                    tri!("与 {} 的频道", "Channel with {}", group.name),
+                    tri!("与 {} 的群聊", "Group chat with {}", group.name),
                     tri!("发消息开始群聊：{admin} 默认接话；用 @成员名 点名其他人。", "Send a message to start the group chat: {admin} replies by default; @mention others to call on them."),
                 ));
             }
@@ -15373,8 +15373,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 let now = time::now_ms();
                 let role = bot.role.clone();
                 let welcome = tri!(
-                    "你好，我是{}。直接把活儿派给我，或去频道里和大家一起推进。",
-                    "Hi, I am {}. Give me work directly, or head to a channel and we will push it together.",
+                    "你好，我是{}。直接把活儿派给我，或去群聊里和大家一起推进。",
+                    "Hi, I am {}. Give me work directly, or head to a group chat and we will push it together.",
                     bot.name
                 );
                 let bubble_max = ((column_width - 38.) * (self.message_width as f32 / 100.0))
@@ -16040,7 +16040,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .font_family(theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .text_color(theme::ink_tertiary())
-                        .child(i18n::t("频道会话需要 v4 群聊编排，试点暂不支持发送")),
+                        .child(i18n::t("群聊会话需要 v4 群聊编排，试点暂不支持发送")),
                 );
         }
         let quote = chat.and_then(|chat| chat.quote.clone());
@@ -17072,7 +17072,7 @@ fn group_details(group: &Group, roster: &Roster) -> impl IntoElement {
         .unwrap_or_else(|| i18n::t("未设").to_string());
     // 与 Bot 详情同一套行式排版：成员/管理员/策略各一行，长文本才用块。
     let mut rows = div().flex().flex_col().gap(px(8.));
-    rows = rows.child(section_label(i18n::t("频道资料")));
+    rows = rows.child(section_label(i18n::t("群聊资料")));
     rows = rows.child(kv_row(
         format!("{} · {}", count_members(members.len()), members.join(", ")),
         i18n::t("成员"),
@@ -17080,7 +17080,7 @@ fn group_details(group: &Group, roster: &Roster) -> impl IntoElement {
     rows = rows.child(kv_row(admin, i18n::t("管理员")));
     rows = rows.child(kv_row(responder_label(&group.responder_policy), i18n::t("回应策略")));
     if !group.instructions.is_empty() {
-        rows = rows.child(section_label(i18n::t("频道指令")));
+        rows = rows.child(section_label(i18n::t("群聊指令")));
         rows = rows.child(text_block(group.instructions.clone()));
     }
     if !group.memory.is_empty() {
@@ -17105,7 +17105,7 @@ fn group_placeholder(group: &Group, roster: &Roster) -> impl IntoElement {
     empty_state_badged(
         Some(avatar::channel_avatar(&group.id, 44.).into_any_element()),
         format!("{} · {}", group.name, count_members(group.member_ids.len())),
-        tri!("成员：{members}。发消息开始频道对话；用 @成员名 点名。", "Members: {members}. Send a message to start the channel chat; @mention someone to call on them."),
+        tri!("成员：{members}。发消息开始群聊对话；用 @成员名 点名。", "Members: {members}. Send a message to start the group chat; @mention someone to call on them."),
     )
 }
 
@@ -17189,7 +17189,7 @@ fn composer_radius(multiline: bool, has_attachments: bool) -> f32 {
 
 /// 把引用拼成 markdown 引用块再发（CLI 侧就是普通文本，渲染时自然显示成引用）。
 /// 引用内容压成单行、最多 200 字，避免把上下文撑爆。
-/// 频道编排会注入一段 `群聊：… 用户刚说：…` 的合成 prompt；它属于系统上下文，
+/// 群聊编排会注入一段 `群聊：… 用户刚说：…` 的合成 prompt；它属于系统上下文，
 /// 不应该作为用户气泡出现在会话里。
 fn is_group_prompt(text: &str) -> bool {
     let text = text.trim_start();
@@ -17823,7 +17823,7 @@ fn route_group_members(
         .collect()
 }
 
-/// 任务结算后刷新已打开的任务对话框（其他频道不动）。
+/// 任务结算后刷新已打开的任务对话框（其他群聊不动）。
 fn group_task_state_label(state: bot_team::tasks::TaskState) -> &'static str {
     match state {
         bot_team::tasks::TaskState::Queued => i18n::t("排队"),
@@ -17922,7 +17922,7 @@ fn is_terminal_group_error(message: &str) -> bool {
         "发送失败",
         "发送未受理",
         "会话尚未建立",
-        "频道会话尚未建立",
+        "群聊会话尚未建立",
         "缺少模型选择",
         "建会话失败",
         "订阅会话失败",
@@ -18798,10 +18798,10 @@ const SETTINGS_PAGES: [&str; 18] = [
     "插件",
     "智能体",
     "Bot",
-    "频道",
+    "群聊",
     "团队记忆",
     "连接器",
-    "IM",
+    "IM频道",
     "定时任务",
     "密钥",
     "能力",
@@ -19763,7 +19763,7 @@ fn empty_state(title: impl Into<SharedString>, body: impl Into<SharedString>) ->
     empty_state_badged(None, title, body)
 }
 
-/// 带徽标的空态：首屏欢迎区放 Bot/频道头像，列表空态不放（`None`）。
+/// 带徽标的空态：首屏欢迎区放 Bot/群聊头像，列表空态不放（`None`）。
 fn empty_state_badged(
     badge: Option<gpui::AnyElement>,
     title: impl Into<SharedString>,
@@ -20470,7 +20470,7 @@ impl PilotApp {
         let filters = [
             (WecomNav::All, menu_icons::MenuIcon::Chat, i18n::t("消息")),
             (WecomNav::Bots, menu_icons::MenuIcon::Contacts, i18n::t("通讯录")),
-            (WecomNav::Channels, menu_icons::MenuIcon::Channels, i18n::t("频道")),
+            (WecomNav::Channels, menu_icons::MenuIcon::Channels, i18n::t("群聊")),
         ];
         for (filter, icon, label) in filters {
             let active = current == filter && !self.settings_open;
@@ -21245,7 +21245,7 @@ impl PilotApp {
                 .justify_center()
                 .child(empty_state(
                     i18n::t("选择会话"),
-                    "从左侧列表选择 Bot 或频道，或点右上角 + 新建。",
+                    "从左侧列表选择 Bot 或群聊，或点右上角 + 新建。",
                 ))
                 .into_any_element();
         };

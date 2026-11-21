@@ -1,7 +1,7 @@
 //! 群目标 repo（GPUI 版，与壳同口径）。
 //!
 //! 文件：`{data_root}/v2/groups/<groupId>/goal.json`。整文件原子写，不走事件流；
-//! 状态机复用 `bot_team::goal`。损坏文件按「无目标」处理并留日志，不阻塞频道。
+//! 状态机复用 `bot_team::goal`。损坏文件按「无目标」处理并留日志，不阻塞群聊。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};

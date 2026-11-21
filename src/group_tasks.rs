@@ -91,7 +91,7 @@ fn append_event_locked(path: &Path, event: &TaskEvent) -> Result<(), String> {
         .map_err(|error| format!("写入任务文件失败：{error}"))
 }
 
-/// 列出频道任务（created_at, id 升序）。
+/// 列出群聊任务（created_at, id 升序）。
 pub fn list(data_root: &Path, group_id: &str) -> Result<Vec<GroupTask>, String> {
     let path = tasks_path(data_root, group_id)?;
     let mut tasks: Vec<GroupTask> = read_projection(&path)?.tasks().cloned().collect();

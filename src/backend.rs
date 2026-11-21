@@ -34,7 +34,7 @@ pub struct GroupMember {
 
 #[derive(Debug, Clone)]
 pub struct GroupInfo {
-    /// 频道 id（读 goal.json 用）。
+    /// 群聊 id（读 goal.json 用）。
     pub group_id: String,
     pub group_name: String,
     pub instructions: String,
@@ -84,7 +84,7 @@ pub struct HistoryEntry {
     pub tool: Option<ToolCard>,
     /// 用户消息附件（历史回放；文件名 + 读取句柄）。
     pub attachments: Vec<HistoryAttachment>,
-    /// 频道成员名（群聊历史；私聊 None）。
+    /// 群聊成员名（群聊历史；私聊 None）。
     pub member: Option<String>,
     /// 消息创建时间（毫秒；跨成员归并排序用）。
     pub at: u64,
@@ -104,7 +104,7 @@ pub struct QuestionCard {
     pub question: String,
     /// (value, label)
     pub options: Vec<(String, String)>,
-    /// 频道成员归属（私聊为 None）；卡头标注「来自 X」。
+    /// 群聊成员归属（私聊为 None）；卡头标注「来自 X」。
     pub member: Option<String>,
 }
 
@@ -139,7 +139,7 @@ pub struct ElicitationCard {
     pub request_id: String,
     pub message: String,
     pub fields: Vec<ElicitationField>,
-    /// 频道成员归属（私聊为 None）。
+    /// 群聊成员归属（私聊为 None）。
     pub member: Option<String>,
 }
 
@@ -162,7 +162,7 @@ pub struct PermissionPrompt {
     pub reason: String,
     pub risk: String,
     pub options: Vec<PromptOption>,
-    /// 频道成员归属（私聊为 None）；卡头标注「来自 X」。
+    /// 群聊成员归属（私聊为 None）；卡头标注「来自 X」。
     pub member: Option<String>,
 }
 
@@ -171,7 +171,7 @@ pub struct PermissionPrompt {
 pub enum SessionEvent {
     /// 恢复出来的历史消息（先于 Ready 到达，UI 用它替换 transcript）。
     History(Vec<HistoryEntry>),
-    /// 会话已建好（订阅就绪）；slot 非空时是频道成员会话的持久化槽位。
+    /// 会话已建好（订阅就绪）；slot 非空时是群聊成员会话的持久化槽位。
     Ready {
         session_id: String,
         slot: Option<String>,
@@ -410,7 +410,7 @@ enum Command {
         content: Option<ElicitationContent>,
     },
     /// 强制新建一条会话（不 resume；旧会话留在会话库）。
-    /// 私有/频道都按 `key` 归属，会话 id 由 CLI 决定，所以不需要额外 bot_id。
+    /// 私有/群聊都按 `key` 归属，会话 id 由 CLI 决定，所以不需要额外 bot_id。
     NewSession {
         key: String,
         workspace: String,
@@ -435,9 +435,9 @@ enum Command {
         text: String,
         attachments: Vec<AttachmentUpload>,
     },
-    /// 停止该 UI key（私聊/频道）下所有进行中的成员回合。
+    /// 停止该 UI key（私聊/群聊）下所有进行中的成员回合。
     Stop { key: String },
-    /// 只停止频道里某个成员的进行中回合（群任务按条 Stop）。
+    /// 只停止群聊里某个成员的进行中回合（群任务按条 Stop）。
     StopMember { key: String, member_id: String },
     /// 群任务重试/改派：给指定成员重新派发一个回合（不新增用户气泡）。
     ContinueTask {
@@ -506,7 +506,7 @@ impl BackendHandle {
         });
     }
 
-    /// 建频道成员会话（每个成员一条隐藏会话，事件都打回同一个 group_key）。
+    /// 建群聊成员会话（每个成员一条隐藏会话，事件都打回同一个 group_key）。
     pub fn ensure_group(&self, spec: GroupSpec) {
         let _ = self.tx.send(Command::EnsureGroup { spec });
     }
@@ -516,12 +516,12 @@ impl BackendHandle {
         let _ = self.tx.send(Command::ResetSession { key: key.into() });
     }
 
-    /// 停止进行中的回合（私聊/频道通用）。
+    /// 停止进行中的回合（私聊/群聊通用）。
     pub fn stop(&self, key: impl Into<String>) {
         let _ = self.tx.send(Command::Stop { key: key.into() });
     }
 
-    /// 只停止频道里某个成员的回合（群任务行内 Stop）。
+    /// 只停止群聊里某个成员的回合（群任务行内 Stop）。
     pub fn stop_member(&self, key: impl Into<String>, member_id: impl Into<String>) {
         let _ = self.tx.send(Command::StopMember {
             key: key.into(),
@@ -611,7 +611,7 @@ impl BackendHandle {
         });
     }
 
-    /// 频道发言：按 @点名 / 回应策略选成员，逐成员组 prompt 后发送。
+    /// 群聊发言：按 @点名 / 回应策略选成员，逐成员组 prompt 后发送。
     pub fn send_group(
         &self,
         key: impl Into<String>,
@@ -719,7 +719,7 @@ enum SessionEngine {
 }
 
 struct SessionCtx {
-    /// 频道成员会话的展示名（私聊 None；Stop 命令的错误归属用）。
+    /// 群聊成员会话的展示名（私聊 None；Stop 命令的错误归属用）。
     member: Option<String>,
     engine: SessionEngine,
 }
@@ -1266,7 +1266,7 @@ async fn run_agent(
                         key,
                         event: SessionEvent::Error {
                             member: None,
-                            message: "频道会话尚未建立".to_string(),
+                            message: "群聊会话尚未建立".to_string(),
                         },
                     });
                     continue;
@@ -1452,7 +1452,7 @@ async fn run_agent(
                         key,
                         event: SessionEvent::Error {
                             member: None,
-                            message: "频道会话尚未建立".to_string(),
+                            message: "群聊会话尚未建立".to_string(),
                         },
                     });
                     continue;
@@ -1467,7 +1467,7 @@ async fn run_agent(
                         key,
                         event: SessionEvent::Error {
                             member: None,
-                            message: "任务负责人不在频道成员里".to_string(),
+                            message: "任务负责人不在群聊成员里".to_string(),
                         },
                     });
                     continue;
@@ -1601,7 +1601,7 @@ fn group_user_text(prompt: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_string())
 }
 
-/// 频道成员会话在 sessions 表里的内部键（UI 只看 group_key）。
+/// 群聊成员会话在 sessions 表里的内部键（UI 只看 group_key）。
 pub fn member_session_key(group_key: &str, member_id: &str) -> String {
     format!("{group_key}\u{1}{member_id}")
 }

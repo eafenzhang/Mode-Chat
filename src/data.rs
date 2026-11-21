@@ -56,7 +56,7 @@ impl Bot {
 pub struct Group {
     pub id: String,
     pub name: String,
-    /// 频道共享目录；空/缺省回落成员目录。
+    /// 群聊共享目录；空/缺省回落成员目录。
     pub directory: Option<String>,
     pub member_ids: Vec<String>,
     pub admin_id: Option<String>,
@@ -76,7 +76,7 @@ pub struct Roster {
     /// hidden=true 的条目：不在侧栏出现，设置面板里可恢复显示。
     pub hidden_bots: Vec<Bot>,
     pub hidden_groups: Vec<Group>,
-    /// archived=true 的频道：同样不在侧栏，设置面板可恢复。
+    /// archived=true 的群聊：同样不在侧栏，设置面板可恢复。
     pub archived_groups: Vec<Group>,
     pub data_root: PathBuf,
     pub error: Option<String>,
@@ -335,14 +335,14 @@ pub fn team_memory() -> String {
     bots_service::memory_store::memory_context(&root, 4_000)
 }
 
-/// 频道记忆根（`mode-bot:group:<id>` 身份；与 WebView groupWorkspaceIdentity 同口径）。
+/// 群聊记忆根（`mode-bot:group:<id>` 身份；与 WebView groupWorkspaceIdentity 同口径）。
 pub fn group_memory_root(group_id: &str) -> Option<PathBuf> {
     let storage = cli_storage_dir();
     let identity = format!("mode-bot:group:{group_id}");
     bots_service::memory_store::resolve_memory_root(storage.as_deref(), &identity)
 }
 
-/// 频道记忆：groups.json 里手写的 `memory` + 自动回顾写入的文件记忆。
+/// 群聊记忆：groups.json 里手写的 `memory` + 自动回顾写入的文件记忆。
 /// 返回可直接塞进群 prompt 的合并文本。
 pub fn group_memory_context(group_id: &str, manual: &str) -> String {
     let mut memory = manual.trim().to_string();
@@ -369,7 +369,7 @@ pub fn team_memory_entries() -> Vec<bots_service::memory_store::MemoryEntry> {
     bots_service::memory_store::list_memory(&root).entries
 }
 
-/// 频道记忆条目列表。
+/// 群聊记忆条目列表。
 pub fn group_memory_entries(group_id: &str) -> Vec<bots_service::memory_store::MemoryEntry> {
     let Some(root) = group_memory_root(group_id) else {
         return Vec::new();
@@ -383,7 +383,7 @@ pub fn read_team_memory(file: &str) -> Option<bots_service::memory_store::Memory
     bots_service::memory_store::read_memory(&root, file).ok()
 }
 
-/// 读一条频道记忆的完整内容。
+/// 读一条群聊记忆的完整内容。
 pub fn read_group_memory(
     group_id: &str,
     file: &str,
@@ -434,7 +434,7 @@ pub fn save_team_memory(
     save_memory_in(root, "mode-bot:team", file, title, description, body)
 }
 
-/// 新增/编辑一条频道记忆。
+/// 新增/编辑一条群聊记忆。
 pub fn save_group_memory(
     group_id: &str,
     file: Option<&str>,
@@ -453,7 +453,7 @@ pub fn delete_team_memory(file: &str) -> Result<(), String> {
     bots_service::memory_store::delete_memory(&root, file)
 }
 
-/// 删除一条频道记忆。
+/// 删除一条群聊记忆。
 pub fn delete_group_memory(group_id: &str, file: &str) -> Result<(), String> {
     let root = group_memory_root(group_id).ok_or_else(|| "记忆存储不可用".to_string())?;
     bots_service::memory_store::delete_memory(&root, file)
@@ -475,13 +475,13 @@ pub fn undo_team_memory() -> Result<String, String> {
     undo_memory_in(&root)
 }
 
-/// 撤销最近一次频道记忆修改。
+/// 撤销最近一次群聊记忆修改。
 pub fn undo_group_memory(group_id: &str) -> Result<String, String> {
     let root = group_memory_root(group_id).ok_or_else(|| "记忆存储不可用".to_string())?;
     undo_memory_in(&root)
 }
 
-/// 频道目标 prompt（`{data_root}/v2/groups/<gid>/goal.json`；无目标/终态返回空串）。
+/// 群聊目标 prompt（`{data_root}/v2/groups/<gid>/goal.json`；无目标/终态返回空串）。
 pub fn group_goal_prompt(group_id: &str) -> String {
     if group_id.trim().is_empty() {
         return String::new();
@@ -1379,7 +1379,7 @@ pub fn set_bot_allowlist(id: &str, allowlist: Vec<String>) -> Result<(), String>
     Ok(())
 }
 
-/// 新建/编辑频道用的入参（校验与写盘由本模块统一做）。
+/// 新建/编辑群聊用的入参（校验与写盘由本模块统一做）。
 #[derive(Debug, Clone)]
 pub struct GroupDraft {
     pub name: String,
@@ -1442,10 +1442,10 @@ fn draft_to_record(id: String, draft: &GroupDraft, created_at: String) -> bot_te
     }
 }
 
-/// 新建频道（原子写；管理员必须在成员里、成员非空由校验层保证）。
+/// 新建群聊（原子写；管理员必须在成员里、成员非空由校验层保证）。
 pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
     if draft.name.trim().is_empty() {
-        return Err("频道名不能为空".to_string());
+        return Err("群聊名不能为空".to_string());
     }
     if draft.member_ids.is_empty() {
         return Err("至少选一位成员".to_string());
@@ -1458,20 +1458,20 @@ pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
         .groups
         .into_iter()
         .find(|group| group.id == id)
-        .ok_or_else(|| "写入后名册里找不到新频道".to_string())
+        .ok_or_else(|| "写入后名册里找不到新群聊".to_string())
 }
 
-/// 编辑频道：只改名字/管理员/成员/规则/记忆/回应策略，置顶/归档/隐藏保持不变。
+/// 编辑群聊：只改名字/管理员/成员/规则/记忆/回应策略，置顶/归档/隐藏保持不变。
 pub fn update_group(id: &str, draft: GroupDraft) -> Result<Group, String> {
     if draft.name.trim().is_empty() {
-        return Err("频道名不能为空".to_string());
+        return Err("群聊名不能为空".to_string());
     }
     if draft.member_ids.is_empty() {
         return Err("至少选一位成员".to_string());
     }
     let mut file = read_groups()?;
     let Some(record) = file.groups.iter_mut().find(|record| record.id == id) else {
-        return Err("名册里找不到该频道".to_string());
+        return Err("名册里找不到该群聊".to_string());
     };
     let created_at = record.created_at.clone();
     let pinned = record.pinned;
@@ -1491,16 +1491,16 @@ pub fn update_group(id: &str, draft: GroupDraft) -> Result<Group, String> {
         .groups
         .into_iter()
         .find(|group| group.id == id)
-        .ok_or_else(|| "写入后名册里找不到该频道".to_string())
+        .ok_or_else(|| "写入后名册里找不到该群聊".to_string())
 }
 
-/// 删除频道（groups.json 移除；成员会话与 transcript 不动）。
+/// 删除群聊（groups.json 移除；成员会话与 transcript 不动）。
 pub fn delete_group(id: &str) -> Result<(), String> {
     let mut file = read_groups()?;
     let before = file.groups.len();
     file.groups.retain(|record| record.id != id);
     if file.groups.len() == before {
-        return Err("名册里找不到该频道".to_string());
+        return Err("名册里找不到该群聊".to_string());
     }
     write_groups(file)
 }
@@ -1509,7 +1509,7 @@ pub fn delete_group(id: &str) -> Result<(), String> {
 pub fn set_group_archived(id: &str, archived: bool) -> Result<(), String> {
     let mut file = read_groups()?;
     let Some(record) = file.groups.iter_mut().find(|record| record.id == id) else {
-        return Err("名册里找不到该频道".to_string());
+        return Err("名册里找不到该群聊".to_string());
     };
     record.archived = archived;
     write_groups(file)
@@ -1525,7 +1525,7 @@ pub fn set_group_flags(id: &str, pinned: Option<bool>, hidden: Option<bool>) -> 
     let mut file = serde_json::from_slice::<bot_team::group::GroupsFile>(&bytes)
         .map_err(|error| format!("groups.json 解析失败（{error}）"))?;
     let Some(record) = file.groups.iter_mut().find(|record| record.id == id) else {
-        return Err("名册里找不到该频道".to_string());
+        return Err("名册里找不到该群聊".to_string());
     };
     if let Some(value) = pinned {
         record.pinned = value;
@@ -2019,7 +2019,7 @@ impl GroupJson {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
             name: if self.name.trim().is_empty() {
-                "未命名频道".to_string()
+                "未命名群聊".to_string()
             } else {
                 self.name.trim().to_string()
             },
@@ -2038,7 +2038,7 @@ impl GroupJson {
 mod tests {
     use super::*;
 
-    /// 频道写路径端到端：新建 → 编辑 → 归档 → 恢复 → 删除（隔离 data root）。
+    /// 群聊写路径端到端：新建 → 编辑 → 归档 → 恢复 → 删除（隔离 data root）。
     ///
     /// 只设一次 `BOT_PILOT_DATA_ROOT`：这是进程级环境变量，本模块只有这一个用例读它，
     /// 其它测试不碰 data_root()，因此不会互相干扰。
@@ -2061,21 +2061,21 @@ mod tests {
         unsafe { std::env::set_var("BOT_PILOT_DATA_ROOT", &root) };
 
         let created = create_group(GroupDraft {
-            name: "演练频道".to_string(),
+            name: "演练群聊".to_string(),
             admin_id: "bot-a".to_string(),
             member_ids: vec!["bot-a".to_string(), "bot-b".to_string()],
             instructions: "先对齐再动手".to_string(),
             memory: "窗口固定周四".to_string(),
             responder_policy: "mentions-first".to_string(),
         })
-        .expect("新建频道");
-        assert_eq!(created.name, "演练频道");
+        .expect("新建群聊");
+        assert_eq!(created.name, "演练群聊");
         assert_eq!(created.member_ids, vec!["bot-a", "bot-b"]);
-        assert_eq!(Roster::load().groups.len(), 1, "名册必须看到新频道");
+        assert_eq!(Roster::load().groups.len(), 1, "名册必须看到新群聊");
 
         // 管理员不在成员里：校验层拒绝
         let rejected = create_group(GroupDraft {
-            name: "坏频道".to_string(),
+            name: "坏群聊".to_string(),
             admin_id: "bot-z".to_string(),
             member_ids: vec!["bot-a".to_string()],
             instructions: String::new(),
@@ -2087,7 +2087,7 @@ mod tests {
         let updated = update_group(
             &created.id,
             GroupDraft {
-                name: "改名频道".to_string(),
+                name: "改名群聊".to_string(),
                 admin_id: "bot-b".to_string(),
                 member_ids: vec!["bot-b".to_string()],
                 instructions: String::new(),
@@ -2095,21 +2095,21 @@ mod tests {
                 responder_policy: "admin-only".to_string(),
             },
         )
-        .expect("编辑频道");
-        assert_eq!(updated.name, "改名频道");
+        .expect("编辑群聊");
+        assert_eq!(updated.name, "改名群聊");
         assert_eq!(updated.admin_id.as_deref(), Some("bot-b"));
         assert_eq!(updated.member_ids, vec!["bot-b"]);
         assert_eq!(updated.responder_policy, "admin-only");
 
         set_group_archived(&created.id, true).expect("归档");
         let roster = Roster::load();
-        assert!(roster.groups.is_empty(), "归档后侧栏不应再有该频道");
+        assert!(roster.groups.is_empty(), "归档后侧栏不应再有该群聊");
         assert_eq!(roster.archived_groups.len(), 1, "归档区必须能看到它");
 
         set_group_archived(&created.id, false).expect("取消归档");
         assert_eq!(Roster::load().groups.len(), 1);
 
-        delete_group(&created.id).expect("删除频道");
+        delete_group(&created.id).expect("删除群聊");
         assert!(Roster::load().groups.is_empty(), "删除后名册里不应再有");
         assert!(
             Roster::load().archived_groups.is_empty(),

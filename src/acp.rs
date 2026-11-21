@@ -24,7 +24,7 @@ use crate::backend::{
 pub enum AcpEvent {
     Ready {
         session_id: String,
-        /// 频道成员槽位/切换历史时的持久化键；私聊新建为 None。
+        /// 群聊成员槽位/切换历史时的持久化键；私聊新建为 None。
         slot: Option<String>,
     },
     Delta(String),

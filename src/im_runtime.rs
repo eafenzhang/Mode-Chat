@@ -189,7 +189,7 @@ impl ImRuntimeManager {
             let mut body = bots_service::bot_text::to_plain_text_reply(text);
             if attachment_count > 0 {
                 body.push_str(&format!(
-                    "\n（另有 {attachment_count} 个附件未同步到 IM）"
+                    "\n（另有 {attachment_count} 个附件未同步到 IM频道）"
                 ));
             }
             for chunk in split_bot_text(&body, 3_500) {
@@ -213,7 +213,7 @@ impl ImRuntimeManager {
             .bots
             .iter()
             .find(|bot| bot.id == target.bot_id)
-            .ok_or_else(|| format!("找不到 IM 机器人配置：{}", target.bot_id))?;
+            .ok_or_else(|| format!("找不到 IM频道机器人配置：{}", target.bot_id))?;
         let from_user_id = bot
             .provider_self_id
             .clone()
@@ -228,7 +228,7 @@ impl ImRuntimeManager {
         let mut body = text.to_string();
         if attachment_count > 0 {
             body.push_str(&format!(
-                "\n（另有 {attachment_count} 个附件未同步到 IM）"
+                "\n（另有 {attachment_count} 个附件未同步到 IM频道）"
             ));
         }
         sink.send_reply(&target.bot_id, &target.target_id, None, &body)
@@ -2372,7 +2372,7 @@ impl WeixinMessageHandler for ImWeixinHandler {
                 let reply = if ok {
                     "绑定成功：你现在可以私聊这个 Bot 了。".to_string()
                 } else {
-                    "绑定码无效或已过期，请在设置 → IM 里重新生成。".to_string()
+                    "绑定码无效或已过期，请在设置 → IM频道里重新生成。".to_string()
                 };
                 self.send_text(message, reply).await?;
                 return Ok(());
@@ -2387,7 +2387,7 @@ impl WeixinMessageHandler for ImWeixinHandler {
                 GateDecision::RequiresBinding => {
                     self.send_text(
                         message,
-                        "你还没有绑定这个 Bot。请让管理员在设置 → IM 里生成绑定码，然后发送 /bind <绑定码>。"
+                        "你还没有绑定这个 Bot。请让管理员在设置 → IM频道里生成绑定码，然后发送 /bind <绑定码>。"
                             .to_string(),
                     )
                     .await?;
@@ -2404,7 +2404,7 @@ impl WeixinMessageHandler for ImWeixinHandler {
                     }
                     self.send_text(
                         message,
-                        "已登记这个群聊；管理员在设置 → IM 批准后我才会在群里回复。".to_string(),
+                        "已登记这个群聊；管理员在设置 → IM频道批准后我才会在群里回复。".to_string(),
                     )
                     .await?;
                     return Ok(());
