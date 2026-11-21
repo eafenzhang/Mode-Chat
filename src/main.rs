@@ -21147,8 +21147,9 @@ impl PilotApp {
                     .min_h(px(0.))
                     .min_w(px(0.))
                     .overflow_hidden()
+                    // 输入文字、发送按钮、左下工具图标统一 12px 内边距。
                     .px(px(12.))
-                    .py(px(14.))
+                    .pt(px(12.))
                     .font_family(wecom_theme::FONT_FAMILY)
                     .text_size(px(14.))
                     .line_height(px(22.))
@@ -21157,9 +21158,10 @@ impl PilotApp {
             )
             .child(
                 div()
-                    .h(px(44.))
+                    // 52 = 28 图标上下各 12；发送按钮 26 高，上下各 13。
+                    .h(px(52.))
                     .flex_shrink_0()
-                    .px(px(8.))
+                    .px(px(12.))
                     .flex()
                     .items_center()
                     .gap(px(2.))
@@ -21230,6 +21232,8 @@ impl PilotApp {
                     .child(
                         div()
                             .id("wechat-send")
+                            // 与文字/图标左缘的 24（12 外壳 + 12 留白）对齐。
+                            .mr(px(12.))
                             .h(px(26.))
                             .px(px(14.))
                             .rounded(px(4.))

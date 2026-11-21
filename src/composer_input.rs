@@ -3,6 +3,7 @@
 //! 取代自绘 `text_input.rs`：Enter 提交（`submit_on_enter`），Shift+Enter 换行，
 //! 通过 `InputEvent::PressEnter` 派发 `Send`，IME/选区/软折行由组件负责。
 
+use gpui::component::Sizable;
 use gpui::component::input::{InputEvent, Textarea, TextareaState};
 use gpui::prelude::*;
 use gpui::{
@@ -168,6 +169,8 @@ impl Render for ComposerInput {
                 Textarea::new(&state)
                     .appearance(false)
                     .bordered(false)
+                    // XSmall 去掉编辑器内部 10/8 的默认内边距，边距交给外壳统一控制。
+                    .with_size(gpui::component::Size::XSmall)
                     .px(px(0.))
                     .py(px(0.))
                     .h_full()
