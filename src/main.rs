@@ -19924,7 +19924,7 @@ impl PilotApp {
                         } else {
                             wecom_theme::icon()
                         },
-                        1.2,
+                        0.9,
                     )),
             )
             .child(
