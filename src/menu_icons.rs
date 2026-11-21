@@ -8,7 +8,7 @@ use gpui::{Hsla, IntoElement, Rgba, Styled, px, svg};
 /// 侧栏图标尺寸（左导轨）。
 pub const RAIL_SIZE: f32 = 24.;
 /// 设置菜单图标尺寸。
-pub const SETTINGS_SIZE: f32 = 18.;
+pub const SETTINGS_SIZE: f32 = 22.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuIcon {
