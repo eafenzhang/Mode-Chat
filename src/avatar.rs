@@ -6,11 +6,9 @@
 //! 机器人面是原版 `ui/avatar.tsx` 的四段 SVG（24 viewBox、stroke 2），与图标同一套
 //! `svg().data()` 渲染管线。
 
-use std::sync::{Arc, OnceLock};
-
 use gpui::{
-    div, hsla, img, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
-    Image, ImageFormat, IntoElement, ParentElement, Rgba, Styled,
+    div, hsla, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
+    IntoElement, ParentElement, Rgba, Styled,
 };
 
 use crate::theme;
@@ -93,20 +91,14 @@ pub fn bot_icon_tile(icon: &str, color: &str, size: f32, radius: f32) -> AnyElem
 }
 
 /// 任意宽高版本（群头像单元格）：近黑底板 + 头部/面罩/眼睛/嘴分层拼装。
-pub fn bot_icon_tile_rect(
+/// 面罩机器人分层：头/天线剪影 + 面罩 + 眼睛 + 嘴。
+fn icon_layers(
     icon: &str,
-    color: &str,
-    width: f32,
-    height: f32,
-    radius: f32,
-) -> AnyElement {
-    let size = width.min(height);
-    // 图标占底板的 78%，四周留呼吸位；设计稿 640×640。
-    let glyph_size = size * 0.78;
+    tint: Rgba,
+    dark: Rgba,
+    glyph_size: f32,
+) -> gpui::Div {
     let k = glyph_size / 640.0;
-    let white = gpui::rgb(0xffffff);
-    let dark = gpui::rgb(0x0a0b0c);
-    let bg = crate::bot_icon::parse_color(color);
     let mut glyph = div()
         .relative()
         .size(px(glyph_size))
@@ -114,7 +106,7 @@ pub fn bot_icon_tile_rect(
             svg()
                 .data(crate::bot_icon::head_svg())
                 .size(px(glyph_size))
-                .text_color(white),
+                .text_color(tint),
         )
         .child(
             div()
@@ -134,7 +126,7 @@ pub fn bot_icon_tile_rect(
                         .data(crate::bot_icon::eyes_svg(icon))
                         .w(px(400. * k))
                         .h(px(172. * k))
-                        .text_color(white),
+                        .text_color(tint),
                 ),
         );
     if let Some(mouth) = crate::bot_icon::mouth_svg(icon) {
@@ -149,6 +141,47 @@ pub fn bot_icon_tile_rect(
                 .text_color(dark),
         );
     }
+    glyph
+}
+
+/// App 图标（矢量版）：近黑圆角底 + K1 绿色机器人，任意尺寸都清晰。
+pub fn app_icon(size: f32, radius: f32) -> AnyElement {
+    let dark = gpui::rgb(0x0a0b0c);
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded(px(radius))
+        .bg(linear_gradient(
+            160.0,
+            linear_color_stop(hsla(0.58, 0.06, 0.12, 1.), 0.0),
+            linear_color_stop(hsla(0.6, 0.10, 0.025, 1.), 1.0),
+        ))
+        .border_1()
+        .border_color(hsla(0., 0., 1., 0.07))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon_layers(
+            crate::bot_icon::DEFAULT_ICON,
+            gpui::rgb(0x2ed17f),
+            dark,
+            size * 0.84,
+        ))
+        .into_any_element()
+}
+
+/// 任意宽高版本（群头像单元格）：近黑底板 + 头部/面罩/眼睛/嘴分层拼装。
+pub fn bot_icon_tile_rect(
+    icon: &str,
+    color: &str,
+    width: f32,
+    height: f32,
+    radius: f32,
+) -> AnyElement {
+    let size = width.min(height);
+    let white = gpui::rgb(0xffffff);
+    let dark = gpui::rgb(0x0a0b0c);
+    let bg = crate::bot_icon::parse_color(color);
     div()
         .w(px(width))
         .h(px(height))
@@ -158,7 +191,7 @@ pub fn bot_icon_tile_rect(
         .flex()
         .items_center()
         .justify_center()
-        .child(glyph)
+        .child(icon_layers(icon, white, dark, size * 0.78))
         .into_any_element()
 }
 
@@ -189,23 +222,9 @@ pub fn bot_avatar(id: &str, size: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// 本机用户头像：默认应用图标，圆角与 Bot 方形头像一致。
-pub fn app_avatar(size: f32, radius: f32) -> impl IntoElement {
-    static APP_IMAGE: OnceLock<Arc<Image>> = OnceLock::new();
-    let image = APP_IMAGE
-        .get_or_init(|| {
-            Arc::new(Image::from_bytes(
-                ImageFormat::Png,
-                include_bytes!("../assets/icons/app.png").to_vec(),
-            ))
-        })
-        .clone();
-    div()
-        .size(px(size))
-        .flex_shrink_0()
-        .rounded(px(radius))
-        .overflow_hidden()
-        .child(img(image).size(px(size)))
+/// 本机用户头像：与 App 图标同构的矢量版，任意尺寸都清晰。
+pub fn app_avatar(size: f32, radius: f32) -> AnyElement {
+    app_icon(size, radius)
 }
 
 /// 任意宽高的 Bot 头像（群头像拼图单元格）。
