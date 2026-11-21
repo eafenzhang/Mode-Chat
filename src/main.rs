@@ -8807,7 +8807,12 @@ impl PilotApp {
                         .unwrap_or_else(|| tri!("PATH 上没找到 {}", "{} was not found on PATH", agent.command))
                 )
             };
-            let row = settings_row(agent.name.to_string(), Some(detail)).child(
+            let row = settings_row_with_leading(
+                agent_icon(agent.id),
+                agent.name.to_string(),
+                Some(detail),
+            )
+            .child(
                 div()
                     .font_family(if wechat {
                         wecom_theme::FONT_FAMILY
@@ -18809,6 +18814,80 @@ const SETTINGS_PAGES: [&str; 18] = [
 ];
 
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
+/// 智能体引擎图标：内置用应用图标，其余用品牌/语义徽章。
+fn agent_icon(id: &str) -> gpui::AnyElement {
+    fn badge(bg: gpui::Rgba, data: &'static [u8]) -> gpui::AnyElement {
+        div()
+            .size(px(26.))
+            .flex_shrink_0()
+            .rounded(px(7.))
+            .bg(bg)
+            .border_1()
+            .border_color(gpui::hsla(0., 0., 1., 0.12))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                gpui::svg()
+                    .data(data)
+                    .size(px(17.))
+                    .text_color(gpui::rgb(0xffffff)),
+            )
+            .into_any_element()
+    }
+    match id {
+        "mode" => avatar::app_icon(26., 6.),
+        "pi" | "pi-acp" => {
+            let bar = |height: f32, color: gpui::Rgba, opacity: f32| {
+                div()
+                    .w(px(4.))
+                    .h(px(height))
+                    .rounded(px(1.))
+                    .bg(color)
+                    .opacity(opacity)
+            };
+            div()
+                .size(px(26.))
+                .flex_shrink_0()
+                .rounded(px(7.))
+                .bg(gpui::rgb(0x101113))
+                .border_1()
+                .border_color(gpui::hsla(0., 0., 1., 0.12))
+                .flex()
+                .items_end()
+                .justify_center()
+                .gap(px(2.))
+                .pb(px(4.))
+                .child(bar(9.5, gpui::rgb(0xffffff), 0.55))
+                .child(bar(15., gpui::rgb(0xec6b38), 1.))
+                .child(bar(7., gpui::rgb(0xffffff), 0.45))
+                .into_any_element()
+        }
+        "deepseek" => badge(
+            gpui::rgb(0x5786fe),
+            include_bytes!("../assets/icons/agents/deepseek.svg"),
+        ),
+        "hermes" => badge(
+            gpui::rgb(0xc98a2e),
+            include_bytes!("../assets/icons/agents/hermes.svg"),
+        ),
+        "zcode" => badge(
+            gpui::rgb(0x18181b),
+            include_bytes!("../assets/icons/agents/zcode.svg"),
+        ),
+        _ => div()
+            .size(px(26.))
+            .flex_shrink_0()
+            .rounded(px(7.))
+            .bg(theme::hover())
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icons::icon(icons::Icon::Bot, 15., theme::ink_secondary()))
+            .into_any_element(),
+    }
+}
+
 fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     match index {
         0 => menu_icons::MenuIcon::Sliders,
@@ -19414,8 +19493,25 @@ fn value_box(value: String, label: Option<&'static str>) -> impl IntoElement {
 
 /// 设置页列表行：左标题 + 可选副标题，右侧放按钮（调用方 `.child`）。
 fn settings_row(title: String, detail: Option<String>) -> gpui::Div {
+    settings_row_inner(None, title, detail)
+}
+
+/// 带前置图标的列表行（智能体引擎等）。
+fn settings_row_with_leading(
+    leading: impl IntoElement,
+    title: String,
+    detail: Option<String>,
+) -> gpui::Div {
+    settings_row_inner(Some(leading.into_any_element()), title, detail)
+}
+
+fn settings_row_inner(
+    leading: Option<gpui::AnyElement>,
+    title: String,
+    detail: Option<String>,
+) -> gpui::Div {
     let wechat = wecom_theme::active();
-    div()
+    let mut row = div()
         .w_full()
         .min_h(px(42.))
         .px(px(12.))
@@ -19423,8 +19519,11 @@ fn settings_row(title: String, detail: Option<String>) -> gpui::Div {
         .flex()
         .items_center()
         .justify_between()
-        .gap(px(12.))
-        .child(
+        .gap(px(12.));
+    if let Some(leading) = leading {
+        row = row.child(leading);
+    }
+    row.child(
             div()
                 .flex_1()
                 .min_w(px(0.))
