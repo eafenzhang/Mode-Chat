@@ -80,7 +80,7 @@ const LIGHT_MENU: Rgba = rgba(0xff, 0xff, 0xff, 255);
 const LIGHT_CARD: Rgba = rgba(0xff, 0xff, 0xff, 255);
 const LIGHT_INSET: Rgba = rgba(0xf0, 0xf0, 0xf0, 255);
 const LIGHT_CONTROL: Rgba = rgba(0xff, 0xff, 0xff, 255);
-const LIGHT_HAIRLINE: Rgba = rgba(0xe3, 0xe3, 0xe3, 255);
+const LIGHT_HAIRLINE: Rgba = rgba(0xec, 0xec, 0xec, 255);
 const LIGHT_INK: Rgba = rgba(0x14, 0x14, 0x14, 255);
 const LIGHT_INK_SECONDARY: Rgba = rgba(0x5a, 0x5a, 0x5a, 255);
 const LIGHT_INK_TERTIARY: Rgba = rgba(0x6b, 0x6b, 0x6b, 255);
@@ -250,14 +250,14 @@ pub fn ink_secondary() -> Rgba {
 pub fn ink_tertiary() -> Rgba {
     pick(DARK_INK_TERTIARY, LIGHT_INK_TERTIARY)
 }
-/// 1px 描边（原版 `--bot-edge`：ink 8%）。
+/// 1px 描边（原版 `--bot-edge`：ink 8%；浅色再收一档，避免白底上线条发重）。
 pub fn edge() -> Rgba {
     let ink = ink();
     rgba_a(
         (ink.r * 255.0) as u8,
         (ink.g * 255.0) as u8,
         (ink.b * 255.0) as u8,
-        0.08,
+        if is_light() { 0.06 } else { 0.08 },
     )
 }
 /// 输入卡聚焦/悬停描边（DS `[data-composer-card]:focus-within`：ink 30%）。

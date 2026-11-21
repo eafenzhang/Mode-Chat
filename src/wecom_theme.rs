@@ -112,7 +112,7 @@ pub fn nav_badge_bg() -> Rgba {
     pick(0xe24747, 0xfa5151)
 }
 pub fn nav_separator() -> Rgba {
-    pick(0x3a3a3b, 0xd2d2d2)
+    pick(0x3a3a3b, 0xe0e0e0)
 }
 
 // 会话列表
@@ -188,7 +188,7 @@ pub fn composer_bg() -> Rgba {
     pick(0x1e1e1f, 0xffffff)
 }
 pub fn composer_border() -> Rgba {
-    pick(0x2f2f30, 0xe3e3e3)
+    pick(0x2f2f30, 0xededed)
 }
 pub fn composer_placeholder() -> Rgba {
     pick(0x7a7a7c, 0xb0b0b0)
@@ -214,7 +214,7 @@ pub fn accent() -> Rgba {
     accent_color()
 }
 pub fn divider() -> Rgba {
-    pick(0x2f2f30, 0xe2e2e2)
+    pick(0x2f2f30, 0xededed)
 }
 
 // 信息栏（本皮肤默认不显示；保留 token 供以后做聊天信息面板）
@@ -231,7 +231,7 @@ pub fn panel_card_bg() -> Rgba {
     pick(0x2f2f30, 0xffffff)
 }
 pub fn panel_divider() -> Rgba {
-    pick(0x3a3a3b, 0xe5e5e5)
+    pick(0x3a3a3b, 0xededed)
 }
 pub fn online_dot() -> Rgba {
     accent_color()

@@ -3356,7 +3356,7 @@ impl PilotApp {
     }
 
     /// 频道 composer 上方的任务条：摘要常驻，展开看最近 6 条任务。
-    fn group_task_bar(&self, embedded: bool, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn group_task_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let Some(Selection::Group(index)) = self.selection else {
             return None;
         };
@@ -3400,7 +3400,7 @@ impl PilotApp {
             .id("group-task-bar")
             .h(px(32.))
             .w_full()
-            .px(px(if embedded { 12. } else { 10. }))
+            .px(px(10.))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -3438,19 +3438,16 @@ impl PilotApp {
             ));
         // 与下方输入框同宽：微信 composer 左右各 14；经典 composer px24 + max_w1008。
         let pad = if wechat { 14. } else { 24. };
-        let mut card = div().w_full();
-        card = if embedded {
-            card.border_b_1()
-                .border_color(border)
-                .bg(gpui::rgba(0x00000000))
-        } else {
-            card.rounded(px(8.))
-                .border_1()
-                .border_color(border)
-                .bg(bg)
-                .overflow_hidden()
-        };
-        let mut card = card.flex().flex_col().child(header);
+        let mut card = div()
+            .w_full()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(header);
         if expanded {
             let mut list = div()
                 .w_full()
@@ -3473,7 +3470,7 @@ impl PilotApp {
                         .id(SharedString::from(format!("group-task-{}", task.id)))
                         .h(px(28.))
                         .w_full()
-                        .px(px(if embedded { 12. } else { 10. }))
+                        .px(px(10.))
                         .flex()
                         .items_center()
                         .gap(px(8.))
@@ -3532,7 +3529,7 @@ impl PilotApp {
                     .id("group-task-open")
                     .h(px(28.))
                     .w_full()
-                    .px(px(if embedded { 12. } else { 10. }))
+                    .px(px(10.))
                     .flex()
                     .items_center()
                     .justify_end()
@@ -3559,9 +3556,6 @@ impl PilotApp {
                     ),
             );
             card = card.child(list);
-        }
-        if embedded {
-            return Some(card.into_any_element());
         }
         let mut wrap = div().w_full();
         if !wechat {
@@ -19914,7 +19908,7 @@ impl PilotApp {
                             .children(self.question_cards(cx))
                             .children(self.elicitation_cards(cx))
                             .children(self.approval_cards(cx))
-                            .children(self.group_task_bar(false, cx))
+                            .children(self.group_task_bar(cx))
                             .child(self.composer(window, cx)),
                     )
                     .children(self.right_panel_open.then(|| self.right_panel(window, cx))),
@@ -20963,6 +20957,7 @@ impl PilotApp {
             .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
+            .children(self.group_task_bar(cx))
             .child(self.wecom_composer(window, cx))
     }
 
@@ -21295,7 +21290,6 @@ impl PilotApp {
             .min_h(px(wecom_theme::COMPOSER_HEIGHT))
             .flex_shrink_0()
             .rounded(px(8.))
-            .overflow_hidden()
             .border_1()
             .border_color(wecom_theme::composer_border())
             .bg(wecom_theme::composer_bg())
@@ -21314,7 +21308,6 @@ impl PilotApp {
             .children(self.mention_panel(cx))
             .children(self.attachment_chips(cx))
             .children(self.error_bar(cx))
-            .children(self.group_task_bar(true, cx))
             .child(
                 div()
                     .id("composer-input")
