@@ -2715,6 +2715,8 @@ struct PilotApp {
     /// 删除团队记忆确认：待删文件名与标题。
     /// 右栏「⋯」菜单是否展开（置顶/隐藏/编辑/删除入口）。
     detail_menu_open: bool,
+    /// 左栏「+」弹出的新建菜单（Bot / 频道 / 分组）。
+    new_menu_open: bool,
     /// 侧栏底栏齿轮菜单是否展开。
     footer_menu_open: bool,
     /// 左导轨「我」的资料卡是否展开。
@@ -3193,6 +3195,7 @@ impl PilotApp {
             mention_selected: 0,
             mention_dismissed: false,
             detail_menu_open: false,
+            new_menu_open: false,
             footer_menu_open: false,
             me_card_open: false,
             menu_selected: 0,
@@ -5756,6 +5759,11 @@ impl PilotApp {
         debug_action("CloseOverlay");
         // IME 组合中 Esc 是「取消候选」，不能顺手关掉当前浮层。
         if self.ime_composing(cx) {
+            return;
+        }
+        if self.new_menu_open {
+            self.new_menu_open = false;
+            cx.notify();
             return;
         }
         if self.settings_dropdown.is_some() {
@@ -12525,6 +12533,123 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         }),
                                     ),
                                 ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// 左栏「+」菜单：新建 Bot / 频道 / 分组（DS 的三类新建入口）。
+    fn new_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.new_menu_open {
+            return None;
+        }
+        let wechat = wecom_theme::active();
+        let item = |id: &'static str, icon: icons::Icon, label: &'static str| {
+            div()
+                .id(id)
+                .h(px(30.))
+                .rounded(px(6.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .cursor_pointer()
+                .font_family(if wechat {
+                    wecom_theme::FONT_FAMILY
+                } else {
+                    theme::FONT_FAMILY
+                })
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .text_color(if wechat {
+                    wecom_theme::chat_title()
+                } else {
+                    theme::ink()
+                })
+                .hover(move |style| {
+                    style.bg(if wechat {
+                        wecom_theme::list_hover()
+                    } else {
+                        theme::hover()
+                    })
+                })
+                .child(icons::icon(
+                    icon,
+                    15.,
+                    if wechat {
+                        wecom_theme::panel_text()
+                    } else {
+                        theme::ink_secondary()
+                    },
+                ))
+                .child(SharedString::from(label))
+        };
+        Some(
+            div()
+                .id("new-menu-catcher")
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| {
+                        cx.stop_propagation();
+                        this.new_menu_open = false;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(128.))
+                        .top(px(74.))
+                        .w(px(170.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(if wechat {
+                            wecom_theme::composer_border()
+                        } else {
+                            theme::edge()
+                        })
+                        .bg(if wechat {
+                            wecom_theme::panel_card_bg()
+                        } else {
+                            theme::menu()
+                        })
+                        .shadow(theme::shadow_3())
+                        .p(px(6.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _event, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(item("new-menu-bot", icons::Icon::Bot, i18n::t("新建 Bot")).on_click(
+                            cx.listener(|this, _event, _window, cx| {
+                                this.new_menu_open = false;
+                                this.open_new_dialog(cx);
+                            }),
+                        ))
+                        .child(
+                            item("new-menu-channel", icons::Icon::Hash, i18n::t("新建频道")).on_click(
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.new_menu_open = false;
+                                    this.open_new_group_dialog(cx);
+                                }),
+                            ),
+                        )
+                        .child(
+                            item("new-menu-section", icons::Icon::Folder, i18n::t("新建分组")).on_click(
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.new_menu_open = false;
+                                    this.pending_section_dialog =
+                                        Some(SectionDialogRequest::New);
+                                    cx.notify();
+                                }),
+                            ),
                         ),
                 )
                 .into_any_element(),
@@ -20451,7 +20576,10 @@ impl PilotApp {
                         .cursor_pointer()
                         .hover(|style| style.bg(wecom_theme::list_hover()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.open_new_dialog(cx);
+                            this.new_menu_open = !this.new_menu_open;
+                            this.footer_menu_open = false;
+                            this.detail_menu_open = false;
+                            cx.notify();
                         }))
                         .child(icons::icon(icons::Icon::Plus, 16., wecom_theme::icon())),
                 ),
@@ -21264,6 +21392,7 @@ impl Render for PilotApp {
             .children(self.settings_overlay(window, cx))
             .children(self.settings_dropdown_overlay(cx))
             .children(self.footer_menu_overlay(cx))
+            .children(self.new_menu_overlay(cx))
             .children(None::<gpui::AnyElement>)
             .children(self.find_dialog_overlay(window, cx))
             .children(self.palette_overlay(window, cx))
