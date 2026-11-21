@@ -19218,10 +19218,10 @@ fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
     let count = rows.len();
     let mut card = div()
         .w_full()
-        .rounded(px(12.))
+        .rounded(px(8.))
         .border_1()
         .border_color(if wechat {
-            wecom_theme::panel_divider()
+            wecom_theme::composer_border()
         } else {
             theme::edge()
         })
