@@ -7088,7 +7088,8 @@ impl PilotApp {
         let card_width = (viewport_width - 48.).min(1100.);
         let card_height = (viewport_height - 64.).min(780.);
         let nav = self.settings_nav(cx);
-        let page = self.settings_page(cx);
+        let content_width = (card_width - NAV_WIDTH - 46.).max(280.);
+        let page = self.settings_page(content_width, cx);
         let card = div()
             .id("settings-card")
             .track_focus(&self.settings_focus)
@@ -7343,7 +7344,7 @@ impl PilotApp {
         nav
     }
 
-    fn settings_page(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn settings_page(&mut self, content_width: f32, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.settings_tab {
             0 => self.settings_page_general(cx),
             1 => self.settings_page_models(cx),
@@ -7352,7 +7353,7 @@ impl PilotApp {
             4 => self.settings_page_bots(cx),
             5 => self.settings_page_channels(cx),
             6 => self.settings_page_team_memory(cx),
-            7 => self.settings_page_connectors(cx),
+            7 => self.settings_page_connectors(content_width, cx),
             8 => self.settings_page_im(cx),
             9 => self.settings_page_schedules(cx),
             10 => self.settings_page_secrets(cx),
@@ -10201,7 +10202,11 @@ impl PilotApp {
         }
     }
 
-    fn settings_page_connectors(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn settings_page_connectors(
+        &mut self,
+        content_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
         let workspace = self
             .selected_bot()
@@ -10308,6 +10313,15 @@ impl PilotApp {
                 .child(settings_empty(i18n::t("没有匹配的连接器。")))
                 .into_any_element();
         }
+        // 卡片统一宽度：按可用宽度算出列数，所有分区共用同一卡片宽度，
+        // 避免 2 张的分区被拉宽、6 张的分区被挤窄。
+        const CARD_GAP: f32 = 8.;
+        const TARGET_CARD_WIDTH: f32 = 300.;
+        let avail = content_width.max(240.);
+        let columns = (((avail + CARD_GAP) / (TARGET_CARD_WIDTH + CARD_GAP)).floor() as usize).max(1);
+        let card_width = ((avail - CARD_GAP * columns.saturating_sub(1) as f32)
+            / columns as f32)
+            .max(240.);
         for (category, label) in categories {
             let specs: Vec<&connectors_service::ConnectorSpec> = filtered
                 .iter()
@@ -10439,9 +10453,8 @@ impl PilotApp {
                 );
                 cards.push(
                     div()
-                        .flex_1()
-                        .min_w(px(260.))
-                        .max_w(px(430.))
+                        .w(px(card_width))
+                        .flex_shrink_0()
                         .rounded(px(12.))
                         .border_1()
                         .border_color(if wechat {
@@ -20766,7 +20779,7 @@ impl PilotApp {
 
     fn wecom_settings_view(
         &mut self,
-        _window: &Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let title = match &self.im_create {
@@ -20779,7 +20792,13 @@ impl PilotApp {
         };
         let subpage = self.im_create.is_some() || self.im_qr_page.is_some();
         let tab = self.settings_tab;
-        let page = self.settings_page(cx);
+        // 右侧主区：窗口 - 导轨 - 设置列表 - 页面左右内边距(14+8) - 滚动条槽(6)。
+        let content_width = (f32::from(window.viewport_size().width)
+            - wecom_theme::NAV_WIDTH
+            - 198.
+            - 28.)
+            .max(280.);
+        let page = self.settings_page(content_width, cx);
         div()
             .flex_1()
             .min_w(px(0.))
@@ -21011,6 +21030,8 @@ impl PilotApp {
                     .min_h(px(0.))
                     .flex()
                     .justify_center()
+                    // 与正式 transcript 行同一左右留白（14px），避免骨架贴边。
+                    .px(px(14.))
                     .child(skeleton_rows())
                     .into_any_element();
             }
