@@ -7249,11 +7249,13 @@ impl PilotApp {
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
-                    .bg(if active {
-                        theme::accent()
-                    } else {
-                        rgba(0x00000000)
+                    .when(active, |el| {
+                        el.ml(px(-8.))
+                            .mr(px(-8.))
+                            .rounded(px(0.))
+                            .bg(theme::accent())
                     })
+                    .when(!active, |el| el.bg(rgba(0x00000000)))
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.settings_tab = index;
@@ -20430,7 +20432,12 @@ impl PilotApp {
                         .items_center()
                         .gap(px(8.))
                         .cursor_pointer()
-                        .when(active, |el| el.bg(wecom_theme::send_enabled()))
+                        .when(active, |el| {
+                            el.ml(px(-8.))
+                                .mr(px(-8.))
+                                .rounded(px(0.))
+                                .bg(wecom_theme::send_enabled())
+                        })
                         .when(!active, |el| {
                             el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                         })
