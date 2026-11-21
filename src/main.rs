@@ -3888,6 +3888,8 @@ impl PilotApp {
                     content_box.child(
                         div()
                             .id("group-tasks-body")
+                            // 右侧滚动条占 6px：左内边距补上，卡片左右留白一致。
+                            .pl(px(6.))
                             .max_h(px((viewport_height - 200.).max(240.)))
                             .overflow_y_scroll()
                             .scrollbar_width(px(6.))
