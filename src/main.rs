@@ -8020,42 +8020,29 @@ impl PilotApp {
     }
 
     fn accent_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut controls = div().flex().items_center().gap(px(6.));
-        let default_active = self.accent.is_none();
-        // 默认按钮照原版：蓝/炭黑对角分割的圆片，不是文字。
         let wechat = wecom_theme::active();
-        let (default_a, default_b) = if wechat {
-            (0x07c160, 0x07c160)
+        // 微信默认绿、经典默认蓝；首项即“默认色”，点它等于跟随主题默认。
+        let default_hex = if wechat { "#07c160" } else { "#4d6bfe" };
+        let palette: &[&str] = if wechat {
+            &[
+                "#07c160", "#00b4a6", "#4d6bfe", "#7c5cff", "#ec2f6b", "#ff6900", "#e5484d",
+            ]
         } else {
-            (0x4d6bfe, 0x1f1f1f)
+            &[
+                "#4d6bfe", "#07c160", "#00b4a6", "#7c5cff", "#ec2f6b", "#ff6900", "#e5484d",
+            ]
         };
-        controls = controls.child(
-            div()
-                .id("accent-default")
-                .size(px(20.))
-                .rounded_full()
-                .border_2()
-                .border_color(if default_active { theme::ink() } else { theme::edge() })
-                .bg(gpui::linear_gradient(
-                    135.,
-                    gpui::linear_color_stop(gpui::rgba(default_a), 0.5),
-                    gpui::linear_color_stop(gpui::rgba(default_b), 0.5),
-                ))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.accent = None;
-                    theme::set_accent(None);
-                    save_ui_value("accent", serde_json::Value::Null);
-                    cx.notify();
-                })),
-        );
-        for hex in [
-            "#4d6bfe", "#141416", "#2d2d2d", "#ec2f6b", "#0aa8d6", "#ff6900", "#082dff",
-        ] {
+        let current_hex = self
+            .accent
+            .map(color_hex)
+            .unwrap_or_else(|| default_hex.to_string());
+        let mut controls = div().flex().items_center().gap(px(6.));
+        for hex in palette {
             let Some(color) = parse_hex_color(hex) else {
                 continue;
             };
-            let selected = self.accent.is_some_and(|current| color_hex(current) == hex);
+            let selected = current_hex == *hex;
+            let is_default = *hex == default_hex;
             controls = controls.child(
                 div()
                     .id(SharedString::from(format!("accent-{hex}")))
@@ -8066,16 +8053,23 @@ impl PilotApp {
                     .border_color(if selected { theme::ink() } else { theme::edge() })
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.accent = Some(color);
-                        theme::set_accent(Some(color));
-                        save_ui_value("accent", serde_json::json!(hex));
+                        this.accent = if is_default { None } else { Some(color) };
+                        theme::set_accent(this.accent);
+                        save_ui_value(
+                            "accent",
+                            if is_default {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::json!(hex)
+                            },
+                        );
                         cx.notify();
                     })),
             );
         }
         settings_row(
-            i18n::t("强调色").to_string(),
-            Some(i18n::t("未读标记、徽标和品牌标志").to_string()),
+            i18n::t("主题色").to_string(),
+            Some(i18n::t("气泡、选中行与强调元素").to_string()),
         )
         .child(controls)
         .into_any_element()

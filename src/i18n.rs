@@ -476,6 +476,8 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "测试" => Some("Test"),
         "测试通知" => Some("Test notification"),
         "测试通知：托盘气泡显示正常" => Some("Test notification: the tray bubble works"),
+        "主题色" => Some("Theme color"),
+        "气泡、选中行与强调元素" => Some("Bubbles, selected rows and accents"),
         "浏览器" => Some("Browser"),
         "浏览器工具" => Some("Browser tool"),
         "浏览器操控" => Some("Browser control"),
