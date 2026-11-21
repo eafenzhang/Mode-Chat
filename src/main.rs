@@ -7242,6 +7242,7 @@ impl PilotApp {
             nav = nav.child(
                 div()
                     .id(SharedString::from(format!("settings-nav-{index}")))
+                    .relative()
                     .h(px(32.))
                     .rounded(px(8.))
                     .px(px(8.))
@@ -7250,10 +7251,15 @@ impl PilotApp {
                     .gap(px(8.))
                     .cursor_pointer()
                     .when(active, |el| {
-                        el.ml(px(-8.))
-                            .mr(px(-8.))
-                            .rounded(px(0.))
-                            .bg(theme::accent())
+                        el.child(
+                            div()
+                                .absolute()
+                                .top(px(0.))
+                                .bottom(px(0.))
+                                .left(px(-8.))
+                                .right(px(-8.))
+                                .bg(theme::accent()),
+                        )
                     })
                     .when(!active, |el| el.bg(rgba(0x00000000)))
                     .hover(|style| style.bg(theme::hover()))
@@ -20424,6 +20430,7 @@ impl PilotApp {
                 rows = rows.child(
                     div()
                         .id(SharedString::from(format!("wechat-set-{index}")))
+                        .relative()
                         .h(px(32.))
                         .w_full()
                         .px(px(8.))
@@ -20433,10 +20440,15 @@ impl PilotApp {
                         .gap(px(8.))
                         .cursor_pointer()
                         .when(active, |el| {
-                            el.ml(px(-8.))
-                                .mr(px(-8.))
-                                .rounded(px(0.))
-                                .bg(wecom_theme::send_enabled())
+                            el.child(
+                                div()
+                                    .absolute()
+                                    .top(px(0.))
+                                    .bottom(px(0.))
+                                    .left(px(-8.))
+                                    .right(px(-8.))
+                                    .bg(wecom_theme::send_enabled()),
+                            )
                         })
                         .when(!active, |el| {
                             el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
