@@ -20252,7 +20252,7 @@ impl PilotApp {
                 div()
                     .id(SharedString::from(format!("wechat-rail-{label}")))
                     .relative()
-                    .size(px(wecom_theme::NAV_ITEM_HEIGHT))
+                    .size(px(36.)).my(px(4.))
                     .rounded(px(6.))
                     .flex()
                     .items_center()
@@ -20306,7 +20306,7 @@ impl PilotApp {
             rail = rail.child(
                 div()
                     .id(SharedString::from(format!("wechat-pinned-settings-{tab}")))
-                    .size(px(wecom_theme::NAV_ITEM_HEIGHT))
+                    .size(px(36.)).my(px(4.))
                     .rounded(px(6.))
                     .flex()
                     .items_center()
@@ -20333,7 +20333,7 @@ impl PilotApp {
         rail.child(div().flex_1()).child(
             div()
                 .id("wechat-rail-settings")
-                .size(px(wecom_theme::NAV_ITEM_HEIGHT))
+                .size(px(36.)).my(px(4.))
                 .rounded(px(6.))
                 .flex()
                 .items_center()
