@@ -20431,7 +20431,7 @@ impl PilotApp {
                     div()
                         .id(SharedString::from(format!("wechat-set-{index}")))
                         .relative()
-                        .h(px(32.))
+                        .h(px(40.))
                         .w_full()
                         .px(px(8.))
                         .rounded(px(8.))
@@ -21216,7 +21216,7 @@ impl PilotApp {
                                     input.set_content(format!("{content}🙂"), cx);
                                 });
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Smile, 22., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_with_stroke(icons::Icon::Smile, 18., wecom_theme::icon(), 1.2)),
                     )
                     .child(
                         div()
@@ -21231,7 +21231,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.stage_attachments(cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Folder, 22., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_with_stroke(icons::Icon::Folder, 18., wecom_theme::icon(), 1.2)),
                     )
                     .child(
                         div()
@@ -21246,7 +21246,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.paste_clipboard_image(cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Scissors, 22., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_with_stroke(icons::Icon::Scissors, 18., wecom_theme::icon(), 1.2)),
                     )
                     .child(
                         div()
@@ -21261,7 +21261,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toast(i18n::t("语音暂未接入"), cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Mic, 22., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_with_stroke(icons::Icon::Mic, 18., wecom_theme::icon(), 1.2)),
                     )
                     .child(div().flex_1())
                     .child(
