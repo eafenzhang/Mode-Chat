@@ -20005,7 +20005,9 @@ impl PilotApp {
                     .min_h(px(0.))
                     .overflow_y_scroll()
                     .scrollbar_width(px(6.))
-                    .px(px(10.))
+                    // 滚动条占右侧 6px；右内边距相应减掉，视觉左右等宽。
+                    .pl(px(10.))
+                    .pr(px(4.))
                     .pt(px(6.))
                     .pb(px(12.))
                     .child(
