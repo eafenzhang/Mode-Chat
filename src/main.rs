@@ -3406,8 +3406,8 @@ impl PilotApp {
                 12.,
                 secondary,
             ));
-        // 与下方输入框同宽：微信 composer 左右各 8；经典 composer px24 + max_w1008。
-        let pad = if wechat { 8. } else { 24. };
+        // 与下方输入框同宽：微信 composer 左右各 14；经典 composer px24 + max_w1008。
+        let pad = if wechat { 14. } else { 24. };
         let mut card = div()
             .w_full()
             .rounded(px(8.))
@@ -3533,7 +3533,7 @@ impl PilotApp {
         }
         Some(
             wrap.px(px(pad))
-                .pb(px(6.))
+                .pb(px(14.))
                 .child(card)
                 .into_any_element(),
         )
@@ -5067,7 +5067,7 @@ impl PilotApp {
             .w_full()
             .max_w(px(960.))
             .mx_auto()
-            .mb(px(8.))
+            .mb(px(14.))
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_CARD))
             .border_1()
@@ -5384,7 +5384,7 @@ impl PilotApp {
             .w_full()
             .max_w(px(960.))
             .mx_auto()
-            .mb(px(8.))
+            .mb(px(14.))
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_CARD))
             .border_1()
@@ -5704,8 +5704,8 @@ impl PilotApp {
         }
 
         div()
-            .mx(px(8.))
-            .mb(px(4.))
+            .mx(px(14.))
+            .mb(px(14.))
             .flex_shrink_0()
             .rounded(px(10.))
             .border_1()
@@ -15099,7 +15099,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .child(
                             div()
                                 .w_full()
-                                .mb(px(16.))
+                                .mb(px(8.))
                                 .text_center()
                                 .font_family(theme::FONT_FAMILY)
                                 .text_size(px(11.))
@@ -18456,7 +18456,7 @@ fn settings_page_icon(index: usize) -> icons::Icon {
 fn settings_page_body(_title: &'static str) -> gpui::Div {
     // 页标题由设置壳统一渲染（原版 SettingsModal 的 h2），页面只排内容。
     // 外边距四向统一 10；区块间距（标题到卡片、卡片到下一标题）也统一 10。
-    div().w_full().flex().flex_col().gap(px(10.))
+    div().w_full().flex().flex_col().gap(px(14.))
 }
 
 /// 设置页分区标题（13/18 · 600）。
@@ -20493,9 +20493,9 @@ impl PilotApp {
             .child(
                 div()
                     .flex_shrink_0()
-                    .px(px(10.))
-                    .pt(px(8.))
-                    .pb(px(2.))
+                    .px(px(14.))
+                    .pt(px(14.))
+                    .pb(px(14.))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -20547,10 +20547,10 @@ impl PilotApp {
                     .overflow_y_scroll()
                     .scrollbar_width(px(6.))
                     // 滚动条占右侧 6px；右内边距相应减掉，视觉左右等宽。
-                    .pl(px(10.))
-                    .pr(px(4.))
-                    .pt(px(10.))
-                    .pb(px(10.))
+                    .pl(px(14.))
+                    .pr(px(8.))
+                    .pt(px(14.))
+                    .pb(px(14.))
                     .child(
                         div()
                             .w_full()
@@ -20594,7 +20594,7 @@ impl PilotApp {
                 div()
                     .h(px(56.))
                     .flex_shrink_0()
-                    .px(px(10.))
+                    .px(px(14.))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -20874,7 +20874,7 @@ impl PilotApp {
         )
         .scrollbar(true)
         .jump_button(false)
-        .with_row_style(gpui::StyleRefinement::default().px(px(8.)).pb(px(8.)))
+        .with_row_style(gpui::StyleRefinement::default().px(px(14.)).pb(px(14.)))
         .flex_1()
         .min_h(px(0.));
         let mut container = div()
@@ -20892,8 +20892,8 @@ impl PilotApp {
             let can_next = cursor + 1 < turns_prev.len();
             let mut nav = div()
                 .absolute()
-                .top(px(12.))
-                .right(px(8.))
+                .top(px(14.))
+                .right(px(14.))
                 .flex()
                 .flex_col()
                 .gap(px(2.))
@@ -20985,9 +20985,9 @@ impl PilotApp {
             wecom_theme::send_disabled_text()
         };
         div()
-            .ml(px(8.))
-            .mr(px(8.))
-            .mb(px(8.))
+            .ml(px(14.))
+            .mr(px(14.))
+            .mb(px(14.))
             .min_h(px(wecom_theme::COMPOSER_HEIGHT))
             .flex_shrink_0()
             .rounded(px(8.))
