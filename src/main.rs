@@ -17381,7 +17381,7 @@ fn wecom_row_el(
         WecomRow::Assistant {
             text,
             author,
-            author_id,
+            author_id: _,
         } => {
             let mut cell = div()
                 .flex_1()
@@ -17400,33 +17400,33 @@ fn wecom_row_el(
                         .child(SharedString::from(author.clone())),
                 );
             }
-            cell = cell.child(
-                div()
-                    .max_w(px(bubble_max))
-                    .rounded(px(if flat { 0. } else { 6. }))
-                    .bg(if flat {
-                        gpui::rgba(0x00000000)
-                    } else {
-                        wecom_theme::bubble_in()
-                    })
-                    .px(px(if flat { 0. } else { 10. }))
-                    .py(px(if flat { 0. } else { 6. }))
-                    .font_family(wecom_theme::FONT_FAMILY)
-                    .text_size(px(font_size))
-                    .line_height(px(font_size + 8.))
-                    .text_color(wecom_theme::bubble_text())
-                    .child(kit_markdown_el(
-                        format!("wechat-md-{index}"),
-                        text,
-                        true,
-                        font_size,
-                    )),
-            );
-            let mut row = div().w_full().flex().items_start().gap(px(8.));
-            if is_group {
-                row = row.child(PilotApp::wecom_avatar(author_id, author, 36.));
+            let bubble = div()
+                .max_w(px(bubble_max))
+                .rounded(px(if flat { 0. } else { 6. }))
+                .bg(if flat {
+                    gpui::rgba(0x00000000)
+                } else {
+                    wecom_theme::bubble_in()
+                })
+                .px(px(if flat { 0. } else { 10. }))
+                .py(px(if flat { 0. } else { 6. }))
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(font_size))
+                .line_height(px(font_size + 8.))
+                .text_color(wecom_theme::bubble_text())
+                .child(kit_markdown_el(
+                    format!("wechat-md-{index}"),
+                    text,
+                    true,
+                    font_size,
+                ));
+            let mut bubble_row = div().flex().items_start();
+            if !flat {
+                bubble_row = bubble_row.child(wechat_bubble_tail_in());
             }
-            row.child(cell).into_any_element()
+            cell = cell.child(bubble_row.child(bubble));
+            // 群聊不再显示头像，只保留气泡上方的成员名称。
+            div().w_full().flex().items_start().child(cell).into_any_element()
         }
         WecomRow::Reasoning {
             key,
@@ -19584,6 +19584,29 @@ fn wechat_bubble_tail() -> impl IntoElement {
             builder.move_to(point(px(x), px(y)));
             builder.line_to(point(px(x + 6.0), px(y + 6.0)));
             builder.line_to(point(px(x), px(y + 12.0)));
+            builder.close();
+            if let Ok(path) = builder.build() {
+                window.paint_path(path, gpui::Hsla::from(color));
+            }
+        },
+    )
+    .w(px(6.))
+    .h(px(12.))
+    .mt(px(8.))
+}
+
+/// 左侧（收到消息）气泡尾巴，与右侧发送气泡镜像。
+fn wechat_bubble_tail_in() -> impl IntoElement {
+    let color = wecom_theme::bubble_in();
+    gpui::canvas(
+        |bounds, _window, _cx| bounds,
+        move |bounds, _bounds2, window, _cx| {
+            let x = f32::from(bounds.origin.x);
+            let y = f32::from(bounds.origin.y);
+            let mut builder = gpui::PathBuilder::fill();
+            builder.move_to(point(px(x + 6.0), px(y)));
+            builder.line_to(point(px(x), px(y + 6.0)));
+            builder.line_to(point(px(x + 6.0), px(y + 12.0)));
             builder.close();
             if let Ok(path) = builder.build() {
                 window.paint_path(path, gpui::Hsla::from(color));
