@@ -19979,8 +19979,13 @@ impl PilotApp {
         } else {
             base.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
         };
+        // 最小化/最大化的直线更密，单独细一档，和关闭图标观感一致。
+        let stroke = match glyph {
+            icons::Icon::Minus | icons::Icon::WindowMaximize | icons::Icon::WindowRestore => 0.9,
+            _ => 1.2,
+        };
         base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
-            .child(icons::icon_with_stroke(glyph, 16., wecom_theme::icon(), 1.2))
+            .child(icons::icon_with_stroke(glyph, 16., wecom_theme::icon(), stroke))
     }
 
     /// 企业微信的彩色首字方块头像（10px 圆角）。
