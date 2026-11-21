@@ -175,7 +175,7 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
             crate::bot_icon::DEFAULT_ICON,
             gpui::rgb(0x2ed17f),
             dark,
-            size * 0.80,
+            size * 0.72,
         ))
         .into_any_element()
 }
