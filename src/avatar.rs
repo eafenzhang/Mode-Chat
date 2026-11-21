@@ -165,7 +165,7 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
             crate::bot_icon::DEFAULT_ICON,
             gpui::rgb(0x2ed17f),
             dark,
-            size * 0.84,
+            size * 0.80,
         ))
         .into_any_element()
 }
@@ -191,7 +191,7 @@ pub fn bot_icon_tile_rect(
         .flex()
         .items_center()
         .justify_center()
-        .child(icon_layers(icon, white, dark, size * 0.78))
+        .child(icon_layers(icon, white, dark, size * 0.72))
         .into_any_element()
 }
 
