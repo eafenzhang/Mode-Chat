@@ -10274,7 +10274,22 @@ impl PilotApp {
                         theme::ink_tertiary()
                     },
                 ))
-                .child(div().flex_1().h_full().child(self.connector_search.clone())),
+                .child(
+                    // 固定 20px 行盒再交给 Input：直接 h_full 时 kit 会把文字排高几像素。
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .relative()
+                                .top(px(-4.))
+                                .w_full()
+                                .h(px(18.))
+                                .child(self.connector_search.clone()),
+                        ),
+                ),
         );
         let categories = [
             ("dev", i18n::t("开发")),
