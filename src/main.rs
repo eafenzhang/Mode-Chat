@@ -7141,7 +7141,9 @@ impl PilotApp {
             .flex()
             .flex_col()
             .gap(px(2.))
-            .px(px(8.))
+            // 滚动条占右侧 6px；右内边距减掉，视觉左右一致。
+            .pl(px(8.))
+            .pr(px(2.))
             .py(px(16.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             let active = self.settings_tab == index;
@@ -19822,7 +19824,13 @@ impl PilotApp {
             .flex_col()
             .bg(wecom_theme::list_gradient());
         if self.settings_open {
-            let mut rows = div().flex().flex_col().gap(px(2.)).px(px(8.));
+            // 设置导航同样有 6px 滚动条槽：右内边距减掉，左右留白一致。
+            let mut rows = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .pl(px(8.))
+                .pr(px(2.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
