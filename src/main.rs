@@ -7081,52 +7081,6 @@ impl PilotApp {
                                     .text_color(theme::ink())
                                     .child(i18n::t(SETTINGS_PAGES[self.settings_tab])),
                             )
-                            .child(
-                                div()
-                                    .id("settings-pin-page")
-                                    .h(px(32.))
-                                    .px(px(10.))
-                                    .rounded(px(999.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(theme::hover()))
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.toggle_pinned_setting(this.settings_tab, cx);
-                                    }))
-                                    .child(icons::icon(
-                                        icons::Icon::Pin,
-                                        13.,
-                                        if self.pinned_settings.contains(&self.settings_tab) {
-                                            theme::accent()
-                                        } else {
-                                            theme::ink_tertiary()
-                                        },
-                                    ))
-                                    .child(
-                                        div()
-                                            .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(12.))
-                                            .line_height(px(18.))
-                                            .text_color(if self
-                                                .pinned_settings
-                                                .contains(&self.settings_tab)
-                                            {
-                                                theme::accent()
-                                            } else {
-                                                theme::ink_secondary()
-                                            })
-                                            .child(if self
-                                                .pinned_settings
-                                                .contains(&self.settings_tab)
-                                            {
-                                                i18n::t("从侧栏移除")
-                                            } else {
-                                                i18n::t("添加到侧栏")
-                                            }),
-                                    ),
-                            ),
                     )
                     .child(
                         div()
@@ -7191,6 +7145,8 @@ impl PilotApp {
             .py(px(16.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             let active = self.settings_tab == index;
+            let pinned = self.pinned_settings.contains(&index);
+            let pin_group = SharedString::from(format!("settings-nav-row-{index}"));
             if index == 14 {
                 nav = nav.child(
                     div()
@@ -7210,6 +7166,7 @@ impl PilotApp {
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
+                    .group(pin_group.clone())
                     .bg(if active {
                         theme::selected()
                     } else {
@@ -7233,6 +7190,9 @@ impl PilotApp {
                     ))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
                             .font_family(theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(20.))
@@ -7242,6 +7202,30 @@ impl PilotApp {
                                 theme::ink_secondary()
                             })
                             .child(i18n::t(label)),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("settings-nav-pin-{index}")))
+                            .size(px(16.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .opacity(if pinned { 1.0 } else { 0.0 })
+                            .group_hover(pin_group, |style| style.opacity(1.))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                cx.stop_propagation();
+                                this.toggle_pinned_setting(index, cx);
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::Pin,
+                                13.,
+                                if pinned {
+                                    theme::accent()
+                                } else {
+                                    theme::ink_tertiary()
+                                },
+                            )),
                     ),
             );
         }
@@ -19741,9 +19725,11 @@ impl PilotApp {
             .bg(wecom_theme::list_gradient());
         if self.settings_open {
             let mut rows = div().flex().flex_col().gap(px(2.)).px(px(8.));
-            for (index, label) in SETTINGS_PAGES.iter().enumerate() {
-                let active = self.settings_tab == index;
-                if index == 13 {
+        for (index, label) in SETTINGS_PAGES.iter().enumerate() {
+            let active = self.settings_tab == index;
+            let pinned = self.pinned_settings.contains(&index);
+            let pin_group = SharedString::from(format!("wechat-set-row-{index}"));
+            if index == 13 {
                     rows = rows.child(
                         div()
                             .mx(px(8.))
@@ -19765,6 +19751,7 @@ impl PilotApp {
                         .items_center()
                         .gap(px(8.))
                         .cursor_pointer()
+                        .group(pin_group.clone())
                         .when(active, |el| el.bg(wecom_theme::nav_item_selected_bg()))
                         .when(!active, |el| {
                             el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
@@ -19806,6 +19793,30 @@ impl PilotApp {
                                     wecom_theme::list_title()
                                 })
                                 .child(i18n::t(label)),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("wechat-set-pin-{index}")))
+                                .size(px(16.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .opacity(if pinned { 1.0 } else { 0.0 })
+                                .group_hover(pin_group, |style| style.opacity(1.))
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.toggle_pinned_setting(index, cx);
+                                }))
+                                .child(icons::icon(
+                                    icons::Icon::Pin,
+                                    13.,
+                                    if pinned {
+                                        wecom_theme::send_enabled()
+                                    } else {
+                                        wecom_theme::panel_text()
+                                    },
+                                )),
                         ),
                 );
             }
@@ -19919,7 +19930,6 @@ impl PilotApp {
     ) -> impl IntoElement {
         let title = i18n::t(SETTINGS_PAGES[self.settings_tab]);
         let tab = self.settings_tab;
-        let pinned = self.pinned_settings.contains(&tab);
         let page = self.settings_page(cx);
         div()
             .flex_1()
@@ -19949,52 +19959,6 @@ impl PilotApp {
                             .text_color(wecom_theme::chat_title())
                             .child(title),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .id("wecom-settings-pin")
-                                    .h(px(32.))
-                                    .px(px(10.))
-                                    .rounded(px(999.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.toggle_pinned_setting(tab, cx);
-                                    }))
-                                    .child(icons::icon(
-                                        icons::Icon::Pin,
-                                        13.,
-                                        if pinned {
-                                            wecom_theme::send_enabled()
-                                        } else {
-                                            wecom_theme::panel_text()
-                                        },
-                                    ))
-                                    .child(
-                                        div()
-                                            .font_family(wecom_theme::FONT_FAMILY)
-                                            .text_size(px(12.))
-                                            .line_height(px(18.))
-                                            .text_color(if pinned {
-                                                wecom_theme::send_enabled()
-                                            } else {
-                                                wecom_theme::panel_text()
-                                            })
-                                            .child(if pinned {
-                                                i18n::t("从侧栏移除")
-                                            } else {
-                                                i18n::t("添加到侧栏")
-                                            }),
-                                    ),
-                            ),
-                    ),
             )
             .child(div().h(px(1.)).bg(wecom_theme::divider()))
             .child(
