@@ -2678,6 +2678,12 @@ fn display_session_id(raw: &str) -> String {
     stem.rsplit('_').next().unwrap_or(stem).to_string()
 }
 
+/// 设置 → IM 的「新建机器人」子页面状态。
+struct ImCreateView {
+    provider: bots_service::BotProvider,
+    name: Entity<SimpleInput>,
+}
+
 struct PilotApp {
     input: Entity<ComposerInput>,
     search_input: Entity<SimpleInput>,
@@ -2733,6 +2739,8 @@ struct PilotApp {
     im_selected: Option<String>,
     /// 设置 → IM：待二次确认删除的机器人 id。
     im_delete: Option<String>,
+    /// 设置 → IM：新建机器人子页面（None = 列表/详情）。
+    im_create: Option<ImCreateView>,
     /// 设置 → IM 的状态轮询任务是否已启动（只启动一次）。
     im_tick_started: bool,
     /// 设置 → IM：机器人心跳间隔（分钟，0 关闭）。
@@ -3142,6 +3150,7 @@ impl PilotApp {
             confirm_remove_secret: None,
             im_selected: None,
             im_delete: None,
+            im_create: None,
             im_tick_started: false,
             im_heartbeat_input: cx.new(|cx| {
                 SimpleInput::new(i18n::t("分钟，0 关闭"), theme::ink_tertiary, cx)
@@ -5768,6 +5777,10 @@ impl PilotApp {
         } else if self.footer_menu_open {
             self.footer_menu_open = false;
             return;
+        } else if self.settings_open && self.im_create.is_some() {
+            // IM 新建子页面：Esc 只返回上级页，不直接关设置。
+            self.im_create = None;
+            self.settings_focus.focus(window, cx);
         } else if self.settings_open {
             self.settings_open = false;
         } else if self.search_open {
@@ -7082,7 +7095,16 @@ impl PilotApp {
                                     .line_height(px(24.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(theme::ink())
-                                    .child(i18n::t(SETTINGS_PAGES[self.settings_tab])),
+                                    .child(match &self.im_create {
+                                        Some(view)
+                                            if view.provider
+                                                == bots_service::BotProvider::Weixin =>
+                                        {
+                                            i18n::t("新建微信机器人")
+                                        }
+                                        Some(_) => i18n::t("新建企业微信机器人"),
+                                        None => i18n::t(SETTINGS_PAGES[self.settings_tab]),
+                                    }),
                             )
                     )
                     .child(
@@ -7178,6 +7200,7 @@ impl PilotApp {
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.settings_tab = index;
+                        this.im_create = None;
                         this.automations_view = None;
                         this.usage_totals_view = None;
                         cx.notify();
@@ -8898,121 +8921,235 @@ impl PilotApp {
     }
 
     /// IM：微信/企业微信机器人的扫码、运行态、绑定与群聊审批（配置与主程序同源）。
-    /// 新建 IM 机器人：统一弹窗输入名称，创建后立即进入扫码流程。
-    fn open_im_create_dialog(
+    /// 打开「新建机器人」子页面（设置内容区整页替换，不再弹窗）。
+    fn open_im_create_page(
         &mut self,
         provider: bots_service::BotProvider,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let weixin = provider == bots_service::BotProvider::Weixin;
-        let title = if weixin {
-            i18n::t("新建微信机器人")
-        } else {
-            i18n::t("新建企业微信机器人")
+        let name = cx.new(|cx| {
+            SimpleInput::new(i18n::t("机器人名称（可选）"), theme::ink_tertiary, cx)
+        });
+        let handle = name.read(cx).focus_handle(cx);
+        self.im_create = Some(ImCreateView { provider, name });
+        self.im_delete = None;
+        cx.notify();
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
+    /// 返回 IM 列表页。
+    fn close_im_create_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.im_create = None;
+        self.settings_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// 提交创建：沿用原扫码流程，成功后回到 IM 列表并选中新机器人。
+    fn submit_im_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.im_create.as_ref() else {
+            return;
         };
+        let provider = view.provider;
+        let name = view.name.read(cx).content().trim().to_string();
+        let root = self.roster.data_root.clone();
+        let created = if provider == bots_service::BotProvider::Weixin {
+            im::create_weixin_bot_named(&root, &name)
+        } else {
+            im::create_wecom_bot_named(&root, &name)
+        };
+        match created {
+            Ok(bot) => {
+                let bot_id = bot.id.clone();
+                self.im_create = None;
+                self.im_selected = Some(bot_id.clone());
+                if let Some(service) = im_service::handle() {
+                    if provider == bots_service::BotProvider::Weixin {
+                        service.start_weixin_qr(&bot_id);
+                    } else {
+                        service.start_wecom_qr(&bot_id);
+                    }
+                    service.refresh_runtime();
+                }
+                self.toast(
+                    if provider == bots_service::BotProvider::Weixin {
+                        i18n::t("已新建微信机器人，请扫码登录")
+                    } else {
+                        i18n::t("已新建企业微信机器人，请扫码创建")
+                    },
+                    cx,
+                );
+                self.settings_focus.focus(window, cx);
+                cx.notify();
+            }
+            Err(message) => self.toast(message, cx),
+        }
+    }
+
+    /// 新建机器人子页面：返回按钮 + 名称输入 + 创建/取消。
+    fn im_create_page(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(view) = self.im_create.as_ref() else {
+            return settings_page_body("").into_any_element();
+        };
+        let provider = view.provider;
+        let input = view.name.clone();
+        let weixin = provider == bots_service::BotProvider::Weixin;
         let hint = if weixin {
             i18n::t("创建后立即显示登录二维码，用微信扫码即可接通。")
         } else {
             i18n::t("创建后进入企业微信扫码流程，确认后自动写入 Bot ID 与 Secret。")
         };
-        let name_input =
-            cx.new(|cx| SimpleInput::new(i18n::t("机器人名称（可选）"), theme::ink_tertiary, cx));
-        let handle = name_input.read(cx).focus_handle(cx);
-        let root = self.roster.data_root.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        let input = name_input.clone();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let input = input.clone();
-            let root = root.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            let content_input = input.clone();
-            alert
-                .title(title)
-                .width(px(440.))
-                .centered()
-                .ok_text(i18n::t("创建"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| {
-                    content.child(
+        let wechat = wecom_theme::active();
+        let back = div()
+            .id("im-create-back")
+            .h(px(24.))
+            .px(px(4.))
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .cursor_pointer()
+            .hover(move |style| {
+                style.bg(if wechat {
+                    wecom_theme::nav_item_hover_bg()
+                } else {
+                    theme::hover()
+                })
+            })
+            .on_click(cx.listener(|this, _event, window, cx| {
+                this.close_im_create_page(window, cx);
+            }))
+            .child(icons::icon(
+                icons::Icon::ChevronLeft,
+                14.,
+                if wechat {
+                    wecom_theme::chat_subtitle()
+                } else {
+                    theme::ink_secondary()
+                },
+            ))
+            .child(
+                div()
+                    .font_family(if wechat {
+                        wecom_theme::FONT_FAMILY
+                    } else {
+                        theme::FONT_FAMILY
+                    })
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(if wechat {
+                        wecom_theme::chat_subtitle()
+                    } else {
+                        theme::ink_secondary()
+                    })
+                    .child(i18n::t("返回")),
+            );
+        let submit_text = if wechat {
+            wecom_theme::bubble_out_text()
+        } else {
+            theme::accent_ink()
+        };
+        settings_page_body("")
+            // 只让返回按钮本身可点，不铺满整行。
+            .child(div().flex().child(back))
+            .child(settings_section(i18n::t("机器人名称")))
+            .child(settings_group(vec![
+                div()
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
                         div()
-                            .w_full()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .text_color(if wechat {
+                                wecom_theme::list_preview()
+                            } else {
+                                theme::ink_secondary()
+                            })
+                            .child(i18n::t("名称（可选）")),
+                    )
+                    .child(
+                        div()
+                            .h(px(32.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(if wechat {
+                                wecom_theme::composer_border()
+                            } else {
+                                theme::edge()
+                            })
+                            .bg(if wechat {
+                                wecom_theme::composer_bg()
+                            } else {
+                                theme::bg()
+                            })
+                            .px(px(10.))
                             .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .child(settings_note(hint))
+                            .items_center()
+                            .child(input),
+                    )
+                    .into_any_element(),
+            ]))
+            .child(settings_note(hint))
+            .child(settings_note(i18n::t(
+                "创建后请在对应聊天里给 Bot 发一条消息激活。",
+            )))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(
+                        settings_button("im-create-cancel", i18n::t("取消")).on_click(
+                            cx.listener(|this, _event, window, cx| {
+                                this.close_im_create_page(window, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id("im-create-submit")
+                            .h(px(30.))
+                            .rounded(px(999.))
+                            .px(px(14.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .bg(ui_accent())
+                            .hover(|style| style.opacity(0.9))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.submit_im_create(window, cx);
+                            }))
                             .child(
                                 div()
-                                    .font_family(theme::FONT_FAMILY)
+                                    .font_family(if wechat {
+                                        wecom_theme::FONT_FAMILY
+                                    } else {
+                                        theme::FONT_FAMILY
+                                    })
                                     .text_size(px(12.))
                                     .line_height(px(18.))
-                                    .text_color(theme::ink_secondary())
-                                    .child(i18n::t("机器人名称")),
-                            )
-                            .child(
-                                div()
-                                    .h(px(32.))
-                                    .rounded(px(8.))
-                                    .border_1()
-                                    .border_color(theme::edge())
-                                    .bg(theme::bg())
-                                    .px(px(10.))
-                                    .flex()
-                                    .items_center()
-                                    .child(content_input.clone()),
-                            )
-                            .child(settings_note(i18n::t(
-                                "创建后请在对应聊天里给 Bot 发一条消息激活。",
-                            ))),
-                    )
-                })
-                .on_ok(move |_, _, cx| {
-                    let name = input.read(cx).content().trim().to_string();
-                    let created = if weixin {
-                        im::create_weixin_bot_named(&root, &name)
-                    } else {
-                        im::create_wecom_bot_named(&root, &name)
-                    };
-                    match created {
-                        Ok(bot) => {
-                            let bot_id = bot.id.clone();
-                            let _ = weak.update(cx, |this, cx| {
-                                this.im_selected = Some(bot_id.clone());
-                                if let Some(service) = im_service::handle() {
-                                    if weixin {
-                                        service.start_weixin_qr(&bot_id);
-                                    } else {
-                                        service.start_wecom_qr(&bot_id);
-                                    }
-                                    service.refresh_runtime();
-                                }
-                                this.toast(
-                                    if weixin {
-                                        i18n::t("已新建微信机器人，请扫码登录")
-                                    } else {
-                                        i18n::t("已新建企业微信机器人，请扫码创建")
-                                    },
-                                    cx,
-                                );
-                                cx.notify();
-                            });
-                            true
-                        }
-                        Err(message) => {
-                            let _ = weak.update(cx, |this, cx| this.toast(message, cx));
-                            false
-                        }
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(submit_text)
+                                    .child(i18n::t("创建")),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn settings_page_im(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.im_create.is_some() {
+            return self.im_create_page(cx);
+        }
         self.ensure_im_ticker(cx);
         let data_root = self.roster.data_root.clone();
         let service = im_service::handle();
@@ -9033,7 +9170,7 @@ impl PilotApp {
                 .child(
                     settings_button("im-new-weixin", i18n::t("新建微信机器人")).on_click(
                         cx.listener(|this, _event, window, cx| {
-                            this.open_im_create_dialog(
+                            this.open_im_create_page(
                                 bots_service::BotProvider::Weixin,
                                 window,
                                 cx,
@@ -9044,7 +9181,7 @@ impl PilotApp {
                 .child(
                     settings_button("im-new-wecom", i18n::t("新建企业微信机器人")).on_click(
                         cx.listener(|this, _event, window, cx| {
-                            this.open_im_create_dialog(
+                            this.open_im_create_page(
                                 bots_service::BotProvider::Wecom,
                                 window,
                                 cx,
@@ -11919,6 +12056,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
     fn open_settings_at(&mut self, tab: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_open = true;
         self.settings_tab = tab.min(SETTINGS_PAGES.len().saturating_sub(1));
+        self.im_create = None;
         self.automations_view = None;
         self.usage_totals_view = None;
         self.pending_bot_dialog = None;
@@ -19862,6 +20000,7 @@ impl PilotApp {
                         })
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.settings_tab = index;
+                            this.im_create = None;
                             // 定时任务页读的是快照：切页必须让它重读，否则 Bot 刚用
                             // automation_create 建的任务在页面上仍显示「还没有定时任务」。
                             this.automations_view = None;
@@ -20031,7 +20170,13 @@ impl PilotApp {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let title = i18n::t(SETTINGS_PAGES[self.settings_tab]);
+        let title = match &self.im_create {
+            Some(view) if view.provider == bots_service::BotProvider::Weixin => {
+                i18n::t("新建微信机器人")
+            }
+            Some(_) => i18n::t("新建企业微信机器人"),
+            None => i18n::t(SETTINGS_PAGES[self.settings_tab]),
+        };
         let tab = self.settings_tab;
         let page = self.settings_page(cx);
         div()
