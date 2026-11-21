@@ -2572,6 +2572,12 @@ impl Render for BotFormState {
             .child(dialog_field("bot-dir", i18n::t("工作目录"), &self.directory));
         if self.editing_id.is_none() {
             let transparent = gpui::rgba(0x00000000);
+            // 选中描边跟随主题色：微信壳用强调色，经典壳用 accent。
+            let accent = if wecom_theme::active() {
+                wecom_theme::send_enabled()
+            } else {
+                theme::accent()
+            };
             let mut icon_tiles: Vec<gpui::AnyElement> = Vec::new();
             for (key, _label) in bot_icon::ICONS {
                 let selected = self.icon == key;
@@ -2579,24 +2585,21 @@ impl Render for BotFormState {
                     div()
                         .id(SharedString::from(format!("bot-icon-{key}")))
                         .size(px(38.))
-                        .rounded(px(10.))
+                        .rounded(px(9.))
+                        .bg(bot_icon::parse_color(&self.color))
+                        .border_1()
+                        .border_color(if selected { accent } else { transparent })
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .border_2()
-                        .border_color(if selected {
-                            theme::accent()
-                        } else {
-                            transparent
-                        })
-                        .hover(|style| style.bg(theme::hover()))
+                        .hover(|style| style.opacity(0.9))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.icon = key.to_string();
                             this.error = None;
                             cx.notify();
                         }))
-                        .child(avatar::bot_icon_tile(key, &self.color, 33., 8.))
+                        .child(avatar::bot_icon_glyph(key, 38.))
                         .into_any_element(),
                 );
             }

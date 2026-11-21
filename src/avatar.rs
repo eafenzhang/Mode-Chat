@@ -90,7 +90,17 @@ pub fn bot_icon_tile(icon: &str, color: &str, size: f32, radius: f32) -> AnyElem
     bot_icon_tile_rect(icon, color, size, size, radius)
 }
 
-/// 任意宽高版本（群头像单元格）：近黑底板 + 头部/面罩/眼睛/嘴分层拼装。
+/// 只有机器人分层的版本（选择器格子自己画底色/描边）。
+pub fn bot_icon_glyph(icon: &str, tile_size: f32) -> AnyElement {
+    icon_layers(
+        icon,
+        gpui::rgb(0xffffff),
+        gpui::rgb(0x0a0b0c),
+        tile_size * 0.72,
+    )
+    .into_any_element()
+}
+
 /// 面罩机器人分层：头/天线剪影 + 面罩 + 眼睛 + 嘴。
 fn icon_layers(
     icon: &str,
