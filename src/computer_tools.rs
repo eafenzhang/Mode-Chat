@@ -441,7 +441,7 @@ fn key_vk(name: &str) -> Option<u16> {
     Some(vk)
 }
 
-fn send_key_combo(keys: &str) -> Result<(), String> {
+pub fn send_key_combo(keys: &str) -> Result<(), String> {
     let parts: Vec<&str> = keys.split('+').map(str::trim).filter(|s| !s.is_empty()).collect();
     if parts.is_empty() {
         return Err("keys 为空".to_string());

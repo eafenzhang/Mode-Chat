@@ -74,6 +74,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # 扫码登录：把 iLink 返回的二维码内容渲染成 PNG（GPUI `img` 读文件）。
 qrcode = { version = "0.14", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+arboard = "3"
 # 企微媒体：AES-256-CBC 解密（aeskey → key，IV = key 前 16 字节）。
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }

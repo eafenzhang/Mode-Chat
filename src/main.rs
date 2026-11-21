@@ -450,6 +450,7 @@ fn load_new_bot_model() -> Option<data::ModelSpec> {
 }
 
 /// 剪贴板图片（Windows 为 BMP）转 PNG；失败时回退原始字节。
+#[cfg_attr(not(test), allow(dead_code))]
 fn transcode_image_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
     let image = image::load_from_memory(bytes).ok()?;
     let mut output = std::io::Cursor::new(Vec::new());
@@ -457,6 +458,25 @@ fn transcode_image_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
         .write_to(&mut output, image::ImageFormat::Png)
         .ok()?;
     Some(output.into_inner())
+}
+
+/// 用 arboard 读系统剪贴板图片并编码成 PNG（GPUI 的剪贴板只覆盖文本）。
+fn clipboard_png() -> Option<Vec<u8>> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let image = clipboard.get_image().ok()?;
+    let rgba = image::RgbaImage::from_raw(
+        image.width as u32,
+        image.height as u32,
+        image.bytes.into_owned(),
+    )?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(
+            &mut std::io::Cursor::new(&mut png),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+    Some(png)
 }
 
 /// 浏览器最近打开的 URL（prefs.json，按 Bot 隔离，最多 5 条）。
@@ -2782,6 +2802,10 @@ struct PilotApp {
     /// 插件市场视图（按 Bot 缓存；切换 Bot 重拉）。
     /// 全屏图片预览（待发附件缩略图点击）。
     image_preview: Option<std::path::PathBuf>,
+    /// 正在等待系统截图回填剪贴板（避免重复触发）。
+    screenshot_watching: bool,
+    /// 系统语音输入（Win+H）是否已开启。
+    voice_active: bool,
     /// 历史附件图片缓存（attachment ref → 本地临时文件）。
     history_images: HashMap<String, std::path::PathBuf>,
     /// 正在读取的历史图片 ref。
@@ -3214,6 +3238,8 @@ impl PilotApp {
             group_task_bar: None,
             group_tasks_view: None,
             image_preview: None,
+            screenshot_watching: false,
+            voice_active: false,
             history_images: HashMap::new(),
             history_images_pending: HashSet::new(),
             autostart_enabled: autostart::is_enabled(),
@@ -15495,56 +15521,123 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
     }
 
     /// 截图/复制图片后点剪刀：从剪贴板取图片，写临时 PNG 作预览，再作为附件发送。
-    fn paste_clipboard_image(&mut self, cx: &mut Context<Self>) {
-        if !self.attachments_allowed(cx) {
-            return;
+    fn stage_image_bytes(
+        &mut self,
+        bytes: Vec<u8>,
+        extension: &str,
+        mime: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if bytes.len() > 20 * 1024 * 1024 {
+            self.toast(i18n::t("图片超过 20MiB"), cx);
+            return false;
         }
-        let Some(item) = cx.read_from_clipboard() else {
-            self.toast(i18n::t("剪贴板里没有图片"), cx);
-            return;
-        };
-        let Some(image) = item.entries.into_iter().find_map(|entry| match entry {
-            gpui::ClipboardEntry::Image(image) => Some(image),
-            _ => None,
-        }) else {
-            self.toast(i18n::t("剪贴板里没有图片（先截图或复制图片）"), cx);
-            return;
-        };
         let Some(key) = self.active_key() else {
-            return;
-        };
-        if image.bytes.len() > 20 * 1024 * 1024 {
-            self.toast(i18n::t("剪贴板图片超过 20MiB"), cx);
-            return;
-        }
-        // Windows 剪贴板给的是 BMP；部分模型读不了 BMP（实测红色图被读成白色），
-        // 统一转 PNG 再上传，预览文件也用同一份。
-        let (bytes, extension, mime) = if image.format.mime_type() == "image/bmp" {
-            match transcode_image_to_png(&image.bytes) {
-                Some(png) => (png, "png", "image/png"),
-                None => (image.bytes, "bmp", "image/bmp"),
-            }
-        } else {
-            (image.bytes, image.format.extension(), image.format.mime_type())
+            return false;
         };
         let preview_dir = std::env::temp_dir().join("mode-bot-gpui-attachments");
         let _ = std::fs::create_dir_all(&preview_dir);
-        let preview_path = preview_dir.join(format!(
-            "paste-{}.{}",
-            time::now_ms(),
-            extension
-        ));
+        let stamp = time::now_ms();
+        let preview_path = preview_dir.join(format!("shot-{stamp}.{extension}"));
         let preview = match std::fs::write(&preview_path, &bytes) {
             Ok(()) => Some(preview_path),
             Err(_) => None,
         };
         if let Some(chat) = self.chats.get_mut(&key) {
             chat.pending_attachments.push(backend::AttachmentUpload {
-                file_name: format!("screenshot-{}.{}", time::now_ms(), extension),
+                file_name: format!("screenshot-{stamp}.{extension}"),
                 mime: mime.to_string(),
                 bytes,
             });
             chat.pending_attachment_previews.push(preview);
+        }
+        cx.notify();
+        true
+    }
+
+    /// 剪刀按钮：拉起 Windows 截图工具，选区结果回填剪贴板后自动作为图片附件。
+    fn start_screenshot_capture(&mut self, cx: &mut Context<Self>) {
+        if !self.attachments_allowed(cx) {
+            return;
+        }
+        if self.screenshot_watching {
+            self.toast(i18n::t("正在等待截图，请先完成选区"), cx);
+            return;
+        }
+        let initial = clipboard_png();
+        let launched = std::process::Command::new("explorer.exe")
+            .arg("ms-screenclip:")
+            .spawn()
+            .is_ok();
+        if !launched {
+            // 没有截图协议时退回主屏截屏。
+            match crate::computer_tools::screenshot_png() {
+                Ok(bytes) => {
+                    self.stage_image_bytes(bytes, "png", "image/png", cx);
+                }
+                Err(message) => self.toast(message, cx),
+            }
+            return;
+        }
+        self.screenshot_watching = true;
+        self.toast(i18n::t("拖选要发送的屏幕区域…"), cx);
+        cx.spawn(async move |this, cx| {
+            for _ in 0..100 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(300))
+                    .await;
+                let done = this
+                    .update(cx, |this, cx| {
+                        if !this.screenshot_watching {
+                            return true;
+                        }
+                        let Some(bytes) = clipboard_png() else {
+                            return false;
+                        };
+                        if initial.as_deref() == Some(bytes.as_slice()) {
+                            return false;
+                        }
+                        this.screenshot_watching = false;
+                        if !this.stage_image_bytes(bytes, "png", "image/png", cx) {
+                            this.toast(i18n::t("截图读取失败"), cx);
+                        }
+                        true
+                    })
+                    .unwrap_or(true);
+                if done {
+                    return;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                if this.screenshot_watching {
+                    this.screenshot_watching = false;
+                    this.toast(i18n::t("没有捕获到截图，可重试"), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// 麦克风按钮：把焦点交给输入框并打开 Windows 语音输入（Win+H）。
+    fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.voice_active {
+            self.voice_active = false;
+            let _ = crate::computer_tools::send_key_combo("esc");
+            self.toast(i18n::t("已结束语音输入"), cx);
+            cx.notify();
+            return;
+        }
+        let handle = self.input.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+        match crate::computer_tools::send_key_combo("win+h") {
+            Ok(()) => {
+                self.voice_active = true;
+                self.toast(
+                    i18n::t("已打开系统语音输入，请说话；再次点击麦克风或按 Esc 结束"),
+                    cx,
+                );
+            }
+            Err(message) => self.toast(message, cx),
         }
         cx.notify();
     }
@@ -21307,7 +21400,7 @@ impl PilotApp {
                             .cursor_pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.paste_clipboard_image(cx);
+                                this.start_screenshot_capture(cx);
                             }))
                             .child(icons::icon_with_stroke(icons::Icon::Scissors, 18., wecom_theme::icon(), 1.2)),
                     )
@@ -21321,10 +21414,19 @@ impl PilotApp {
                             .justify_center()
                             .cursor_pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.toast(i18n::t("语音暂未接入"), cx);
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.toggle_voice_typing(window, cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Mic, 18., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_with_stroke(
+                                icons::Icon::Mic,
+                                18.,
+                                if self.voice_active {
+                                    ui_accent()
+                                } else {
+                                    wecom_theme::icon()
+                                },
+                                1.2,
+                            )),
                     )
                     .child(div().flex_1())
                     .child(
