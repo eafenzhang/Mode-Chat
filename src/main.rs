@@ -20631,7 +20631,7 @@ impl PilotApp {
             div()
                 .px(px(12.))
                 .pt(px(12.))
-                .pb(px(8.))
+                .pb(px(12.))
                 .flex()
                 .items_center()
                 .gap(px(8.))
