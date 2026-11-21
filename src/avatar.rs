@@ -101,18 +101,20 @@ pub fn bot_icon_tile_rect(
     radius: f32,
 ) -> AnyElement {
     let size = width.min(height);
-    // 设计稿 640×640（viewBox 192..832 / 152..792），按边长缩放。
-    let k = size / 640.0;
-    let tint = crate::bot_icon::parse_color(color);
+    // 图标占底板的 78%，四周留呼吸位；设计稿 640×640。
+    let glyph_size = size * 0.78;
+    let k = glyph_size / 640.0;
+    let white = gpui::rgb(0xffffff);
     let dark = gpui::rgb(0x0a0b0c);
+    let bg = crate::bot_icon::parse_color(color);
     let mut glyph = div()
         .relative()
-        .size(px(size))
+        .size(px(glyph_size))
         .child(
             svg()
                 .data(crate::bot_icon::head_svg())
-                .size(px(size))
-                .text_color(tint),
+                .size(px(glyph_size))
+                .text_color(white),
         )
         .child(
             div()
@@ -132,7 +134,7 @@ pub fn bot_icon_tile_rect(
                         .data(crate::bot_icon::eyes_svg(icon))
                         .w(px(400. * k))
                         .h(px(172. * k))
-                        .text_color(tint),
+                        .text_color(white),
                 ),
         );
     if let Some(mouth) = crate::bot_icon::mouth_svg(icon) {
@@ -152,9 +154,7 @@ pub fn bot_icon_tile_rect(
         .h(px(height))
         .flex_shrink_0()
         .rounded(px(radius))
-        .bg(gpui::rgb(0x111214))
-        .border_1()
-        .border_color(hsla(0., 0., 1., 0.08))
+        .bg(bg)
         .flex()
         .items_center()
         .justify_center()

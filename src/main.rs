@@ -2660,7 +2660,7 @@ impl Render for BotFormState {
                             .text_color(theme::ink_tertiary())
                             .child(SharedString::from(format!(
                                 "{} · {}",
-                                i18n::t("图标颜色"),
+                                i18n::t("头像背景色"),
                                 bot_icon::COLORS
                                     .iter()
                                     .find(|(hex, _)| self.color.eq_ignore_ascii_case(hex))
