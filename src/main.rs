@@ -26,6 +26,7 @@ mod group_goal;
 mod group_tasks;
 mod i18n;
 mod icons;
+mod menu_icons;
 mod im;
 mod im_heartbeat;
 mod im_runtime;
@@ -7257,9 +7258,10 @@ impl PilotApp {
                         this.usage_totals_view = None;
                         cx.notify();
                     }))
-                    .child(icons::icon(
+                    .child(menu_icons::menu_icon(
                         settings_page_icon(index),
-                        16.,
+                        active,
+                        menu_icons::SETTINGS_SIZE,
                         if active {
                             theme::accent()
                         } else {
@@ -18554,26 +18556,26 @@ const SETTINGS_PAGES: [&str; 18] = [
 ];
 
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
-fn settings_page_icon(index: usize) -> icons::Icon {
+fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     match index {
-        0 => icons::Icon::Settings,
-        1 => icons::Icon::Cpu,
-        2 => icons::Icon::Folder,
-        3 => icons::Icon::Sparkles,
-        4 => icons::Icon::Bot,
-        5 => icons::Icon::Hash,
-        6 => icons::Icon::Brain,
-        7 => icons::Icon::Plug,
-        8 => icons::Icon::MessageCircle,
-        9 => icons::Icon::Calendar,
-        10 => icons::Icon::Key,
-        11 => icons::Icon::ListChecks,
-        12 => icons::Icon::Chart,
-        13 => icons::Icon::Info,
-        14 => icons::Icon::MessageSquare,
-        15 => icons::Icon::Folder,
-        16 => icons::Icon::Cpu,
-        _ => icons::Icon::Ellipsis,
+        0 => menu_icons::MenuIcon::Sliders,
+        1 => menu_icons::MenuIcon::Models,
+        2 => menu_icons::MenuIcon::Plugins,
+        3 => menu_icons::MenuIcon::Agents,
+        4 => menu_icons::MenuIcon::Bot,
+        5 => menu_icons::MenuIcon::Channels,
+        6 => menu_icons::MenuIcon::Memory,
+        7 => menu_icons::MenuIcon::Connectors,
+        8 => menu_icons::MenuIcon::Chat,
+        9 => menu_icons::MenuIcon::Schedules,
+        10 => menu_icons::MenuIcon::Keys,
+        11 => menu_icons::MenuIcon::Abilities,
+        12 => menu_icons::MenuIcon::Usage,
+        13 => menu_icons::MenuIcon::About,
+        14 => menu_icons::MenuIcon::Feedback,
+        15 => menu_icons::MenuIcon::Browser,
+        16 => menu_icons::MenuIcon::Computer,
+        _ => menu_icons::MenuIcon::More,
     }
 }
 
@@ -20069,18 +20071,12 @@ impl PilotApp {
         );
         rail = rail.child(div().h(px(8.)));
         let filters = [
-            (WecomNav::All, icons::Icon::MessageCircle, i18n::t("消息")),
-            (WecomNav::Bots, icons::Icon::Contacts, i18n::t("通讯录")),
-            (WecomNav::Channels, icons::Icon::Hash, i18n::t("频道")),
+            (WecomNav::All, menu_icons::MenuIcon::Chat, i18n::t("消息")),
+            (WecomNav::Bots, menu_icons::MenuIcon::Contacts, i18n::t("通讯录")),
+            (WecomNav::Channels, menu_icons::MenuIcon::Channels, i18n::t("频道")),
         ];
         for (filter, icon, label) in filters {
             let active = current == filter && !self.settings_open;
-            // 微信激活态是实心绿色图标，不是「白色描边 + 选中底」。
-            let glyph = if filter == WecomNav::All && active {
-                icons::Icon::MessageCircleFilled
-            } else {
-                icon
-            };
             rail = rail.child(
                 div()
                     .id(SharedString::from(format!("wechat-rail-{label}")))
@@ -20099,9 +20095,10 @@ impl PilotApp {
                         this.ensure_wecom_selection(cx);
                         cx.notify();
                     }))
-                    .child(icons::icon(
-                        glyph,
-                        24.,
+                    .child(menu_icons::menu_icon(
+                        icon,
+                        active,
+                        menu_icons::RAIL_SIZE,
                         if active {
                             wecom_theme::send_enabled()
                         } else {
@@ -20150,9 +20147,10 @@ impl PilotApp {
                         this.open_settings_at(tab, _window, cx);
                         cx.notify();
                     }))
-                    .child(icons::icon(
+                    .child(menu_icons::menu_icon(
                         settings_page_icon(tab),
-                        24.,
+                        active,
+                        menu_icons::RAIL_SIZE,
                         if active {
                             wecom_theme::send_enabled()
                         } else {
@@ -20186,9 +20184,10 @@ impl PilotApp {
                     }
                     cx.notify();
                 }))
-                .child(icons::icon(
-                    icons::Icon::Settings,
-                    24.,
+                .child(menu_icons::menu_icon(
+                    menu_icons::MenuIcon::Gear,
+                    self.settings_open,
+                    menu_icons::RAIL_SIZE,
                     if self.settings_open {
                         wecom_theme::send_enabled()
                     } else {
@@ -20434,9 +20433,10 @@ impl PilotApp {
                             // 点导航不产生焦点，Esc 会因无焦点元素而丢键：把焦点留在设置页上。
                             this.settings_focus.focus(window, cx);
                         }))
-                        .child(icons::icon(
+                        .child(menu_icons::menu_icon(
                             settings_page_icon(index),
-                            16.,
+                            active,
+                            menu_icons::SETTINGS_SIZE,
                             if active {
                                 wecom_theme::send_enabled()
                             } else if secondary {
