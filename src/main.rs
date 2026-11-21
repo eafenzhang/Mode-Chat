@@ -14,6 +14,7 @@ macro_rules! im_log {
 }
 
 mod acp;
+mod agent_icons;
 mod avatar;
 mod autostart;
 mod backend;
@@ -18837,44 +18838,13 @@ fn agent_icon(id: &str) -> gpui::AnyElement {
     }
     match id {
         "mode" => avatar::app_icon(26., 6.),
-        "pi" | "pi-acp" => {
-            let bar = |height: f32, color: gpui::Rgba, opacity: f32| {
-                div()
-                    .w(px(4.))
-                    .h(px(height))
-                    .rounded(px(1.))
-                    .bg(color)
-                    .opacity(opacity)
-            };
-            div()
-                .size(px(26.))
-                .flex_shrink_0()
-                .rounded(px(7.))
-                .bg(gpui::rgb(0x101113))
-                .border_1()
-                .border_color(gpui::hsla(0., 0., 1., 0.12))
-                .flex()
-                .items_end()
-                .justify_center()
-                .gap(px(2.))
-                .pb(px(4.))
-                .child(bar(9.5, gpui::rgb(0xffffff), 0.55))
-                .child(bar(15., gpui::rgb(0xec6b38), 1.))
-                .child(bar(7., gpui::rgb(0xffffff), 0.45))
-                .into_any_element()
-        }
+        "pi" | "pi-acp" => agent_icons::pi(26.),
         "deepseek" => badge(
             gpui::rgb(0x5786fe),
             include_bytes!("../assets/icons/agents/deepseek.svg"),
         ),
-        "hermes" => badge(
-            gpui::rgb(0xc98a2e),
-            include_bytes!("../assets/icons/agents/hermes.svg"),
-        ),
-        "zcode" => badge(
-            gpui::rgb(0x18181b),
-            include_bytes!("../assets/icons/agents/zcode.svg"),
-        ),
+        "hermes" => agent_icons::hermes(26.),
+        "zcode" => agent_icons::zcode(26.),
         _ => div()
             .size(px(26.))
             .flex_shrink_0()
@@ -18887,6 +18857,7 @@ fn agent_icon(id: &str) -> gpui::AnyElement {
             .into_any_element(),
     }
 }
+
 
 fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     match index {
