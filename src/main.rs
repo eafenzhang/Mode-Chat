@@ -12355,7 +12355,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     })
                 }) {
                     entries.push((
-                        i18n::t("复制会话为 Markdown").to_string(),
+                        i18n::t("复制会话").to_string(),
                         false,
                         DetailMenuAction::ShareConversation(key.clone()),
                     ));

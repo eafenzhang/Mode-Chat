@@ -182,7 +182,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "复制" => Some("Copy"),
         "复制代码" => Some("Copy code"),
         "复制会话 ID" => Some("Copy chat ID"),
-        "复制会话为 Markdown" => Some("Copy chat as Markdown"),
+        "复制会话" => Some("Copy chat"),
         "复制诊断" => Some("Copy diagnostics"),
         "复制诊断信息，连同复现步骤发到发布页。" => Some("Copy diagnostics and send them with reproduction steps to the release page."),
         "复制群聊记录为 Markdown" => Some("Copy group chat history as Markdown"),
