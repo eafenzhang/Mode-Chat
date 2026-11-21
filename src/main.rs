@@ -7151,7 +7151,6 @@ impl PilotApp {
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
-            let pin_group = SharedString::from(format!("settings-nav-row-{index}"));
             if index == 14 {
                 nav = nav.child(
                     div()
@@ -7171,7 +7170,6 @@ impl PilotApp {
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
-                    .group(pin_group.clone())
                     .bg(if active {
                         theme::selected()
                     } else {
@@ -7216,8 +7214,7 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .opacity(if pinned { 1.0 } else { 0.0 })
-                            .group_hover(pin_group, |style| style.opacity(1.))
+                            .opacity(if pinned || active { 1.0 } else { 0.0 })
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 cx.stop_propagation();
                                 this.toggle_pinned_setting(index, cx);
@@ -19837,7 +19834,6 @@ impl PilotApp {
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
-            let pin_group = SharedString::from(format!("wechat-set-row-{index}"));
             if index == 13 {
                     rows = rows.child(
                         div()
@@ -19860,7 +19856,6 @@ impl PilotApp {
                         .items_center()
                         .gap(px(8.))
                         .cursor_pointer()
-                        .group(pin_group.clone())
                         .when(active, |el| el.bg(wecom_theme::nav_item_selected_bg()))
                         .when(!active, |el| {
                             el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
@@ -19911,8 +19906,7 @@ impl PilotApp {
                                 .items_center()
                                 .justify_center()
                                 .cursor_pointer()
-                                .opacity(if pinned { 1.0 } else { 0.0 })
-                                .group_hover(pin_group, |style| style.opacity(1.))
+                                .opacity(if pinned || active { 1.0 } else { 0.0 })
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     cx.stop_propagation();
                                     this.toggle_pinned_setting(index, cx);
