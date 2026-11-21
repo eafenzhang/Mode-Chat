@@ -22,6 +22,7 @@ pub enum MenuIcon {
     Agents,
     Bot,
     Memory,
+    Im,
     Connectors,
     Schedules,
     Keys,
@@ -57,6 +58,8 @@ impl MenuIcon {
             (MenuIcon::Bot, true) => include_bytes!("../assets/icons/menu/bot-solid.svg"),
             (MenuIcon::Memory, false) => include_bytes!("../assets/icons/menu/memory.svg"),
             (MenuIcon::Memory, true) => include_bytes!("../assets/icons/menu/memory-solid.svg"),
+            (MenuIcon::Im, false) => include_bytes!("../assets/icons/menu/im.svg"),
+            (MenuIcon::Im, true) => include_bytes!("../assets/icons/menu/im-solid.svg"),
             (MenuIcon::Connectors, false) => include_bytes!("../assets/icons/menu/connectors.svg"),
             (MenuIcon::Connectors, true) => include_bytes!("../assets/icons/menu/connectors-solid.svg"),
             (MenuIcon::Schedules, false) => include_bytes!("../assets/icons/menu/schedules.svg"),
@@ -89,6 +92,29 @@ pub fn menu_icon(kind: MenuIcon, solid: bool, size: f32, color: Rgba) -> impl In
         .text_color(Hsla::from(color))
 }
 
+/// 线性图标可单独指定描边宽度（导轨比设置菜单更细）。
+pub fn menu_icon_with_stroke(
+    kind: MenuIcon,
+    solid: bool,
+    size: f32,
+    color: Rgba,
+    stroke: f32,
+) -> gpui::AnyElement {
+    if solid {
+        return menu_icon(kind, true, size, color).into_any_element();
+    }
+    let data = String::from_utf8_lossy(kind.svg(false)).replace(
+        "stroke-width=\"1.6\"",
+        &format!("stroke-width=\"{stroke}\"")
+    );
+    let bytes = data.into_bytes();
+    svg()
+        .data(&bytes)
+        .size(px(size))
+        .text_color(Hsla::from(color))
+        .into_any_element()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +132,7 @@ mod tests {
             MenuIcon::Agents,
             MenuIcon::Bot,
             MenuIcon::Memory,
+            MenuIcon::Im,
             MenuIcon::Connectors,
             MenuIcon::Schedules,
             MenuIcon::Keys,

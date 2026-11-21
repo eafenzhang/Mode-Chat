@@ -18819,7 +18819,7 @@ fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
         5 => menu_icons::MenuIcon::Channels,
         6 => menu_icons::MenuIcon::Memory,
         7 => menu_icons::MenuIcon::Connectors,
-        8 => menu_icons::MenuIcon::Chat,
+        8 => menu_icons::MenuIcon::Im,
         9 => menu_icons::MenuIcon::Schedules,
         10 => menu_icons::MenuIcon::Keys,
         11 => menu_icons::MenuIcon::Abilities,
@@ -20393,7 +20393,7 @@ impl PilotApp {
                         this.ensure_wecom_selection(cx);
                         cx.notify();
                     }))
-                    .child(menu_icons::menu_icon(
+                    .child(menu_icons::menu_icon_with_stroke(
                         icon,
                         active,
                         menu_icons::RAIL_SIZE,
@@ -20402,6 +20402,7 @@ impl PilotApp {
                         } else {
                             wecom_theme::nav_icon()
                         },
+                        1.3,
                     ))
                     .children((filter == WecomNav::All && total_unread > 0).then(|| {
                         div()
@@ -20445,7 +20446,7 @@ impl PilotApp {
                         this.open_settings_at(tab, _window, cx);
                         cx.notify();
                     }))
-                    .child(menu_icons::menu_icon(
+                    .child(menu_icons::menu_icon_with_stroke(
                         settings_page_icon(tab),
                         active,
                         menu_icons::RAIL_SIZE,
@@ -20454,6 +20455,7 @@ impl PilotApp {
                         } else {
                             wecom_theme::nav_icon()
                         },
+                        1.3,
                     )),
             );
         }
@@ -20482,7 +20484,7 @@ impl PilotApp {
                     }
                     cx.notify();
                 }))
-                .child(menu_icons::menu_icon(
+                .child(menu_icons::menu_icon_with_stroke(
                     menu_icons::MenuIcon::Gear,
                     self.settings_open,
                     menu_icons::RAIL_SIZE,
@@ -20491,6 +20493,7 @@ impl PilotApp {
                     } else {
                         wecom_theme::nav_icon()
                     },
+                    1.3,
                 )),
         )
     }

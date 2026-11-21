@@ -1,2 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none"><g transform="translate(12 12) scale(0.93) translate(-12 -12)"><path fill-rule="evenodd" d="M7 6h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3Zm2.5 5A1.4 1.4 0 0 0 8.1 12.4v1.2a1.4 1.4 0 0 0 2.8 0v-1.2A1.4 1.4 0 0 0 9.5 11Zm5 0a1.4 1.4 0 0 0-1.4 1.4v1.2a1.4 1.4 0 0 0 2.8 0v-1.2A1.4 1.4 0 0 0 14.5 11Z"/>
-<path d="M12 6V3.4H9.2M4 12H1.8M22.2 12H20" stroke="currentColor" stroke-width="2.2" fill="none"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+<rect x="11" y="2.4" width="2" height="4.4" rx="1"/>
+<circle cx="12" cy="2" r="1.4"/>
+<rect x="3.1" y="10.1" width="1.8" height="4.6" rx="0.9"/>
+<rect x="19.1" y="10.1" width="1.8" height="4.6" rx="0.9"/>
+<path fill-rule="evenodd" d="M7 6h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3Zm2.5 5A1.4 1.4 0 0 0 8.1 12.4v1.2a1.4 1.4 0 0 0 2.8 0v-1.2A1.4 1.4 0 0 0 9.5 11Zm5 0a1.4 1.4 0 0 0-1.4 1.4v1.2a1.4 1.4 0 0 0 2.8 0v-1.2A1.4 1.4 0 0 0 14.5 11Z"/>
+</svg>
