@@ -7747,7 +7747,7 @@ impl PilotApp {
                     .id(SharedString::from(format!("theme-{value}")))
                     .flex_1()
                     .h(px(76.))
-                    .rounded(px(10.))
+                    .rounded(px(8.))
                     .border_1()
                     .border_color(if active {
                         if wechat {
@@ -9261,7 +9261,7 @@ impl PilotApp {
             .flex_1()
             .min_w(px(180.))
             .h(px(84.))
-            .rounded(px(10.))
+            .rounded(px(8.))
             .border_1()
             .border_color(if wechat {
                 wecom_theme::panel_divider()
@@ -9904,7 +9904,7 @@ impl PilotApp {
         };
         let mut card = div()
             .w_full()
-            .rounded(px(theme::RADIUS_CARD))
+            .rounded(px(8.))
             .border_1()
             .border_color(theme::edge())
             .bg(theme::card())
@@ -11270,7 +11270,7 @@ impl PilotApp {
             body = body.child(
                 div()
                     .w_full()
-                    .rounded(px(theme::RADIUS_CARD))
+                    .rounded(px(8.))
                     .border_1()
                     .border_color(theme::edge())
                     .bg(theme::card())
