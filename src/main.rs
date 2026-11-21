@@ -8896,6 +8896,120 @@ impl PilotApp {
     }
 
     /// IM：微信/企业微信机器人的扫码、运行态、绑定与群聊审批（配置与主程序同源）。
+    /// 新建 IM 机器人：统一弹窗输入名称，创建后立即进入扫码流程。
+    fn open_im_create_dialog(
+        &mut self,
+        provider: bots_service::BotProvider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weixin = provider == bots_service::BotProvider::Weixin;
+        let title = if weixin {
+            i18n::t("新建微信机器人")
+        } else {
+            i18n::t("新建企业微信机器人")
+        };
+        let hint = if weixin {
+            i18n::t("创建后立即显示登录二维码，用微信扫码即可接通。")
+        } else {
+            i18n::t("创建后进入企业微信扫码流程，确认后自动写入 Bot ID 与 Secret。")
+        };
+        let name_input =
+            cx.new(|cx| SimpleInput::new(i18n::t("机器人名称（可选）"), theme::ink_tertiary, cx));
+        let handle = name_input.read(cx).focus_handle(cx);
+        let root = self.roster.data_root.clone();
+        let weak = cx.weak_entity();
+        let restore = self.dialog_focus_restore(cx);
+        let input = name_input.clone();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let input = input.clone();
+            let root = root.clone();
+            let weak = weak.clone();
+            let restore = restore.clone();
+            let content_input = input.clone();
+            alert
+                .title(title)
+                .width(px(440.))
+                .centered()
+                .ok_text(i18n::t("创建"))
+                .cancel_text(i18n::t("取消"))
+                .show_cancel(true)
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(settings_note(hint))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(12.))
+                                    .line_height(px(18.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("机器人名称")),
+                            )
+                            .child(
+                                div()
+                                    .h(px(32.))
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(theme::edge())
+                                    .bg(theme::bg())
+                                    .px(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .child(content_input.clone()),
+                            )
+                            .child(settings_note(i18n::t(
+                                "创建后请在对应聊天里给 Bot 发一条消息激活。",
+                            ))),
+                    )
+                })
+                .on_ok(move |_, _, cx| {
+                    let name = input.read(cx).content().trim().to_string();
+                    let created = if weixin {
+                        im::create_weixin_bot_named(&root, &name)
+                    } else {
+                        im::create_wecom_bot_named(&root, &name)
+                    };
+                    match created {
+                        Ok(bot) => {
+                            let bot_id = bot.id.clone();
+                            let _ = weak.update(cx, |this, cx| {
+                                this.im_selected = Some(bot_id.clone());
+                                if let Some(service) = im_service::handle() {
+                                    if weixin {
+                                        service.start_weixin_qr(&bot_id);
+                                    } else {
+                                        service.start_wecom_qr(&bot_id);
+                                    }
+                                    service.refresh_runtime();
+                                }
+                                this.toast(
+                                    if weixin {
+                                        i18n::t("已新建微信机器人，请扫码登录")
+                                    } else {
+                                        i18n::t("已新建企业微信机器人，请扫码创建")
+                                    },
+                                    cx,
+                                );
+                                cx.notify();
+                            });
+                            true
+                        }
+                        Err(message) => {
+                            let _ = weak.update(cx, |this, cx| this.toast(message, cx));
+                            false
+                        }
+                    }
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+        window.defer(cx, move |window, cx| handle.focus(window, cx));
+    }
+
     fn settings_page_im(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         self.ensure_im_ticker(cx);
         let data_root = self.roster.data_root.clone();
@@ -8909,48 +9023,32 @@ impl PilotApp {
                     .into_any_element();
             }
         };
-        let new_root = data_root.clone();
-        let new_wecom_root = data_root.clone();
         body = body.child(
             div()
                 .flex()
                 .flex_wrap()
                 .gap(px(8.))
                 .child(
-                    settings_button("im-new-weixin", i18n::t("新建微信机器人")).on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            match im::create_weixin_bot(&new_root) {
-                                Ok(bot) => {
-                                    this.im_selected = Some(bot.id.clone());
-                                    if let Some(service) = im_service::handle() {
-                                        service.start_weixin_qr(&bot.id);
-                                        service.refresh_runtime();
-                                    }
-                                    this.toast(i18n::t("已新建微信机器人，请扫码登录"), cx);
-                                }
-                                Err(message) => this.toast(message, cx),
-                            }
-                            cx.notify();
-                        },
-                    )),
+                    settings_button("im-new-weixin", i18n::t("新建微信机器人")).on_click(
+                        cx.listener(|this, _event, window, cx| {
+                            this.open_im_create_dialog(
+                                bots_service::BotProvider::Weixin,
+                                window,
+                                cx,
+                            );
+                        }),
+                    ),
                 )
                 .child(
-                    settings_button("im-new-wecom", i18n::t("新建企业微信机器人")).on_click(cx.listener(
-                        move |this, _event, _window, cx| {
-                            match im::create_wecom_bot(&new_wecom_root) {
-                                Ok(bot) => {
-                                    this.im_selected = Some(bot.id.clone());
-                                    if let Some(service) = im_service::handle() {
-                                        service.start_wecom_qr(&bot.id);
-                                        service.refresh_runtime();
-                                    }
-                                    this.toast(i18n::t("已新建企业微信机器人，请扫码创建"), cx);
-                                }
-                                Err(message) => this.toast(message, cx),
-                            }
-                            cx.notify();
-                        },
-                    )),
+                    settings_button("im-new-wecom", i18n::t("新建企业微信机器人")).on_click(
+                        cx.listener(|this, _event, window, cx| {
+                            this.open_im_create_dialog(
+                                bots_service::BotProvider::Wecom,
+                                window,
+                                cx,
+                            );
+                        }),
+                    ),
                 )
                 .child(settings_note(
                     i18n::t("微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。"),

@@ -87,13 +87,25 @@ fn service_with_vault(data_root: &Path) -> BotsService {
 }
 
 /// 新建微信 bot（草稿）：扫码成功后由 `im_service` 写凭据与自身 id。
-pub fn create_weixin_bot(data_root: &Path) -> Result<BotConfig, String> {
-    create_draft_bot(data_root, BotProvider::Weixin, "微信 Bot")
+/// 空名回落默认「微信 Bot」。
+pub fn create_weixin_bot_named(data_root: &Path, name: &str) -> Result<BotConfig, String> {
+    let name = name.trim();
+    create_draft_bot(
+        data_root,
+        BotProvider::Weixin,
+        if name.is_empty() { "微信 Bot" } else { name },
+    )
 }
 
 /// 新建企业微信 bot（草稿）：扫码创建后由 `im_service` 写 botid + secret。
-pub fn create_wecom_bot(data_root: &Path) -> Result<BotConfig, String> {
-    create_draft_bot(data_root, BotProvider::Wecom, "企微 Bot")
+/// 空名回落默认「企微 Bot」。
+pub fn create_wecom_bot_named(data_root: &Path, name: &str) -> Result<BotConfig, String> {
+    let name = name.trim();
+    create_draft_bot(
+        data_root,
+        BotProvider::Wecom,
+        if name.is_empty() { "企微 Bot" } else { name },
+    )
 }
 
 fn create_draft_bot(
@@ -245,7 +257,7 @@ mod tests {
     #[test]
     fn create_wecom_bot_uses_wecom_provider() {
         let temp = TempRoot::new();
-        let bot = create_wecom_bot(&temp.dir).expect("create wecom");
+        let bot = create_wecom_bot_named(&temp.dir, "").expect("create wecom");
         assert_eq!(bot.provider, BotProvider::Wecom);
         assert!(bot.wecom_bot_id.is_none());
         assert_eq!(bot.name, "企微 Bot");
@@ -256,7 +268,7 @@ mod tests {
     #[test]
     fn heartbeat_and_group_activation_roundtrip() {
         let temp = TempRoot::new();
-        let created = create_weixin_bot(&temp.dir).expect("create");
+        let created = create_weixin_bot_named(&temp.dir, "").expect("create");
         set_heartbeat(&temp.dir, &created.id, 30).expect("heartbeat");
         let saved = bot(&temp.dir, &created.id).expect("read").expect("exists");
         let heartbeat = saved.heartbeat.expect("heartbeat set");
@@ -275,7 +287,7 @@ mod tests {
     #[test]
     fn create_then_toggle_and_delete() {
         let temp = TempRoot::new();
-        let bot = create_weixin_bot(&temp.dir).expect("create");
+        let bot = create_weixin_bot_named(&temp.dir, "").expect("create");
         assert!(bot.id.starts_with("bot-"));
         let rows = list(&temp.dir).expect("list");
         assert_eq!(rows.len(), 1);
