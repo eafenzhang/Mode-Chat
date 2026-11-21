@@ -2570,7 +2570,8 @@ impl Render for BotFormState {
             .child(dialog_field("bot-name", i18n::t("名字"), &self.name))
             .child(dialog_field("bot-role", i18n::t("角色"), &self.role))
             .child(dialog_field("bot-dir", i18n::t("工作目录"), &self.directory));
-        if self.editing_id.is_none() {
+        // 新建与编辑都显示图标/颜色（编辑时从 bot-appearance.json 预填）。
+        {
             let transparent = gpui::rgba(0x00000000);
             // 选中描边跟随主题色：微信壳用强调色，经典壳用 accent。
             let accent = if wecom_theme::active() {
@@ -4165,11 +4166,8 @@ impl PilotApp {
                         };
                         match result {
                             Ok(bot) => {
-                                // 新建时落图标/颜色（编辑旧 Bot 不动外观）。
-                                if editing_id.is_none()
-                                    && let Err(message) =
-                                        bot_icon::set(&bot.id, &icon, &color)
-                                {
+                                // 新建/编辑都落图标/颜色。
+                                if let Err(message) = bot_icon::set(&bot.id, &icon, &color) {
                                     this.toast(message, cx);
                                 }
                                 this.roster = Roster::load();
