@@ -50,7 +50,7 @@ fn bot_face(variant: usize) -> &'static [u8] {
 }
 
 /// 头像外壳：色相渐变 + 内描边 + 外阴影。
-fn shell(hue: f32, size: f32, radius: f32) -> gpui::Div {
+fn shell(hue: f32, width: f32, height: f32, radius: f32) -> gpui::Div {
     let light = theme::is_light();
     let (top, bottom) = if light {
         (deg(hue, 0.72, 0.96, 1.), deg(hue, 0.62, 0.91, 1.))
@@ -72,7 +72,8 @@ fn shell(hue: f32, size: f32, radius: f32) -> gpui::Div {
         .inset();
     let drop = BoxShadow::new(px(0.), px(1.), outer).blur_radius(px(2.));
     div()
-        .size(px(size))
+        .w(px(width))
+        .h(px(height))
         .flex_shrink_0()
         .rounded(px(radius))
         .bg(linear_gradient(
@@ -95,24 +96,7 @@ pub fn bot_avatar(id: &str, size: f32) -> impl IntoElement {
         deg(hue, 0.65, 0.88, 1.)
     };
     let glyph = (size * 0.52).max(10.0);
-    shell(hue, size, size / 2.0).child(
-        svg()
-            .data(bot_face(avatar_variant(id)))
-            .size(px(glyph))
-            .text_color(fg),
-    )
-}
-
-/// 方形 Bot 头像（微信群头像拼图用；不做圆形裁切）。
-pub fn bot_avatar_square(id: &str, size: f32) -> impl IntoElement {
-    let hue = avatar_hue(id);
-    let fg = if theme::is_light() {
-        deg(hue, 0.52, 0.30, 1.)
-    } else {
-        deg(hue, 0.65, 0.88, 1.)
-    };
-    let glyph = (size * 0.52).max(10.0);
-    shell(hue, size, 2.0).child(
+    shell(hue, size, size, size / 2.0).child(
         svg()
             .data(bot_face(avatar_variant(id)))
             .size(px(glyph))
@@ -139,6 +123,23 @@ pub fn app_avatar(size: f32, radius: f32) -> impl IntoElement {
         .child(img(image).size(px(size)))
 }
 
+/// 任意宽高的 Bot 头像（群头像拼图单元格）。
+pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> impl IntoElement {
+    let hue = avatar_hue(id);
+    let fg = if theme::is_light() {
+        deg(hue, 0.52, 0.30, 1.)
+    } else {
+        deg(hue, 0.65, 0.88, 1.)
+    };
+    let glyph = (width.min(height) * 0.52).max(8.0);
+    shell(hue, width, height, radius).child(
+        svg()
+            .data(bot_face(avatar_variant(id)))
+            .size(px(glyph))
+            .text_color(fg),
+    )
+}
+
 /// 频道头像（同一套色相，前景 `#`）。
 pub fn channel_avatar(id: &str, size: f32) -> impl IntoElement {
     let hue = avatar_hue(id);
@@ -147,7 +148,7 @@ pub fn channel_avatar(id: &str, size: f32) -> impl IntoElement {
     } else {
         deg(hue, 0.65, 0.88, 1.)
     };
-    shell(hue, size, size / 2.0).child(
+    shell(hue, size, size, size / 2.0).child(
         svg()
             .data(include_bytes!("../assets/icons/hash.svg"))
             .size(px((size * 0.48).max(10.0)))

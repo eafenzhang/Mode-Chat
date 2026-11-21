@@ -236,6 +236,11 @@ pub fn panel_divider() -> Rgba {
 pub fn online_dot() -> Rgba {
     accent_color()
 }
+/// 群头像默认底色（微信灰白）。
+pub fn group_avatar_bg() -> Rgba {
+    rgb(0xf2f2f2)
+}
+
 pub fn watermark() -> Rgba {
     rgba(0xffffff, 0)
 }

@@ -20008,26 +20008,84 @@ impl PilotApp {
             )
     }
 
-    /// 微信群头像的 2×2 拼图（用成员的真实方形头像，空位补底色）。
+    /// 微信群头像：灰白底 + 最多 9 个成员头像，按人数自适应布局。
     fn wecom_group_avatar(ids: &[String], size: f32) -> impl IntoElement {
-        let cell = size / 2.0;
+        let members: Vec<&String> = ids.iter().take(9).collect();
+        let count = members.len();
+        let pad = 1.5;
+        let gap = 1.0;
+        let inner = size - pad * 2.0;
+        let cell = |id: &String, w: f32, h: f32| -> gpui::AnyElement {
+            avatar::bot_avatar_rect(id, w, h, 2.5).into_any_element()
+        };
         let mut grid = div()
             .size(px(size))
             .flex_shrink_0()
-            .rounded(px(4.))
+            .rounded(px(6.))
             .overflow_hidden()
-            .bg(wecom_theme::chip_bg())
+            .bg(wecom_theme::group_avatar_bg())
+            .p(px(pad))
             .flex()
-            .flex_wrap();
-        for index in 0..4 {
-            let cell_el = match ids.get(index) {
-                Some(id) => avatar::bot_avatar_square(id, cell).into_any_element(),
-                None => div()
-                    .size(px(cell))
-                    .bg(wecom_theme::chip_bg())
-                    .into_any_element(),
-            };
-            grid = grid.child(cell_el);
+            .flex_col()
+            .gap(px(gap));
+        match count {
+            0 => {}
+            1 => {
+                grid = grid.child(cell(members[0], inner, inner));
+            }
+            2 => {
+                let width = (inner - gap) / 2.0;
+                grid = grid.child(
+                    div()
+                        .flex()
+                        .gap(px(gap))
+                        .child(cell(members[0], width, inner))
+                        .child(cell(members[1], width, inner)),
+                );
+            }
+            3 => {
+                let side = (inner - gap) / 2.0;
+                grid = grid
+                    .child(
+                        div()
+                            .flex()
+                            .justify_center()
+                            .child(cell(members[0], side, side)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(gap))
+                            .child(cell(members[1], side, side))
+                            .child(cell(members[2], side, side)),
+                    );
+            }
+            4 => {
+                let side = (inner - gap) / 2.0;
+                for row in 0..2 {
+                    grid = grid.child(
+                        div()
+                            .flex()
+                            .gap(px(gap))
+                            .child(cell(members[row * 2], side, side))
+                            .child(cell(members[row * 2 + 1], side, side)),
+                    );
+                }
+            }
+            _ => {
+                let side = (inner - gap * 2.0) / 3.0;
+                for row in 0..3 {
+                    let mut line = div().flex().gap(px(gap));
+                    for col in 0..3 {
+                        let index = row * 3 + col;
+                        line = match members.get(index) {
+                            Some(id) => line.child(cell(id, side, side)),
+                            None => line.child(div().w(px(side)).h(px(side))),
+                        };
+                    }
+                    grid = grid.child(line);
+                }
+            }
         }
         grid
     }
