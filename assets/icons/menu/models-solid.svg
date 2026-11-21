@@ -1,2 +1,2 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path fill-rule="evenodd" d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Zm2 5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1Z"/>
-<path d="M9 4V1.8M15 4V1.8M9 22.2V20M15 22.2V20M4 9H1.8M4 15H1.8M22.2 9H20M22.2 15H20" stroke="currentColor" stroke-width="2.2" fill="none"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none"><g transform="translate(12 12) scale(0.93) translate(-12 -12)"><path fill-rule="evenodd" d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Zm2 5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1Z"/>
+<path d="M9 4V1.8M15 4V1.8M9 22.2V20M15 22.2V20M4 9H1.8M4 15H1.8M22.2 9H20M22.2 15H20" stroke="currentColor" stroke-width="2.2" fill="none"/></g></svg>
