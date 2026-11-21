@@ -7247,7 +7247,7 @@ impl PilotApp {
                     .gap(px(8.))
                     .cursor_pointer()
                     .bg(if active {
-                        theme::selected()
+                        theme::accent()
                     } else {
                         rgba(0x00000000)
                     })
@@ -7265,7 +7265,7 @@ impl PilotApp {
                         active,
                         menu_icons::SETTINGS_SIZE,
                         if active {
-                            theme::accent()
+                            theme::accent_ink()
                         } else {
                             theme::ink_tertiary()
                         },
@@ -7279,7 +7279,7 @@ impl PilotApp {
                             .text_size(px(13.))
                             .line_height(px(20.))
                             .text_color(if active {
-                                theme::ink()
+                                theme::accent_ink()
                             } else {
                                 theme::ink_secondary()
                             })
@@ -7293,7 +7293,10 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .opacity(if pinned || active { 1.0 } else { 0.0 })
+                            .opacity(if pinned { 1.0 } else { 0.0 })
+                            .when(active && !pinned, |el| {
+                                el.hover(|style| style.opacity(1.))
+                            })
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 cx.stop_propagation();
                                 this.toggle_pinned_setting(index, cx);
@@ -12459,21 +12462,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 .flex()
                                 .items_center()
                                 .gap(px(12.))
-                                .child(
-                                    div()
-                                        .size(px(56.))
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(wecom_theme::avatar_color("me"))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .font_family(wecom_theme::FONT_FAMILY)
-                                        .text_size(px(22.))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(wecom_theme::nav_text_active())
-                                        .child(i18n::t("我")),
-                                )
+                                .child(avatar::app_avatar(48., 6.))
                                 .child(
                                     div()
                                         .flex()
@@ -19912,14 +19901,15 @@ impl PilotApp {
                         this.toast(if this.topmost { i18n::t("窗口已置顶") } else { i18n::t("已取消置顶") }, cx);
                         cx.notify();
                     }))
-                    .child(icons::icon(
+                    .child(icons::icon_with_stroke(
                         icons::Icon::Pushpin,
-                        14.,
+                        16.,
                         if topmost {
                             wecom_theme::nav_text_active()
                         } else {
                             wecom_theme::icon()
                         },
+                        1.2,
                     )),
             )
             .child(
@@ -19975,7 +19965,7 @@ impl PilotApp {
             base.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
         };
         base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
-            .child(icons::icon(glyph, 14., wecom_theme::icon()))
+            .child(icons::icon_with_stroke(glyph, 16., wecom_theme::icon(), 1.2))
     }
 
     /// 企业微信的彩色首字方块头像（10px 圆角）。
@@ -20068,20 +20058,7 @@ impl PilotApp {
                     this.footer_menu_open = false;
                     cx.notify();
                 }))
-                .child(
-                    div()
-                        .size(px(40.))
-                        .rounded_full()
-                        .bg(wecom_theme::avatar_color("me"))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(16.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(wecom_theme::nav_text_active())
-                        .child(i18n::t("我")),
-                )
+                .child(avatar::app_avatar(36., 6.))
                 .child(
                     div()
                         .absolute()
@@ -20442,7 +20419,7 @@ impl PilotApp {
                         .items_center()
                         .gap(px(8.))
                         .cursor_pointer()
-                        .when(active, |el| el.bg(wecom_theme::nav_item_selected_bg()))
+                        .when(active, |el| el.bg(wecom_theme::send_enabled()))
                         .when(!active, |el| {
                             el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                         })
@@ -20463,7 +20440,7 @@ impl PilotApp {
                             active,
                             menu_icons::SETTINGS_SIZE,
                             if active {
-                                wecom_theme::send_enabled()
+                                gpui::rgba(0xffffff)
                             } else if secondary {
                                 wecom_theme::time_label()
                             } else {
@@ -20479,7 +20456,7 @@ impl PilotApp {
                                 .text_size(px(13.))
                                 .line_height(px(18.))
                                 .text_color(if active {
-                                    wecom_theme::chat_title()
+                                    gpui::rgba(0xffffff)
                                 } else if secondary {
                                     wecom_theme::time_label()
                                 } else {
@@ -20495,7 +20472,10 @@ impl PilotApp {
                                 .items_center()
                                 .justify_center()
                                 .cursor_pointer()
-                                .opacity(if pinned || active { 1.0 } else { 0.0 })
+                                .opacity(if pinned { 1.0 } else { 0.0 })
+                                .when(active && !pinned, |el| {
+                                    el.hover(|style| style.opacity(1.))
+                                })
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     cx.stop_propagation();
                                     this.toggle_pinned_setting(index, cx);
@@ -21181,8 +21161,8 @@ impl PilotApp {
             )
             .child(
                 div()
-                    // 与文字视觉边距对齐：工具条 8 + 图标内缩 3 ≈ 11。
-                    .h(px(44.))
+                    // 32 图标按钮上下各 12；发送 30 高，上下各 13。
+                    .h(px(56.))
                     .flex_shrink_0()
                     .px(px(8.))
                     .flex()
@@ -21191,7 +21171,7 @@ impl PilotApp {
                     .child(
                         div()
                             .id("wechat-tool-smile")
-                            .size(px(28.))
+                            .size(px(32.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21204,12 +21184,12 @@ impl PilotApp {
                                     input.set_content(format!("{content}🙂"), cx);
                                 });
                             }))
-                            .child(icons::icon(icons::Icon::Smile, 22., wecom_theme::icon())),
+                            .child(icons::icon_with_stroke(icons::Icon::Smile, 24., wecom_theme::icon(), 1.5)),
                     )
                     .child(
                         div()
                             .id("wechat-tool-folder")
-                            .size(px(28.))
+                            .size(px(32.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21219,12 +21199,12 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.stage_attachments(cx);
                             }))
-                            .child(icons::icon(icons::Icon::Folder, 22., wecom_theme::icon())),
+                            .child(icons::icon_with_stroke(icons::Icon::Folder, 24., wecom_theme::icon(), 1.5)),
                     )
                     .child(
                         div()
                             .id("wechat-tool-scissors")
-                            .size(px(28.))
+                            .size(px(32.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21234,12 +21214,12 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.paste_clipboard_image(cx);
                             }))
-                            .child(icons::icon(icons::Icon::Scissors, 22., wecom_theme::icon())),
+                            .child(icons::icon_with_stroke(icons::Icon::Scissors, 24., wecom_theme::icon(), 1.5)),
                     )
                     .child(
                         div()
                             .id("wechat-tool-mic")
-                            .size(px(28.))
+                            .size(px(32.))
                             .rounded(px(4.))
                             .flex()
                             .items_center()
@@ -21249,7 +21229,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toast(i18n::t("语音暂未接入"), cx);
                             }))
-                            .child(icons::icon(icons::Icon::Mic, 22., wecom_theme::icon())),
+                            .child(icons::icon_with_stroke(icons::Icon::Mic, 24., wecom_theme::icon(), 1.5)),
                     )
                     .child(div().flex_1())
                     .child(
@@ -21257,8 +21237,8 @@ impl PilotApp {
                             .id("wechat-send")
                             // 右缘与文字 12 视觉边距对齐（工具条 8 + 4）。
                             .mr(px(4.))
-                            .h(px(26.))
-                            .px(px(14.))
+                            .h(px(30.))
+                            .px(px(18.))
                             .rounded(px(4.))
                             .bg(send_bg)
                             .flex()

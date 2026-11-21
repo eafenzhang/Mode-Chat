@@ -182,6 +182,21 @@ impl Icon {
 }
 
 /// 画一个图标。`size` 是边长，颜色由调用方给（`currentColor`）。
+/// 指定描边粗细的图标（用于输入框/标题栏对齐微信的细线风格）。
+pub fn icon_with_stroke(
+    kind: Icon,
+    size: f32,
+    color: Rgba,
+    stroke_width: f32,
+) -> impl IntoElement {
+    let source = String::from_utf8_lossy(kind.svg())
+        .replace("stroke-width=\"1.7\"", &format!("stroke-width=\"{stroke_width}\""));
+    svg()
+        .data(source.as_bytes())
+        .size(px(size))
+        .text_color(Hsla::from(color))
+}
+
 pub fn icon(kind: Icon, size: f32, color: Rgba) -> impl IntoElement {
     svg()
         .data(kind.svg())

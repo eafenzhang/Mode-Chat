@@ -6,9 +6,11 @@
 //! 机器人面是原版 `ui/avatar.tsx` 的四段 SVG（24 viewBox、stroke 2），与图标同一套
 //! `svg().data()` 渲染管线。
 
+use std::sync::{Arc, OnceLock};
+
 use gpui::{
-    div, hsla, linear_color_stop, linear_gradient, px, svg, BoxShadow, Hsla, IntoElement,
-    ParentElement, Rgba, Styled,
+    div, hsla, img, linear_color_stop, linear_gradient, px, svg, BoxShadow, Hsla, Image,
+    ImageFormat, IntoElement, ParentElement, Rgba, Styled,
 };
 
 use crate::theme;
@@ -116,6 +118,25 @@ pub fn bot_avatar_square(id: &str, size: f32) -> impl IntoElement {
             .size(px(glyph))
             .text_color(fg),
     )
+}
+
+/// 本机用户头像：默认应用图标，圆角与 Bot 方形头像一致。
+pub fn app_avatar(size: f32, radius: f32) -> impl IntoElement {
+    static APP_IMAGE: OnceLock<Arc<Image>> = OnceLock::new();
+    let image = APP_IMAGE
+        .get_or_init(|| {
+            Arc::new(Image::from_bytes(
+                ImageFormat::Png,
+                include_bytes!("../assets/icons/app.png").to_vec(),
+            ))
+        })
+        .clone();
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded(px(radius))
+        .overflow_hidden()
+        .child(img(image).size(px(size)))
 }
 
 /// 频道头像（同一套色相，前景 `#`）。
