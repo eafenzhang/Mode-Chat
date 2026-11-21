@@ -18,6 +18,7 @@ mod avatar;
 mod autostart;
 mod backend;
 mod bot_icon;
+mod brand_icons;
 mod capabilities;
 mod connectors;
 mod data;
@@ -9394,7 +9395,7 @@ impl PilotApp {
     fn im_platform_card(
         &self,
         id: &'static str,
-        icon: icons::Icon,
+        brand: &'static str,
         title: &'static str,
         subtitle: &'static str,
         provider: bots_service::BotProvider,
@@ -9437,11 +9438,24 @@ impl PilotApp {
                 div()
                     .size(px(36.))
                     .rounded_full()
-                    .bg(ui_accent_soft())
+                    .bg(brand_icons::raw_color(brand).unwrap_or_else(ui_accent))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icons::icon(icon, 20., ui_accent())),
+                    .child(
+                        brand_icons::asset(brand)
+                            .map(|data| {
+                                gpui::svg()
+                                    .data(data)
+                                    .size(px(20.))
+                                    .text_color(gpui::rgb(0xffffff))
+                                    .into_any_element()
+                            })
+                            .unwrap_or_else(|| {
+                                icons::icon(icons::Icon::MessageCircleFilled, 20., gpui::rgb(0xffffff))
+                                    .into_any_element()
+                            }),
+                    ),
             )
             .child(
                 div()
@@ -9513,7 +9527,7 @@ impl PilotApp {
                     .gap(px(8.))
                     .child(self.im_platform_card(
                         "im-new-weixin",
-                        icons::Icon::MessageCircleFilled,
+                        "wechat",
                         i18n::t("微信"),
                         i18n::t("扫码登录"),
                         bots_service::BotProvider::Weixin,
@@ -9521,7 +9535,7 @@ impl PilotApp {
                     ))
                     .child(self.im_platform_card(
                         "im-new-wecom",
-                        icons::Icon::Building,
+                        "wecom",
                         i18n::t("企业微信"),
                         i18n::t("扫码创建"),
                         bots_service::BotProvider::Wecom,
@@ -10619,7 +10633,7 @@ impl PilotApp {
                                 .flex()
                                 .items_start()
                                 .gap(px(8.))
-                                .child(connector_icon(spec.category))
+                                .child(connector_icon(spec.id, spec.category))
                                 .child(
                                     div()
                                         .flex_1()
@@ -18976,7 +18990,7 @@ fn ui_accent_soft() -> Rgba {
 }
 
 /// 连接器卡片的分类图标（DS 用品牌 logo；我们没有素材，用分类图标占位）。
-fn connector_icon(category: &str) -> impl IntoElement {
+fn connector_icon(id: &str, category: &str) -> gpui::AnyElement {
     let glyph = match category {
         "dev" => icons::Icon::Cpu,
         "docs" => icons::Icon::Folder,
@@ -18987,7 +19001,7 @@ fn connector_icon(category: &str) -> impl IntoElement {
         _ => icons::Icon::Plug,
     };
     let wechat = wecom_theme::active();
-    div()
+    let container = div()
         .size(px(26.))
         .flex_shrink_0()
         .rounded(px(8.))
@@ -18998,7 +19012,15 @@ fn connector_icon(category: &str) -> impl IntoElement {
         })
         .flex()
         .items_center()
-        .justify_center()
+        .justify_center();
+    if let Some(key) = brand_icons::connector_key(id)
+        && let (Some(data), Some(color)) = (brand_icons::asset(key), brand_icons::color(key))
+    {
+        return container
+            .child(gpui::svg().data(data).size(px(16.)).text_color(color))
+            .into_any_element();
+    }
+    container
         .child(icons::icon(
             glyph,
             14.,
@@ -19008,6 +19030,7 @@ fn connector_icon(category: &str) -> impl IntoElement {
                 theme::ink_secondary()
             },
         ))
+        .into_any_element()
 }
 
 /// 连接器分类 chips（全部 / 开发 / 文档 / …）。
