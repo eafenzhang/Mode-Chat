@@ -249,6 +249,34 @@ pub fn create_turn(
     Ok((root, children))
 }
 
+/// 群内交接：在现有根任务下追加一个成员子任务并立即 Dispatch。
+pub fn create_handoff(
+    data_root: &Path,
+    group_id: &str,
+    root_message_id: &str,
+    root_task_id: &str,
+    owner_member_id: &str,
+    expected_result: &str,
+) -> Result<GroupTask, String> {
+    let path = tasks_path(data_root, group_id)?;
+    let _guard = write_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let projection = read_projection(&path)?;
+    let expected: String = expected_result.chars().take(120).collect();
+    let task = create_locked(
+        &path,
+        &projection,
+        group_id,
+        root_message_id,
+        Some(root_task_id),
+        owner_member_id,
+        &expected,
+    )?;
+    let projection = read_projection(&path)?;
+    transition_locked(&path, &projection, &task.id, TaskTransition::Dispatch)
+}
+
 /// 结算子任务；若根容器下所有子任务都已终态，同时结算根容器。
 pub fn settle(
     data_root: &Path,

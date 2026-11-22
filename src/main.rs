@@ -3002,6 +3002,8 @@ struct PilotApp {
     pending_provider_url_dialog: Option<(String, String, String)>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
+    /// 每个群在当前用户回合里已发生的 Bot 交接次数（上限 4，防止互相 @ 无限循环）。
+    group_handoff_count: HashMap<String, u32>,
     /// 群聊 composer 上方的任务条缓存。
     group_task_bar: Option<GroupTaskBarState>,
     /// 打开中的群任务对话框（结算后刷新列表）。
@@ -3481,6 +3483,7 @@ impl PilotApp {
             question_free_active: None,
             question_free_input,
             group_task_turns: HashMap::new(),
+            group_handoff_count: HashMap::new(),
             group_task_bar: None,
             group_tasks_view: None,
             image_preview: None,
@@ -4760,6 +4763,135 @@ impl PilotApp {
                                 !(pending.sent && pending.card.member.as_deref() == Some(name))
                             });
                         }
+                        // Bot 交接：回复里 @ 其他成员 → 在当前根任务下派子任务。
+                        // 必须在结算自己之前创建，否则根任务可能先收口。
+                        if let Some(name) = member.as_deref()
+                            && let Some(group_id) = task_key.strip_prefix("group:")
+                        {
+                            let reply = chat
+                                .messages
+                                .iter()
+                                .rev()
+                                .find(|message| {
+                                    message.role == Role::Assistant
+                                        && message.kind == MsgKind::Text
+                                        && message.member.as_deref() == Some(name)
+                                        && !message.text.trim().is_empty()
+                                })
+                                .map(|message| message.text.clone())
+                                .unwrap_or_default();
+                            let members: Vec<(String, String)> = self
+                                .roster
+                                .groups
+                                .iter()
+                                .find(|group| group.id == group_id)
+                                .map(|group| {
+                                    group
+                                        .member_ids
+                                        .iter()
+                                        .filter_map(|id| {
+                                            self.roster
+                                                .bot_by_id(id)
+                                                .map(|bot| (bot.id.clone(), bot.name.clone()))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            if !reply.trim().is_empty() && !members.is_empty() {
+                                let parsed =
+                                    bot_team::mentions::parse_mentions(&reply, &members);
+                                let mut targets: Vec<(String, String)> = members
+                                    .iter()
+                                    .filter(|(id, member_name)| {
+                                        parsed.ids.contains(id) && member_name != name
+                                    })
+                                    .cloned()
+                                    .collect();
+                                targets.dedup_by(|left, right| left.1 == right.1);
+                                let used = self
+                                    .group_handoff_count
+                                    .get(&task_key)
+                                    .copied()
+                                    .unwrap_or(0);
+                                // 每轮最多 4 次，防止两个 Bot 互相 @ 无限循环。
+                                targets.truncate(4usize.saturating_sub(used as usize));
+                                for (target_id, target_name) in &targets {
+                                    // 目标已在当前回合里跑（例如用户同时 @ 了它）时
+                                    // 不再重复派发，否则会撞 lane 的 active run。
+                                    let already_active = chat
+                                        .member_stream
+                                        .contains_key(target_name)
+                                        || self.group_task_turns.get(&task_key).is_some_and(
+                                            |turn| turn.members.contains_key(target_name),
+                                        );
+                                    if already_active {
+                                        continue;
+                                    }
+                                    let (root_id, parent_task_id) = self
+                                        .group_task_turns
+                                        .get(&task_key)
+                                        .map(|turn| {
+                                            (
+                                                turn.root_id.clone(),
+                                                turn.members
+                                                    .get(name)
+                                                    .cloned()
+                                                    .unwrap_or_else(|| turn.root_id.clone()),
+                                            )
+                                        })
+                                        .unwrap_or_default();
+                                    if root_id.is_empty() {
+                                        continue;
+                                    }
+                                    match group_tasks::create_handoff(
+                                        &data::data_root(),
+                                        group_id,
+                                        &root_id,
+                                        &parent_task_id,
+                                        target_id,
+                                        &reply,
+                                    ) {
+                                        Ok(task) => {
+                                            if let Some(turn) =
+                                                self.group_task_turns.get_mut(&task_key)
+                                            {
+                                                turn.members
+                                                    .insert(target_name.clone(), task.id);
+                                            }
+                                            *self
+                                                .group_handoff_count
+                                                .entry(task_key.clone())
+                                                .or_insert(0) += 1;
+                                            let handoff = if i18n::is_en() {
+                                                format!(
+                                                    "[Group handoff] {name} handed this task to you:\n\n{reply}\n\nPlease take over, finish it, and reply directly in the group. You may @ another member to hand off further."
+                                                )
+                                            } else {
+                                                format!(
+                                                    "【群内交接】{name} 把下面的任务交给你：\n\n{reply}\n\n请接手执行，完成后直接在群里回复；需要继续交接可以 @ 其他成员。"
+                                                )
+                                            };
+                                            self.backend.continue_task(
+                                                task_key.clone(),
+                                                target_id.clone(),
+                                                handoff,
+                                            );
+                                            chat.streaming = true;
+                                            if chat.turn_started.is_none() {
+                                                chat.turn_started = Some(time::now_ms());
+                                            }
+                                            chat.status =
+                                                i18n::t("交接中…").to_string();
+                                            review_due = false;
+                                            task_bar_due = true;
+                                        }
+                                        Err(message) => {
+                                            eprintln!("[tasks] 交接任务创建失败：{message}")
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if let Some(name) = member.as_deref() {
                             settle_group_task_turn(
                                 &mut self.group_task_turns,
@@ -5249,6 +5381,8 @@ impl PilotApp {
             .filter_map(|member_id| self.roster.bot_by_id(member_id))
             .map(|bot| (bot.id.clone(), bot.name.clone()))
             .collect();
+        // 新的用户回合：重置 Bot 交接预算。
+        self.group_handoff_count.remove(key);
         if let Some(chat) = self.chats.get_mut(key) {
             chat.push_user_group(payload.clone(), attachment_names);
             chat.status = i18n::t("等待回复…").to_string();
