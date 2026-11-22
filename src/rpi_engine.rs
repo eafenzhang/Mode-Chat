@@ -542,6 +542,106 @@ fn summarize_args(args: &serde_json::Value) -> String {
     }
 }
 
+/// 工具结果里的图片落盘（截图类工具），返回本地路径供 UI 直接 img 渲染。
+fn write_tool_image(dir: &Path, call_id: &str, index: usize, mime: &str, data: &str) -> Option<String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).ok()?;
+    let safe: String = call_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ext = match mime {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "png",
+    };
+    let path = dir.join(format!("{safe}-{index}.{ext}"));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
+fn tool_image_dir() -> Option<PathBuf> {
+    let dir = crate::instance::state_dir().join("tool-images");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// 只保留最近 300 张，避免截图工具把试点目录撑大。
+fn prune_tool_images(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            path.is_file().then_some((modified, path))
+        })
+        .collect();
+    if files.len() <= 300 {
+        return;
+    }
+    files.sort_by_key(|(modified, _)| *modified);
+    for (_, path) in files.iter().take(files.len() - 300) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn tool_images(call_id: &str, content: &[rpi_agent::TextContentOrImage]) -> Vec<String> {
+    let Some(dir) = tool_image_dir() else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for (index, item) in content.iter().enumerate() {
+        let rpi_agent::TextContentOrImage::Image(image) = item else {
+            continue;
+        };
+        if let Some(path) = write_tool_image(&dir, call_id, index, &image.mime_type, &image.data) {
+            paths.push(path);
+        }
+    }
+    if !paths.is_empty() {
+        prune_tool_images(&dir);
+    }
+    paths
+}
+
+/// 历史 JSONL 里的图片块（`{type:"image", data, mimeType}`）。
+fn history_tool_images(call_id: &str, content: &[serde_json::Value]) -> Vec<String> {
+    let Some(dir) = tool_image_dir() else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for (index, item) in content.iter().enumerate() {
+        if item.get("type").and_then(|value| value.as_str()) != Some("image") {
+            continue;
+        }
+        let data = item
+            .get("data")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let mime = item
+            .get("mimeType")
+            .and_then(|value| value.as_str())
+            .unwrap_or("image/png");
+        if let Some(path) = write_tool_image(&dir, call_id, index, mime, data) {
+            paths.push(path);
+        }
+    }
+    if !paths.is_empty() {
+        prune_tool_images(&dir);
+    }
+    paths
+}
+
 /// 结果 details 的 JSON 文本（edit 的 diff、bash 的 exit_code）。
 /// 只用于展示，截断到 8k 字符，避免一条工具卡把整段 diff 全搬进 UI 状态。
 fn tool_details(value: &serde_json::Value) -> String {
@@ -652,6 +752,7 @@ impl AgentEmitter for UiEmitter {
                     detail: summarize_args(&args),
                     input: serde_json::to_string(&args).unwrap_or_default(),
                     details: String::new(),
+                    images: Vec::new(),
                 }));
             }
             AgentEvent::ToolExecutionUpdate {
@@ -661,6 +762,7 @@ impl AgentEmitter for UiEmitter {
                 partial_result,
                 ..
             } => {
+                let images = tool_images(&tool_call_id, &partial_result.content);
                 self.send(SessionEvent::Tool(ToolCard {
                     call_id: tool_call_id,
                     name: tool_name.clone(),
@@ -669,6 +771,7 @@ impl AgentEmitter for UiEmitter {
                     detail: tool_detail(&partial_result.content),
                     input: serde_json::to_string(&args).unwrap_or_default(),
                     details: tool_details(&partial_result.details),
+                    images,
                 }));
             }
             AgentEvent::ToolExecutionEnd {
@@ -678,6 +781,7 @@ impl AgentEmitter for UiEmitter {
                 is_error,
                 ..
             } => {
+                let images = tool_images(&tool_call_id, &result.content);
                 self.send(SessionEvent::Tool(ToolCard {
                     call_id: tool_call_id,
                     name: tool_name.clone(),
@@ -686,6 +790,7 @@ impl AgentEmitter for UiEmitter {
                     detail: tool_detail(&result.content),
                     input: String::new(),
                     details: tool_details(&result.details),
+                    images,
                 }));
             }
             AgentEvent::RetryScheduled { error, attempt, max_retries, .. } => {
@@ -964,6 +1069,11 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
                 let details = tool_details(
                     message.get("details").unwrap_or(&serde_json::Value::Null),
                 );
+                let images = message
+                    .get("content")
+                    .and_then(|value| value.as_array())
+                    .map(|items| history_tool_images(&call_id, items))
+                    .unwrap_or_default();
                 out.push(crate::backend::HistoryEntry {
                     user: false,
                     reasoning: false,
@@ -976,6 +1086,7 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
                         detail,
                         input,
                         details,
+                        images,
                     }),
                     attachments: Vec::new(),
                     member: None,

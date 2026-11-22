@@ -63,6 +63,8 @@ pub struct ToolCard {
     pub input: String,
     /// 工具结果的结构化 details JSON（edit 的 diff、bash 的 exit_code）。最多约 8k 字符。
     pub details: String,
+    /// 工具结果里的图片（截图类工具），已落成临时 PNG/JPEG 的本地路径。
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

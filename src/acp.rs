@@ -821,6 +821,7 @@ fn handle_notification(
                 detail: String::new(),
                 input,
                 details,
+                images: Vec::new(),
             }));
         }
         _ => {}

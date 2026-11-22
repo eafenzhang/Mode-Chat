@@ -713,6 +713,8 @@ struct Message {
     tool_input: String,
     /// 结果 details JSON（edit 的 diff、bash 的 exit_code）。
     tool_details: String,
+    /// 工具结果里的图片本地路径（截图类工具）。
+    tool_images: Vec<String>,
 }
 
 impl Message {
@@ -743,6 +745,7 @@ impl Message {
             tool_detail: String::new(),
             tool_input: String::new(),
             tool_details: String::new(),
+            tool_images: Vec::new(),
         }
     }
 
@@ -770,6 +773,7 @@ impl Message {
             tool_detail: card.detail,
             tool_input: card.input,
             tool_details: card.details,
+            tool_images: card.images,
         }
     }
 }
@@ -2521,6 +2525,9 @@ impl ChatState {
             }
             if !card.details.trim().is_empty() {
                 message.tool_details = card.details;
+            }
+            if !card.images.is_empty() {
+                message.tool_images = card.images;
             }
             return;
         }
@@ -18025,6 +18032,8 @@ fn tool_message_fingerprint(message: &Message) -> u64 {
         .wrapping_add(message.tool_input.len() as u64)
         .wrapping_mul(17)
         .wrapping_add(message.tool_details.len() as u64)
+        .wrapping_mul(17)
+        .wrapping_add(message.tool_images.len() as u64)
 }
 
 fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
@@ -21015,6 +21024,52 @@ fn tool_copy_button(
         .into_any_element()
 }
 
+/// 截图类工具结果的缩略图行（点击复用会话内的大图预览）。
+fn tool_images_row(
+    paths: &[String],
+    call_id: &str,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> Option<gpui::AnyElement> {
+    if paths.is_empty() {
+        return None;
+    }
+    let mut row = div().w_full().flex().flex_wrap().gap(px(6.));
+    for (index, path) in paths.iter().take(4).enumerate() {
+        let path = std::path::PathBuf::from(path);
+        let click_path = path.clone();
+        let weak = weak.clone();
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("tool-image-{call_id}-{index}")))
+                .w(px(132.))
+                .h(px(96.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(wecom_theme::composer_border())
+                .overflow_hidden()
+                .cursor_pointer()
+                .on_click(move |_event, _window, cx| {
+                    let path = click_path.clone();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.image_preview = Some(path);
+                        cx.notify();
+                    });
+                })
+                .child(gpui::img(path).size_full().object_fit(gpui::ObjectFit::Cover)),
+        );
+    }
+    if paths.len() > 4 {
+        row = row.child(
+            div()
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(10.))
+                .text_color(wecom_theme::time_label())
+                .child(SharedString::from(format!("+{}", paths.len() - 4))),
+        );
+    }
+    Some(row.into_any_element())
+}
+
 fn tool_actions_row(
     call_id: &str,
     actions: Vec<(&'static str, String)>,
@@ -21269,6 +21324,11 @@ fn wecom_edit_card(
             .flex_col()
             .gap(px(2.))
             .child(panel)
+            .children(tool_images_row(
+                &message.tool_images,
+                &message.tool_call_id,
+                &action_weak,
+            ))
             .children(actions)
             .into_any_element()
     });
@@ -21414,6 +21474,13 @@ fn wecom_exec_card(
                     })
                     .child(SharedString::from(label)),
             );
+        }
+        if let Some(images) = tool_images_row(
+            &message.tool_images,
+            &message.tool_call_id,
+            &action_weak,
+        ) {
+            panel = panel.child(images);
         }
         let mut actions = Vec::new();
         if !command.trim().is_empty() {
@@ -21661,6 +21728,11 @@ fn wecom_tool_card(
                                     .text_color(wecom_theme::list_preview())
                                     .child(SharedString::from(capped_text(&detail, 40))),
                             )
+                            .children(tool_images_row(
+                                &message.tool_images,
+                                &message.tool_call_id,
+                                &action_weak,
+                            ))
                             .child(tool_actions_row(
                                 &message.tool_call_id,
                                 vec![("复制详情", detail.clone())],
@@ -24442,6 +24514,7 @@ mod turn_summary_tests {
             detail: String::new(),
             input: input.to_string(),
             details: String::new(),
+            images: Vec::new(),
         })
     }
 
