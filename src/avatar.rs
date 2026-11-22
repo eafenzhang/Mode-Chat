@@ -6,12 +6,28 @@
 //! 机器人面是原版 `ui/avatar.tsx` 的四段 SVG（24 viewBox、stroke 2），与图标同一套
 //! `svg().data()` 渲染管线。
 
+use std::sync::{Arc, OnceLock};
+
 use gpui::{
-    div, hsla, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
-    IntoElement, ParentElement, Rgba, Styled,
+    div, hsla, img, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
+    Image, ImageFormat, IntoElement, ParentElement, Rgba, Styled,
 };
 
 use crate::theme;
+
+/// 应用图标（WorkBuddy 风格的绿底白猫 + 面罩），embed 在 exe 里。
+static APP_ICON: OnceLock<Arc<Image>> = OnceLock::new();
+
+fn app_icon_image() -> Arc<Image> {
+    APP_ICON
+        .get_or_init(|| {
+            Arc::new(Image::from_bytes(
+                ImageFormat::Png,
+                include_bytes!("../assets/icons/app.png").to_vec(),
+            ))
+        })
+        .clone()
+}
 
 /// 头像色相哈希：照原版 `avatarHash`（`hash = hash*31 + charCode`，取绝对值）。
 /// 用 UTF-16 码元与 JS 的 `charCodeAt` 对齐。
@@ -156,27 +172,12 @@ fn icon_layers(
 
 /// App 图标（矢量版）：近黑圆角底 + K1 绿色机器人，任意尺寸都清晰。
 pub fn app_icon(size: f32, radius: f32) -> AnyElement {
-    let dark = gpui::rgb(0x0a0b0c);
     div()
         .size(px(size))
         .flex_shrink_0()
         .rounded(px(radius))
-        .bg(linear_gradient(
-            160.0,
-            linear_color_stop(hsla(0.58, 0.06, 0.12, 1.), 0.0),
-            linear_color_stop(hsla(0.6, 0.10, 0.025, 1.), 1.0),
-        ))
-        .border_1()
-        .border_color(hsla(0., 0., 1., 0.07))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(icon_layers(
-            crate::bot_icon::DEFAULT_ICON,
-            gpui::rgb(0x2ed17f),
-            dark,
-            size * 0.72,
-        ))
+        .overflow_hidden()
+        .child(img(app_icon_image()).size(px(size)))
         .into_any_element()
 }
 
