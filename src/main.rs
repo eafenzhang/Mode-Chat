@@ -3129,6 +3129,7 @@ enum DetailMenuAction {
     UnassignSection(String),
     ToggleMute(String, bool),
     ShareConversation(String),
+    ExportConversation(String),
     CopySessionId(String),
 }
 
@@ -12908,6 +12909,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         false,
                         DetailMenuAction::ShareConversation(key.clone()),
                     ));
+                    entries.push((
+                        i18n::t("导出 Markdown…").to_string(),
+                        false,
+                        DetailMenuAction::ExportConversation(key.clone()),
+                    ));
                 }
                 if self
                     .chats
@@ -12991,6 +12997,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         false,
                         DetailMenuAction::ShareConversation(key.clone()),
                     ));
+                    entries.push((
+                        i18n::t("导出 Markdown…").to_string(),
+                        false,
+                        DetailMenuAction::ExportConversation(key.clone()),
+                    ));
                 }
                 for section in &self.sidebar_sections.sections {
                     entries.push((
@@ -13028,6 +13039,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             DetailMenuAction::UnassignSection(_) => icons::Icon::X,
             DetailMenuAction::ToggleMute(..) => icons::Icon::BellOff,
             DetailMenuAction::ShareConversation(_) => icons::Icon::MessageSquare,
+            DetailMenuAction::ExportConversation(_) => icons::Icon::Download,
             DetailMenuAction::CopySessionId(_) => icons::Icon::Key,
         }
     }
@@ -13148,24 +13160,57 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     })
                     .unwrap_or_else(|| "Mode Chat".to_string());
                 if let Some(chat) = self.chats.get(&key) {
-                    let mut lines = Vec::new();
-                    for message in &chat.messages {
-                        if message.kind != MsgKind::Text || message.text.trim().is_empty() {
-                            continue;
-                        }
-                        let who = match message.role {
-                            Role::User => i18n::t("你").to_string(),
-                            Role::Assistant => message
-                                .member
-                                .clone()
-                                .unwrap_or_else(|| title.clone()),
-                        };
-                        lines.push(format!("**{who}：** {}", message.text.trim()));
-                    }
-                    if !lines.is_empty() {
-                        let markdown = format!("# {title}\n\n{}", lines.join("\n\n"));
+                    let markdown = conversation_markdown(chat, &title);
+                    if !markdown.is_empty() {
                         cx.write_to_clipboard(ClipboardItem::new_string(markdown));
                         self.toast(i18n::t("已复制会话 Markdown"), cx);
+                    }
+                }
+            }
+            DetailMenuAction::ExportConversation(key) => {
+                let title = key
+                    .strip_prefix("bot:")
+                    .and_then(|id| self.roster.bot_by_id(id))
+                    .map(|bot| bot.name.clone())
+                    .or_else(|| {
+                        key.strip_prefix("group:").and_then(|id| {
+                            self.roster
+                                .groups
+                                .iter()
+                                .find(|group| group.id == id)
+                                .map(|group| group.name.clone())
+                        })
+                    })
+                    .unwrap_or_else(|| "Mode Chat".to_string());
+                if let Some(chat) = self.chats.get(&key) {
+                    let markdown = conversation_markdown(chat, &title);
+                    if markdown.is_empty() {
+                        self.toast(i18n::t("会话还没有可导出的消息"), cx);
+                    } else {
+                        let default_name = export_file_name(&title);
+                        // 原生保存框跑自己的消息循环，必须离开 gpui 的 App 借用
+                        // （否则 RefCell already borrowed panic），选完回 UI 线程提示。
+                        cx.spawn(async move |this, cx| {
+                            let written = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    let path = file_dialog::save_markdown(&default_name)?;
+                                    let result = std::fs::write(&path, markdown);
+                                    Some((path, result))
+                                })
+                                .await;
+                            let Some((path, result)) = written else {
+                                return;
+                            };
+                            let _ = this.update(cx, |this, cx| match result {
+                                Ok(()) => {
+                                    this.toast(tri!("已导出：{path}", "Exported: {path}"), cx)
+                                }
+                                Err(error) => this
+                                    .toast(tri!("导出失败：{error}", "Export failed: {error}"), cx),
+                            });
+                        })
+                        .detach();
                     }
                 }
             }
@@ -24019,6 +24064,48 @@ fn fake_history_or(entries: Vec<backend::HistoryEntry>) -> Vec<backend::HistoryE
     }
 }
 
+/// 会话导出用的 Markdown（只取正文消息，工具/思考不导出）。
+fn conversation_markdown(chat: &ChatState, title: &str) -> String {
+    let mut lines = Vec::new();
+    for message in &chat.messages {
+        if message.kind != MsgKind::Text || message.text.trim().is_empty() {
+            continue;
+        }
+        let who = match message.role {
+            Role::User => i18n::t("你").to_string(),
+            Role::Assistant => message
+                .member
+                .clone()
+                .unwrap_or_else(|| title.to_string()),
+        };
+        lines.push(format!("**{who}：** {}", message.text.trim()));
+    }
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("# {title}\n\n{}", lines.join("\n\n"))
+    }
+}
+
+/// 导出文件名：清掉 Windows 非法字符，空名回落会话。
+fn export_file_name(title: &str) -> String {
+    let sanitized: String = title
+        .chars()
+        .map(|ch| match ch {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect();
+    let sanitized = sanitized.trim().trim_matches('.');
+    let stem = if sanitized.is_empty() {
+        "conversation"
+    } else {
+        sanitized
+    };
+    format!("{stem}.md")
+}
+
 /// 把 HistoryEntry 转成 UI 消息（History 事件与合成注入共用）。
 fn history_messages(entries: Vec<backend::HistoryEntry>) -> Vec<Message> {
     entries
@@ -24533,6 +24620,12 @@ mod turn_summary_tests {
             tool("read", r#"{"path":"a.txt"}"#),
         ];
         assert_eq!(turn_edit_summary(&messages), Some((1, 3, 1)));
+    }
+
+    #[test]
+    fn export_name_is_sanitized() {
+        assert_eq!(export_file_name("a/b:c*?"), "a_b_c__.md");
+        assert_eq!(export_file_name("  "), "conversation.md");
     }
 
     #[test]

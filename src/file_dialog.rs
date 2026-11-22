@@ -14,6 +14,7 @@ const OFN_EXPLORER: u32 = 0x0008_0000;
 const OFN_FILEMUSTEXIST: u32 = 0x0000_1000;
 const OFN_PATHMUSTEXIST: u32 = 0x0000_0800;
 const OFN_NOCHANGEDIR: u32 = 0x0000_0008;
+const OFN_OVERWRITEPROMPT: u32 = 0x0000_0002;
 
 /// `OPENFILENAMEW`（字段顺序必须与 SDK 完全一致，否则 GetOpenFileNameW 读错布局）。
 #[repr(C)]
@@ -46,6 +47,7 @@ struct OpenFileNameW {
 #[link(name = "comdlg32")]
 unsafe extern "system" {
     fn GetOpenFileNameW(dialog: *mut OpenFileNameW) -> i32;
+    fn GetSaveFileNameW(dialog: *mut OpenFileNameW) -> i32;
 }
 
 #[link(name = "user32")]
@@ -105,6 +107,66 @@ pub fn pick_files() -> Vec<String> {
         }
     }
     parse_multi(&buffer)
+}
+
+/// 导出 Markdown：弹出保存框，返回目标路径（取消返回 None）。
+pub fn save_markdown(default_name: &str) -> Option<String> {
+    let mut buffer = vec![0u16; 1024];
+    let name: Vec<u16> = default_name.encode_utf16().collect();
+    let copy = name.len().min(buffer.len() - 1);
+    buffer[..copy].copy_from_slice(&name[..copy]);
+    let filter: Vec<u16> = "Markdown\0*.md\0所有文件\0*.*\0"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let title = wide("导出会话");
+    let class = wide("Zed::Window");
+    let window_title = wide("Mode Chat");
+    let extension = wide("md");
+    // SAFETY: 指针都指向本函数栈上/堆上、以 NUL 结尾的宽字符串或缓冲；缓冲足够大。
+    unsafe {
+        let owner = FindWindowW(class.as_ptr(), window_title.as_ptr());
+        let mut dialog = OpenFileNameW {
+            struct_size: std::mem::size_of::<OpenFileNameW>() as u32,
+            owner,
+            instance: std::ptr::null_mut(),
+            filter: filter.as_ptr(),
+            custom_filter: std::ptr::null_mut(),
+            max_custom_filter: 0,
+            filter_index: 1,
+            file: buffer.as_mut_ptr(),
+            max_file: buffer.len() as u32,
+            file_title: std::ptr::null_mut(),
+            max_file_title: 0,
+            initial_dir: std::ptr::null(),
+            title: title.as_ptr(),
+            flags: OFN_EXPLORER
+                | OFN_PATHMUSTEXIST
+                | OFN_OVERWRITEPROMPT
+                | OFN_NOCHANGEDIR,
+            file_offset: 0,
+            file_extension: 0,
+            default_extension: extension.as_ptr(),
+            custom_data: 0,
+            hook: std::ptr::null_mut(),
+            template_name: std::ptr::null(),
+            reserved_ptr: std::ptr::null_mut(),
+            reserved: 0,
+            flags_ex: 0,
+        };
+        if GetSaveFileNameW(&mut dialog) == 0 {
+            return None;
+        }
+    }
+    let end = buffer.iter().position(|value| *value == 0).unwrap_or(0);
+    if end == 0 {
+        return None;
+    }
+    let mut path = String::from_utf16_lossy(&buffer[..end]);
+    if std::path::Path::new(&path).extension().is_none() {
+        path.push_str(".md");
+    }
+    Some(path)
 }
 
 /// 解析 `GetOpenFileNameW` 的多选缓冲：目录 + 若干文件名；单选时就是一整条路径。

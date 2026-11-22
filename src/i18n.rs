@@ -359,6 +359,8 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "提交" => Some("Submit"),
         "重试中" => Some("Retrying"),
         "默认模型" => Some("Default model"),
+        "导出 Markdown…" => Some("Export Markdown…"),
+        "会话还没有可导出的消息" => Some("This conversation has nothing to export"),
         "队列已满（最多 5 条）" => Some("Queue is full (up to 5)"),
         "Enter 排队" => Some("Enter to queue"),
         "已加入队列，回复结束后自动发送" => Some("Queued; it will send after this turn"),
