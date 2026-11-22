@@ -1352,6 +1352,7 @@ impl RpiTurnOps {
             member: None,
             approval_level,
             allowlist,
+            bot_id: crate::rpi_engine::bot_id_from_identity(identity),
             extra_tools,
         };
         let session = Arc::new(crate::rpi_engine::RpiSession::open(options).await?);
@@ -1560,8 +1561,7 @@ impl BotTurnOps for RpiTurnOps {
     ) -> bots_service::conversation::RuntimeFuture<'a, Result<(), String>> {
         Box::pin(async move {
             let entry = self.entry_for(context).await?;
-            let allow = matches!(option_id, "allow_once" | "allow_always");
-            if entry.session.gate.resolve(request_id, allow) {
+            if entry.session.gate.resolve(request_id, option_id) {
                 Ok(())
             } else {
                 Err("审批请求已失效".to_string())

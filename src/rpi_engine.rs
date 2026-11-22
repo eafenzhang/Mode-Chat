@@ -211,6 +211,14 @@ fn teammate_record(identity: &str, workspace: &str) -> Option<serde_json::Value>
 }
 
 /// 该 Bot 的审批档位与白名单（读同一份 teammates.json）。
+/// `mode-bot:teammate:<id>` → Bot id（用于审批白名单落盘）。
+pub fn bot_id_from_identity(identity: &str) -> Option<String> {
+    identity
+        .strip_prefix("mode-bot:teammate:")
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+}
+
 pub fn approval_policy(identity: &str, workspace: &str) -> (bot_team::approval::ApprovalLevel, Vec<String>) {
     use bot_team::approval::{parse_level, ApprovalLevel};
 
@@ -314,8 +322,16 @@ pub struct ApprovalGate {
     key: String,
     member: Option<String>,
     level: bot_team::approval::ApprovalLevel,
-    allowlist: Vec<String>,
-    pending: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    /// 可写：「始终允许」要热更新本会话的内存白名单，下一轮立即生效。
+    allowlist: Mutex<Vec<String>>,
+    /// 白名单持久化目标（teammates.json 的 Bot id；没有就不落盘）。
+    bot_id: Option<String>,
+    pending: Mutex<HashMap<String, PendingApproval>>,
+}
+
+struct PendingApproval {
+    tool_name: String,
+    sender: oneshot::Sender<bool>,
 }
 
 impl ApprovalGate {
@@ -325,13 +341,15 @@ impl ApprovalGate {
         member: Option<String>,
         level: bot_team::approval::ApprovalLevel,
         allowlist: Vec<String>,
+        bot_id: Option<String>,
     ) -> Self {
         Self {
             events,
             key,
             member,
             level,
-            allowlist,
+            allowlist: Mutex::new(allowlist),
+            bot_id,
             pending: Mutex::new(HashMap::new()),
         }
     }
@@ -362,7 +380,12 @@ impl ApprovalGate {
         if std::env::var("BOT_PILOT_AUTO_APPROVE").ok().as_deref() == Some("1") {
             return None;
         }
-        match decide(self.level, &self.allowlist, &tool_name) {
+        let allowlist = self
+            .allowlist
+            .lock()
+            .expect("approval allowlist poisoned")
+            .clone();
+        match decide(self.level, &allowlist, &tool_name) {
             ApprovalDecision::Allow => None,
             ApprovalDecision::Deny => Some(blocked("已拒绝（审批策略）")),
             ApprovalDecision::Ask => {
@@ -370,12 +393,25 @@ impl ApprovalGate {
                 self.pending
                     .lock()
                     .expect("approval pending poisoned")
-                    .insert(request_id.clone(), tx);
+                    .insert(
+                        request_id.clone(),
+                        PendingApproval {
+                            tool_name: tool_name.clone(),
+                            sender: tx,
+                        },
+                    );
                 // 风险档位按「实际副作用」分：本地执行/浏览器/电脑控制是 exec，写文件、
                 // 定时任务与 MCP 外部工具是 write，其余（读文件、提问）是 read。
                 // 自定义工具以前一律落到 read，审批卡上会把「建定时任务」标成只读。
                 let lowered = tool_name.to_ascii_lowercase();
+                // 定稿策略：Bash/MCP 永远询问，白名单对它们不生效，
+                // 因此不给「始终允许」，避免用户以为点过之后不会再问。
+                let rememberable = !matches!(
+                    lowered.as_str(),
+                    "bash" | "shell" | "run_command"
+                ) && !lowered.starts_with("mcp__");
                 let risk = if lowered == "bash"
+                    || lowered == "powershell"
                     || lowered.starts_with("computer_")
                     || lowered.starts_with("browser_")
                 {
@@ -396,23 +432,26 @@ impl ApprovalGate {
                         tool_name: tool_name.clone(),
                         reason: summarize_args(&args),
                         risk: risk.to_string(),
-                        options: vec![
-                            PromptOption {
+                        options: {
+                            let mut options = vec![PromptOption {
                                 option_id: "allow_once".to_string(),
                                 label: "允许一次".to_string(),
                                 kind: "allow_once".to_string(),
-                            },
-                            PromptOption {
-                                option_id: "allow_always".to_string(),
-                                label: "始终允许".to_string(),
-                                kind: "allow_always".to_string(),
-                            },
-                            PromptOption {
+                            }];
+                            if rememberable {
+                                options.push(PromptOption {
+                                    option_id: "allow_always".to_string(),
+                                    label: "始终允许".to_string(),
+                                    kind: "allow_always".to_string(),
+                                });
+                            }
+                            options.push(PromptOption {
                                 option_id: "deny".to_string(),
                                 label: "拒绝".to_string(),
                                 kind: "deny".to_string(),
-                            },
-                        ],
+                            });
+                            options
+                        },
                         member: self.member.clone(),
                     }),
                 });
@@ -447,19 +486,40 @@ impl ApprovalGate {
     }
 
     /// 返回 true 表示这个 request_id 属于本闸门（已作答）。
-    pub fn resolve(&self, request_id: &str, allow: bool) -> bool {
-        let sender = self
+    /// 「始终允许」会把工具写入本会话白名单并落盘到 Bot 的 approvalPolicy。
+    pub fn resolve(&self, request_id: &str, option_id: &str) -> bool {
+        let pending = self
             .pending
             .lock()
             .expect("approval pending poisoned")
             .remove(request_id);
-        match sender {
-            Some(sender) => {
-                let _ = sender.send(allow);
-                true
+        let Some(pending) = pending else {
+            return false;
+        };
+        let allow = !matches!(option_id, "deny");
+        if allow && option_id == "allow_always" {
+            let mut allowlist = self
+                .allowlist
+                .lock()
+                .expect("approval allowlist poisoned");
+            if !allowlist.iter().any(|name| name == &pending.tool_name) {
+                allowlist.push(pending.tool_name.clone());
             }
-            None => false,
+            if let Some(bot_id) = &self.bot_id {
+                let _ = crate::data::set_bot_allowlist(bot_id, allowlist.clone());
+            }
         }
+        let _ = pending.sender.send(allow);
+        true
+    }
+
+    /// 白名单快照（测试用）。
+    #[cfg(test)]
+    pub fn allowlist(&self) -> Vec<String> {
+        self.allowlist
+            .lock()
+            .expect("approval allowlist poisoned")
+            .clone()
     }
 
 }
@@ -658,6 +718,8 @@ pub struct OpenOptions {
     pub member: Option<String>,
     pub approval_level: bot_team::approval::ApprovalLevel,
     pub allowlist: Vec<String>,
+    /// 「始终允许」的白名单落盘目标（Bot id；IM/自动化会话可为空）。
+    pub bot_id: Option<String>,
     /// 额外工具（MCP / 浏览器 / 电脑控制等宿主能力）。
     pub extra_tools: Vec<HarnessTool>,
 }
@@ -738,6 +800,7 @@ impl RpiSession {
             options.member.clone(),
             options.approval_level,
             options.allowlist,
+            options.bot_id,
         ));
         let questions = Arc::new(QuestionGate::new(
             options.events.clone(),
@@ -1464,5 +1527,32 @@ mod tests {
             rpi_agent::TextContentOrImage::Text(text) => assert_eq!(text.text, "A"),
             _ => panic!("expected text"),
         }
+    }
+
+    #[test]
+    fn allow_always_updates_gate_allowlist() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<BackendEvent>();
+        let gate = ApprovalGate::new(
+            tx,
+            "test".to_string(),
+            None,
+            bot_team::approval::ApprovalLevel::Ask,
+            Vec::new(),
+            None,
+        );
+        let (answer, mut answered) = oneshot::channel();
+        gate.pending
+            .lock()
+            .expect("approval pending")
+            .insert(
+                "call-1".to_string(),
+                PendingApproval {
+                    tool_name: "browser_open".to_string(),
+                    sender: answer,
+                },
+            );
+        assert!(gate.resolve("call-1", "allow_always"));
+        assert_eq!(gate.allowlist(), vec!["browser_open".to_string()]);
+        assert!(answered.try_recv().expect("answer sent"));
     }
 }

@@ -92,6 +92,7 @@ impl DispatchPort for RpiDispatchPort {
                 member: None,
                 approval_level,
                 allowlist,
+                bot_id: crate::rpi_engine::bot_id_from_identity(&identity),
                 extra_tools: mcp_tools,
             };
             let session = Arc::new(crate::rpi_engine::RpiSession::open(options).await?);

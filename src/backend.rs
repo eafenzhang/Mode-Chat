@@ -315,6 +315,7 @@ async fn open_rpi_session(
         member,
         approval_level,
         allowlist,
+        bot_id: crate::rpi_engine::bot_id_from_identity(identity),
         extra_tools,
     };
     let session = crate::rpi_engine::RpiSession::open(options).await?;
@@ -905,6 +906,7 @@ async fn run_agent(
                             member: None,
                             approval_level,
                             allowlist,
+                            bot_id: crate::rpi_engine::bot_id_from_identity(&identity),
                             extra_tools,
                         };
                         match crate::rpi_engine::RpiSession::open(options).await {
@@ -1126,11 +1128,10 @@ async fn run_agent(
                 option_id,
             } => {
                 // 内嵌 rpi 的审批卡：request_id 是工具调用 id，按会话闸门逐个尝试。
-                let allow = matches!(option_id.as_str(), "allow_once" | "allow_always");
                 let mut resolved = false;
                 for ctx in sessions.values() {
                     if let SessionEngine::Rpi(session) = &ctx.engine
-                        && session.gate.resolve(&request_id, allow)
+                        && session.gate.resolve(&request_id, &option_id)
                     {
                         resolved = true;
                         break;

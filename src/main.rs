@@ -6127,7 +6127,32 @@ impl PilotApp {
                         prompt.tool_name
                     ))),
             )
-            .children((!prompt.reason.is_empty()).then(|| approval_reason_view(&prompt.reason)))
+            .children((!prompt.reason.is_empty()).then(|| {
+                // 写入类审批直接给 diff 预览；其余工具仍走通用参数解析。
+                if tool_render::family(&prompt.tool_name) == tool_render::ToolFamily::Edit
+                    && let Some(info) = tool_render::edit_info(
+                        &prompt.tool_name,
+                        &prompt.reason,
+                        "",
+                    )
+                {
+                    return div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .children((!info.path.is_empty()).then(|| {
+                            div()
+                                .font_family(theme::FONT_MONO)
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .text_color(theme::ink_secondary())
+                                .child(SharedString::from(info.path.clone()))
+                        }))
+                        .child(edit_diff_panel(&info, ""))
+                        .into_any_element();
+                }
+                approval_reason_view(&prompt.reason)
+            }))
             .child(options)
             .into_any_element()
     }
@@ -20643,13 +20668,15 @@ fn capped_text(text: &str, max_lines: usize) -> String {
 
 /// edit 内联 diff：逐行渲染，超过上限只显示前 N 行 + 剩余数量。
 fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyElement {
-    // 聊天里的内联 diff 只保留关键片段；整段 diff 仍可从会话记录查看。
-    const MAX_LINES: usize = 24;
+    // 与 WebView 的内联 diff 卡同构：圆角/描边/面板底色，高度只保留关键片段。
+    const MAX_LINES: usize = 16;
     let mut panel = div()
         .w_full()
-        .rounded(px(6.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(wecom_theme::composer_border())
         .bg(wecom_theme::panel_card_bg())
-        .py(px(2.))
+        .py(px(4.))
         .flex()
         .flex_col()
         .overflow_hidden();
@@ -20657,8 +20684,8 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
         if !output.trim().is_empty() {
             panel = panel.child(
                 div()
-                    .px(px(6.))
-                    .py(px(1.))
+                    .px(px(8.))
+                    .py(px(2.))
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
                     .line_height(px(15.))
@@ -20685,7 +20712,7 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
                 .flex()
                 .items_start()
                 .gap(px(4.))
-                .px(px(6.))
+                .px(px(8.))
                 .font_family(theme::FONT_MONO)
                 .text_size(px(11.))
                 .line_height(px(15.))
@@ -20783,10 +20810,12 @@ fn wecom_edit_card(
             .unwrap_or_else(|| {
                 div()
                     .w_full()
-                    .rounded(px(6.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(wecom_theme::composer_border())
                     .bg(wecom_theme::panel_card_bg())
-                    .px(px(6.))
-                    .py(px(4.))
+                    .px(px(10.))
+                    .py(px(8.))
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
                     .line_height(px(15.))
@@ -20797,7 +20826,7 @@ fn wecom_edit_card(
     });
     div().w_full().flex().justify_start().child(
         div()
-            .max_w(px(560.))
+            .w_full()
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -20858,13 +20887,15 @@ fn wecom_exec_card(
     let body = (expanded && has_content).then(|| {
         let mut panel = div()
             .w_full()
-            .rounded(px(6.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(wecom_theme::composer_border())
             .bg(wecom_theme::panel_card_bg())
-            .px(px(6.))
-            .py(px(4.))
+            .px(px(10.))
+            .py(px(8.))
             .flex()
             .flex_col()
-            .gap(px(4.));
+            .gap(px(6.));
         if !command.trim().is_empty() {
             panel = panel.child(
                 div()
@@ -20890,8 +20921,8 @@ fn wecom_exec_card(
                     ),
             );
         }
-        // 输出最多显示 40 行；完整输出仍在会话记录里。
-        const MAX_OUTPUT_LINES: usize = 40;
+        // WebView 的输出区是 5 行高的小视口；聊天里保留 12 行 + 剩余提示，兼顾可读与占位。
+        const MAX_OUTPUT_LINES: usize = 12;
         let output = message.tool_detail.trim();
         if output.is_empty() {
             if message.tool_state == "running" {
@@ -20939,7 +20970,7 @@ fn wecom_exec_card(
     });
     div().w_full().flex().justify_start().child(
         div()
-            .max_w(px(560.))
+            .w_full()
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -21060,7 +21091,6 @@ fn wecom_tool_group_card(
     });
     let mut inner = div()
         .w_full()
-        .max_w(px(560.))
         .flex()
         .flex_col()
         .gap(px(2.))
@@ -21131,7 +21161,7 @@ fn wecom_tool_card(
             };
             div().w_full().flex().justify_start().child(
                 div()
-                    .max_w(px(560.))
+                    .w_full()
                     .flex()
                     .flex_col()
                     .gap(px(2.))
@@ -21139,10 +21169,12 @@ fn wecom_tool_card(
                     .children((expanded && has_detail).then(|| {
                         div()
                             .w_full()
-                            .rounded(px(6.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(wecom_theme::composer_border())
                             .bg(wecom_theme::panel_card_bg())
-                            .px(px(6.))
-                            .py(px(4.))
+                            .px(px(10.))
+                            .py(px(8.))
                             .font_family(theme::FONT_MONO)
                             .text_size(px(11.))
                             .line_height(px(15.))
