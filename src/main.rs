@@ -4727,8 +4727,8 @@ impl PilotApp {
                                 cx,
                             );
                         }
-                        // 私聊回合结束：把排队消息按顺序放出去（群聊暂不支持排队）。
-                        if member.is_none() && !chat.streaming && !chat.queued.is_empty() {
+                        // 回合结束（私聊 Done / 群聊全部成员收口）：把排队消息按序放出去。
+                        if !chat.streaming && !chat.queued.is_empty() {
                             queue_due = true;
                         }
                     }
@@ -5093,6 +5093,15 @@ impl PilotApp {
         if self.chats.get(key).is_some_and(|chat| chat.streaming) {
             return;
         }
+        if key.starts_with("group:")
+            && !self
+                .roster
+                .groups
+                .iter()
+                .any(|group| group_key(&group.id) == key)
+        {
+            return;
+        }
         let Some(item) = self.chats.get_mut(key).and_then(|chat| {
             if chat.ready && !chat.queued.is_empty() {
                 Some(chat.queued.remove(0))
@@ -5108,6 +5117,25 @@ impl PilotApp {
             attachments,
             attachment_names,
         } = item;
+        if let Some(group_id) = key.strip_prefix("group:")
+            && let Some(group) = self
+                .roster
+                .groups
+                .iter()
+                .find(|group| group.id == group_id)
+                .cloned()
+        {
+            self.dispatch_group_send(
+                key,
+                &group,
+                &text,
+                payload,
+                attachments,
+                attachment_names,
+                cx,
+            );
+            return;
+        }
         let attachment_count = attachments.len();
         let mirror_session;
         {
@@ -5157,26 +5185,89 @@ impl PilotApp {
         cx.notify();
     }
 
-    /// 群聊发言：一条用户消息，成员回复按成员名各自开流。
-    fn send_group_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // 引用逻辑与私聊一致，见 compose_with_quote（在下面的发送处消费 chat.quote）。
-        let Some(Selection::Group(index)) = self.selection else {
-            return;
-        };
-        let Some(group) = self.roster.groups.get(index) else {
-            return;
-        };
-        let group_id = group.id.clone();
-        let responder_policy = group.responder_policy.clone();
-        let admin_id = group.admin_id.clone();
+    /// 群聊回合中继续发送 → 与私聊共用队列；这里只负责把队首真正发出去。
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_group_send(
+        &mut self,
+        key: &str,
+        group: &data::Group,
+        text: &str,
+        payload: String,
+        attachments: Vec<backend::AttachmentUpload>,
+        attachment_names: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
         let member_pairs: Vec<(String, String)> = group
             .member_ids
             .iter()
             .filter_map(|member_id| self.roster.bot_by_id(member_id))
             .map(|bot| (bot.id.clone(), bot.name.clone()))
             .collect();
+        if let Some(chat) = self.chats.get_mut(key) {
+            chat.push_user_group(payload.clone(), attachment_names);
+            chat.status = i18n::t("等待回复…").to_string();
+            chat.error = false;
+            chat.last_sent = Some(text.to_string());
+        }
+        self.drafts.remove(key);
+        let chosen = route_group_members(
+            &payload,
+            &member_pairs,
+            &group.responder_policy,
+            group.admin_id.as_deref(),
+        );
+        match group_tasks::create_turn(
+            &data::data_root(),
+            &group.id,
+            &payload,
+            text,
+            &chosen,
+        ) {
+            Ok((root, children)) => {
+                if self.group_task_turns.contains_key(key) {
+                    fail_group_task_turn(&mut self.group_task_turns, key);
+                }
+                self.group_task_turns.insert(
+                    key.to_string(),
+                    GroupTaskTurn {
+                        root_id: root.id,
+                        members: children.into_iter().collect(),
+                    },
+                );
+            }
+            Err(message) => eprintln!("[tasks] 创建群任务失败：{message}"),
+        }
+        self.refresh_group_task_bar(&group.id);
+        self.backend
+            .send_group(key.to_string(), payload, attachments);
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 群聊发言：一条用户消息，成员回复按成员名各自开流。
+    fn send_group_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 引用逻辑与私聊一致，见 compose_with_quote（在下面的发送处消费 chat.quote）。
+        let Some(Selection::Group(index)) = self.selection else {
+            return;
+        };
+        let Some(group) = self.roster.groups.get(index).cloned() else {
+            return;
+        };
         let key = group_key(&group.id);
         let text = self.input.read(cx).content().trim().to_string();
+        // 群回合进行中继续发送 = 排队，等全部成员回合结束再发。
+        let streaming = self.chats.get(&key).is_some_and(|chat| chat.streaming);
+        if streaming {
+            let has_pending = self
+                .chats
+                .get(&key)
+                .is_some_and(|chat| !chat.pending_attachments.is_empty());
+            if text.is_empty() && !has_pending {
+                return;
+            }
+            self.queue_current(&key, text, window, cx);
+            return;
+        }
         let Some(chat) = self.chats.get_mut(&key) else {
             return;
         };
@@ -5188,9 +5279,6 @@ impl PilotApp {
             cx.notify();
             return;
         }
-        if chat.streaming {
-            return;
-        }
         let attachments = std::mem::take(&mut chat.pending_attachments);
         chat.pending_attachment_previews.clear();
         let attachment_names: Vec<String> = attachments
@@ -5198,40 +5286,16 @@ impl PilotApp {
             .map(|attachment| attachment.file_name.clone())
             .collect();
         let payload = compose_with_quote(&text, chat.quote.take());
-        chat.push_user_group(payload.clone(), attachment_names);
-        chat.status = i18n::t("等待回复…").to_string();
-        chat.error = false;
-        chat.last_sent = Some(text.clone());
-        self.drafts.remove(&key);
-        // 台账：根容器 + 每个被路由成员一条子任务；失败不影响发送。
-        let chosen =
-            route_group_members(&payload, &member_pairs, &responder_policy, admin_id.as_deref());
-        match group_tasks::create_turn(
-            &data::data_root(),
-            &group_id,
-            &payload,
+        self.dispatch_group_send(
+            &key,
+            &group,
             &text,
-            &chosen,
-        ) {
-            Ok((root, children)) => {
-                if self.group_task_turns.contains_key(&key) {
-                    fail_group_task_turn(&mut self.group_task_turns, &key);
-                }
-                self.group_task_turns.insert(
-                    key.clone(),
-                    GroupTaskTurn {
-                        root_id: root.id,
-                        members: children.into_iter().collect(),
-                    },
-                );
-            }
-            Err(message) => eprintln!("[tasks] 创建群任务失败：{message}"),
-        }
-        self.refresh_group_task_bar(&group_id);
-        self.backend.send_group(key, payload, attachments);
+            payload,
+            attachments,
+            attachment_names,
+            cx,
+        );
         self.input.update(cx, |input, cx| input.clear(window, cx));
-        self.scroll.scroll_to_bottom();
-        cx.notify();
     }
 
     /// 群回合结束后组一份回顾快照交给 backend（延迟/串行/开关都在 backend 里）。
@@ -23259,8 +23323,20 @@ impl PilotApp {
                                 .text_size(px(11.))
                                 .text_color(wecom_theme::time_label())
                                 .child(SharedString::from(if i18n::is_en() {
+                                    if key.starts_with("group:") {
+                                        format!(
+                                            "{} queued · sends after all members finish",
+                                            chat.queued.len()
+                                        )
+                                    } else {
+                                        format!(
+                                            "{} queued · sends after this turn",
+                                            chat.queued.len()
+                                        )
+                                    }
+                                } else if key.starts_with("group:") {
                                     format!(
-                                        "{} queued · sends after this turn",
+                                        "排队中 {} 条 · 所有成员回合结束后自动发送",
                                         chat.queued.len()
                                     )
                                 } else {
