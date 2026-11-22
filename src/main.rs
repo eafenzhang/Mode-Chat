@@ -787,6 +787,8 @@ struct ChatState {
     streaming: bool,
     /// 本轮开始时间（工作中行的计时）。
     turn_started: Option<u64>,
+    /// 供应商请求重试状态（有值时工作中行显示一行重试提示）。
+    retry: Option<RetryStatus>,
     ready: bool,
     status: String,
     error: bool,
@@ -815,6 +817,13 @@ struct ChatState {
     pending_attachments: Vec<backend::AttachmentUpload>,
     /// 与 `pending_attachments` 对齐的本地预览路径（图片才有）。
     pending_attachment_previews: Vec<Option<std::path::PathBuf>>,
+}
+
+/// 供应商请求重试状态（attempt 从 1 开始，不含首次请求）。
+struct RetryStatus {
+    attempt: u32,
+    max_retries: u32,
+    reason: String,
 }
 
 /// 浏览器/电脑操控分页的只读状态（workspace 目录 + 官方插件开关）。
@@ -3015,6 +3024,9 @@ struct PilotApp {
     settings_dropdown: Option<SettingsDropdownState>,
     /// 输入框权限菜单（点击位置；None = 关闭）。
     permission_menu: Option<gpui::Point<gpui::Pixels>>,
+    /// 问题卡「其他（自行输入）」：当前展开的 request_id 与输入框。
+    question_free_active: Option<String>,
+    question_free_input: Entity<SimpleInput>,
     /// 群记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 浏览器/电脑控制的使用范围（prefs.json，设置页可改）。
@@ -3275,6 +3287,9 @@ impl PilotApp {
         let secret_value_input = cx.new(|cx| {
             SimpleInput::new(i18n::t("值只写不读，保存后清空"), theme::ink_tertiary, cx)
         });
+        let question_free_input = cx.new(|cx| {
+            SimpleInput::new(i18n::t("输入你的回答…"), theme::ink_tertiary, cx)
+        });
         let connector_secret_inputs: HashMap<&'static str, Entity<SimpleInput>> =
             connectors_service::CATALOG
                 .iter()
@@ -3401,6 +3416,8 @@ impl PilotApp {
             pending_group_tasks_dialog: None,
             pending_provider_key_dialog: None,
             pending_provider_url_dialog: None,
+            question_free_active: None,
+            question_free_input,
             group_task_turns: HashMap::new(),
             group_task_bar: None,
             group_tasks_view: None,
@@ -4496,11 +4513,13 @@ impl PilotApp {
                         chat.rebuild_tool_index();
                         chat.streaming = false;
                         chat.error = false;
+                        chat.retry = None;
                         chat.status = i18n::t("已恢复历史").to_string();
                         chat.refresh_meta();
                     }
                     SessionEvent::Tool(card) => {
                         chat.apply_tool(card);
+                        chat.retry = None;
                         if !chat.streaming {
                             chat.status = i18n::t("就绪").to_string();
                         }
@@ -4511,6 +4530,7 @@ impl PilotApp {
                     } => {
                         chat.ready = true;
                         chat.error = false;
+                        chat.retry = None;
                         chat.status = i18n::t("就绪").to_string();
                         chat.session_id = Some(session_id.clone());
                         // automation 协议按 sessionId 找 workspace（CronCreate 的 targetTaskId）。
@@ -4545,6 +4565,7 @@ impl PilotApp {
                     SessionEvent::UserEcho(text) => {
                         chat.push_user(text);
                         chat.turn_started = Some(time::now_ms());
+                        chat.retry = None;
                         chat.status = i18n::t("等待回复…").to_string();
                         chat.error = false;
                     }
@@ -4556,6 +4577,7 @@ impl PilotApp {
                         if chat.turn_started.is_none() {
                             chat.turn_started = Some(time::now_ms());
                         }
+                        chat.retry = None;
                         chat.status = i18n::t("生成中…").to_string();
                         chat.error = false;
                     }
@@ -4569,10 +4591,28 @@ impl PilotApp {
                         if chat.turn_started.is_none() {
                             chat.turn_started = Some(time::now_ms());
                         }
+                        chat.retry = None;
                         if !done {
                             chat.status = i18n::t("思考中…").to_string();
                         }
                         chat.error = false;
+                    }
+                    SessionEvent::Retry {
+                        attempt,
+                        max_retries,
+                        reason,
+                        ..
+                    } => {
+                        chat.retry = Some(RetryStatus {
+                            attempt,
+                            max_retries,
+                            reason,
+                        });
+                        chat.status = if i18n::is_en() {
+                            format!("Retrying ({attempt}/{max_retries})")
+                        } else {
+                            format!("重试中（{attempt}/{max_retries}）")
+                        };
                     }
                     SessionEvent::Done { member } => {
                         chat.finish_reasoning(member.as_deref());
@@ -4596,6 +4636,7 @@ impl PilotApp {
                         chat.ready = true;
                         if !chat.streaming {
                             chat.turn_started = None;
+                            chat.retry = None;
                             chat.status = i18n::t("就绪").to_string();
                         }
                         chat.error = false;
@@ -4744,6 +4785,7 @@ impl PilotApp {
                         }
                         if member.is_none() {
                             chat.turn_started = None;
+                            chat.retry = None;
                         }
                         chat.status = message.clone();
                         chat.error = true;
@@ -5178,6 +5220,9 @@ impl PilotApp {
     }
 
     fn answer_question(&mut self, request_id: String, answer: Option<String>, cx: &mut Context<Self>) {
+        self.question_free_active = None;
+        self.question_free_input
+            .update(cx, |input, cx| input.set_content("", cx));
         let Some(key) = self.active_key() else {
             return;
         };
@@ -5224,6 +5269,8 @@ impl PilotApp {
     ) -> gpui::AnyElement {
         let card = &pending.card;
         let request_id = card.request_id.clone();
+        // 选项/取消的闭包会 move request_id；自由输入行用独立副本。
+        let free_request_id = request_id.clone();
         let sent = pending.sent;
 
         let mut options = div().flex().flex_col().gap(px(6.));
@@ -5334,6 +5381,89 @@ impl PilotApp {
                     .child(SharedString::from(card.question.clone()))
             }))
             .child(options)
+            .children((!sent).then(|| self.question_free_row(free_request_id.clone(), cx)))
+            .into_any_element()
+    }
+
+    /// 问题卡的自由输入：默认只显示一行链接，点开才出现输入框（不占常驻高度）。
+    fn question_free_row(&self, request_id: String, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.question_free_active.as_deref() == Some(request_id.as_str()) {
+            let submit_id = request_id.clone();
+            return div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h(px(32.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme::edge())
+                        .bg(theme::card())
+                        .px(px(8.))
+                        .child(self.question_free_input.clone()),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "question-free-submit-{request_id}"
+                        )))
+                        .h(px(32.))
+                        .px(px(12.))
+                        .rounded(px(8.))
+                        .bg(wecom_theme::send_enabled())
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|style| style.opacity(0.9))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let text = this
+                                .question_free_input
+                                .read(cx)
+                                .content()
+                                .trim()
+                                .to_string();
+                            if text.is_empty() {
+                                this.toast(i18n::t("请输入回答"), cx);
+                                return;
+                            }
+                            this.answer_question(submit_id.clone(), Some(text), cx);
+                        }))
+                        .child(
+                            div()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .text_color(wecom_theme::nav_text_active())
+                                .child(i18n::t("提交")),
+                        ),
+                )
+                .into_any_element();
+        }
+        let active_id = request_id;
+        div()
+            .id(SharedString::from(format!("question-free-{active_id}")))
+            .h(px(24.))
+            .px(px(2.))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .hover(|style| style.opacity(0.85))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.question_free_active = Some(active_id.clone());
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .font_family(wecom_theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(wecom_theme::time_label())
+                    .child(i18n::t("其他（自行输入）")),
+            )
             .into_any_element()
     }
 
@@ -18699,6 +18829,7 @@ impl Default for ChatState {
             reasoning_index: HashMap::new(),
             streaming: false,
             turn_started: None,
+            retry: None,
             ready: false,
             status: String::new(),
             error: false,
@@ -20417,20 +20548,21 @@ fn tool_row_base(
         "done" => (wecom_theme::chat_title(), wecom_theme::chip_text()),
         _ => (wecom_theme::time_label(), wecom_theme::chip_text()),
     };
+    // 工具行保持单行紧凑：1px 垂直留白 + 16px 行高，连续调用不撑高 transcript。
     let mut row = div()
         .w_full()
         .flex()
         .items_center()
-        .gap(px(6.))
+        .gap(px(5.))
         .px(px(2.))
-        .py(px(2.))
-        .child(icons::icon(icon, 14., icon_color))
+        .py(px(1.))
+        .child(icons::icon(icon, 13., icon_color))
         .children((!state_label.is_empty()).then(|| {
             div()
                 .flex_shrink_0()
                 .font_family(wecom_theme::FONT_FAMILY)
                 .text_size(px(12.))
-                .line_height(px(18.))
+                .line_height(px(16.))
                 .text_color(status_color)
                 .child(i18n::t(state_label))
         }))
@@ -20441,7 +20573,7 @@ fn tool_row_base(
                 .truncate()
                 .font_family(wecom_theme::FONT_FAMILY)
                 .text_size(px(12.))
-                .line_height(px(18.))
+                .line_height(px(16.))
                 .text_color(wecom_theme::list_preview())
                 .child(SharedString::from(primary.to_string())),
         );
@@ -20489,14 +20621,35 @@ fn diff_count_el(added: usize, removed: usize) -> gpui::AnyElement {
     row.into_any_element()
 }
 
+/// 截断多行文本到 N 行（尾部标注剩余行数），用于命令输出与通用详情。
+fn capped_text(text: &str, max_lines: usize) -> String {
+    let total = text.lines().count();
+    let mut out = String::new();
+    for line in text.lines().take(max_lines) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    if total > max_lines {
+        out.push_str(&if i18n::is_en() {
+            format!("\n… {} more lines", total - max_lines)
+        } else {
+            format!("\n… 还有 {} 行", total - max_lines)
+        });
+    }
+    out
+}
+
 /// edit 内联 diff：逐行渲染，超过上限只显示前 N 行 + 剩余数量。
 fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyElement {
-    const MAX_LINES: usize = 60;
+    // 聊天里的内联 diff 只保留关键片段；整段 diff 仍可从会话记录查看。
+    const MAX_LINES: usize = 24;
     let mut panel = div()
         .w_full()
         .rounded(px(6.))
         .bg(wecom_theme::panel_card_bg())
-        .py(px(4.))
+        .py(px(2.))
         .flex()
         .flex_col()
         .overflow_hidden();
@@ -20504,11 +20657,11 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
         if !output.trim().is_empty() {
             panel = panel.child(
                 div()
-                    .px(px(8.))
-                    .py(px(2.))
+                    .px(px(6.))
+                    .py(px(1.))
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
-                    .line_height(px(16.))
+                    .line_height(px(15.))
                     .text_color(wecom_theme::list_preview())
                     .child(SharedString::from(output.to_string())),
             );
@@ -20531,15 +20684,14 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
                 .w_full()
                 .flex()
                 .items_start()
-                .gap(px(6.))
-                .px(px(8.))
-                .py(px(1.))
+                .gap(px(4.))
+                .px(px(6.))
                 .font_family(theme::FONT_MONO)
                 .text_size(px(11.))
-                .line_height(px(16.))
+                .line_height(px(15.))
                 .child(
                     div()
-                        .w(px(28.))
+                        .w(px(22.))
                         .flex_shrink_0()
                         .text_right()
                         .text_color(wecom_theme::time_label())
@@ -20547,7 +20699,7 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
                             line.number.clone().unwrap_or_default(),
                         )),
                 )
-                .child(div().w(px(8.)).flex_shrink_0().text_color(color).child(marker))
+                .child(div().w(px(6.)).flex_shrink_0().text_color(color).child(marker))
                 .child(
                     div()
                         .flex_1()
@@ -20560,11 +20712,11 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
     if info.lines.len() > MAX_LINES {
         panel = panel.child(
             div()
-                .px(px(8.))
-                .pt(px(2.))
+                .px(px(6.))
+                .pt(px(1.))
                 .font_family(wecom_theme::FONT_FAMILY)
                 .text_size(px(11.))
-                .line_height(px(16.))
+                .line_height(px(15.))
                 .text_color(wecom_theme::time_label())
                 .child(SharedString::from(if i18n::is_en() {
                     format!("… {} more lines", info.lines.len() - MAX_LINES)
@@ -20633,13 +20785,13 @@ fn wecom_edit_card(
                     .w_full()
                     .rounded(px(6.))
                     .bg(wecom_theme::panel_card_bg())
-                    .px(px(8.))
-                    .py(px(6.))
+                    .px(px(6.))
+                    .py(px(4.))
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
-                    .line_height(px(16.))
+                    .line_height(px(15.))
                     .text_color(wecom_theme::list_preview())
-                    .child(SharedString::from(message.tool_detail.clone()))
+                    .child(SharedString::from(capped_text(&message.tool_detail, 40)))
                     .into_any_element()
             })
     });
@@ -20648,7 +20800,7 @@ fn wecom_edit_card(
             .max_w(px(560.))
             .flex()
             .flex_col()
-            .gap(px(4.))
+            .gap(px(2.))
             .child(header)
             .children(body),
     )
@@ -20708,21 +20860,21 @@ fn wecom_exec_card(
             .w_full()
             .rounded(px(6.))
             .bg(wecom_theme::panel_card_bg())
-            .px(px(8.))
-            .py(px(6.))
+            .px(px(6.))
+            .py(px(4.))
             .flex()
             .flex_col()
-            .gap(px(6.));
+            .gap(px(4.));
         if !command.trim().is_empty() {
             panel = panel.child(
                 div()
                     .w_full()
                     .flex()
                     .items_start()
-                    .gap(px(6.))
+                    .gap(px(4.))
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
-                    .line_height(px(16.))
+                    .line_height(px(15.))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -20738,8 +20890,8 @@ fn wecom_exec_card(
                     ),
             );
         }
-        // 输出最多显示 200 行；完整输出仍在会话记录里。
-        const MAX_OUTPUT_LINES: usize = 200;
+        // 输出最多显示 40 行；完整输出仍在会话记录里。
+        const MAX_OUTPUT_LINES: usize = 40;
         let output = message.tool_detail.trim();
         if output.is_empty() {
             if message.tool_state == "running" {
@@ -20747,37 +20899,20 @@ fn wecom_exec_card(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)
                         .text_size(px(11.))
+                        .line_height(px(15.))
                         .text_color(wecom_theme::time_label())
                         .child(i18n::t("等待输出…")),
                 );
             }
         } else {
-            let mut shown = String::new();
-            let mut total = 0usize;
-            for line in output.lines() {
-                total += 1;
-                if total <= MAX_OUTPUT_LINES {
-                    if !shown.is_empty() {
-                        shown.push('\n');
-                    }
-                    shown.push_str(line);
-                }
-            }
-            if total > MAX_OUTPUT_LINES {
-                shown.push_str(&if i18n::is_en() {
-                    format!("\n… {} more lines", total - MAX_OUTPUT_LINES)
-                } else {
-                    format!("\n… 还有 {} 行", total - MAX_OUTPUT_LINES)
-                });
-            }
             panel = panel.child(
                 div()
                     .w_full()
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
-                    .line_height(px(16.))
+                    .line_height(px(15.))
                     .text_color(wecom_theme::list_preview())
-                    .child(SharedString::from(shown)),
+                    .child(SharedString::from(capped_text(output, MAX_OUTPUT_LINES))),
             );
         }
         if let Some(exit_code) = info.as_ref().and_then(|info| info.exit_code) {
@@ -20791,6 +20926,7 @@ fn wecom_exec_card(
                 div()
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
+                    .line_height(px(15.))
                     .text_color(if failed {
                         theme::danger()
                     } else {
@@ -20806,7 +20942,7 @@ fn wecom_exec_card(
             .max_w(px(560.))
             .flex()
             .flex_col()
-            .gap(px(4.))
+            .gap(px(2.))
             .child(header)
             .children(body),
     )
@@ -20927,12 +21063,18 @@ fn wecom_tool_group_card(
         .max_w(px(560.))
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(px(2.))
         .child(header);
     if expanded {
-        let mut children = div().w_full().flex().flex_col().gap(px(4.)).pl(px(8.));
+        let mut children = div().w_full().flex().flex_col().gap(px(2.)).pl(px(4.));
         for (message, child_expanded) in messages {
-            children = children.child(wecom_tool_card(message, *child_expanded, weak));
+            // 组头已经写了「已执行」，子行不再重复状态词（省宽度也省视觉噪音）；
+            // 运行中/失败仍保留，方便定位是哪一条。
+            let mut child = message.clone();
+            if child.tool_state == "done" {
+                child.tool_state.clear();
+            }
+            children = children.child(wecom_tool_card(&child, *child_expanded, weak));
         }
         inner = inner.child(children);
     }
@@ -20992,20 +21134,20 @@ fn wecom_tool_card(
                     .max_w(px(560.))
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(2.))
                     .child(header)
                     .children((expanded && has_detail).then(|| {
                         div()
                             .w_full()
                             .rounded(px(6.))
                             .bg(wecom_theme::panel_card_bg())
-                            .px(px(8.))
-                            .py(px(6.))
+                            .px(px(6.))
+                            .py(px(4.))
                             .font_family(theme::FONT_MONO)
                             .text_size(px(11.))
-                            .line_height(px(16.))
+                            .line_height(px(15.))
                             .text_color(wecom_theme::list_preview())
-                            .child(SharedString::from(detail))
+                            .child(SharedString::from(capped_text(&detail, 40)))
                     })),
             )
             .into_any_element()
@@ -22518,13 +22660,16 @@ impl PilotApp {
     /// 转录底部的「工作中 N 秒」行（streaming 时显示，1s ticker 刷新）。
     fn wecom_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
-        let (started, waiting) = {
+        let (started, waiting, retry) = {
             let chat = self.chats.get(&key)?;
             (
                 chat.turn_started,
                 !chat.permissions.is_empty()
                     || !chat.questions.is_empty()
                     || !chat.elicitations.is_empty(),
+                chat.retry
+                    .as_ref()
+                    .map(|retry| (retry.attempt, retry.max_retries, retry.reason.clone())),
             )
         };
         if waiting {
@@ -22560,9 +22705,35 @@ impl PilotApp {
                         .font_family(wecom_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(wecom_theme::chat_title())
-                        .child(i18n::t("工作中")),
+                        .text_color(if retry.is_some() {
+                            theme::warning()
+                        } else {
+                            wecom_theme::chat_title()
+                        })
+                        .child(if retry.is_some() {
+                            i18n::t("重试中")
+                        } else {
+                            i18n::t("工作中")
+                        }),
                 )
+                .children(retry.as_ref().map(|(attempt, max_retries, _)| {
+                    div()
+                        .flex_shrink_0()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(theme::warning())
+                        .child(SharedString::from(format!("{attempt}/{max_retries}")))
+                }))
+                .children(retry.as_ref().map(|(_, _, reason)| {
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wecom_theme::time_label())
+                        .child(SharedString::from(tool_render::single_line(reason, 80)))
+                }))
                 .child(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)

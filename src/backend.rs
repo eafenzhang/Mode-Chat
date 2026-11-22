@@ -198,6 +198,13 @@ pub enum SessionEvent {
         member: Option<String>,
         message: String,
     },
+    /// 供应商请求失败后的自动重试（不当作回合错误，重试成功后正常出字）。
+    Retry {
+        member: Option<String>,
+        attempt: u32,
+        max_retries: u32,
+        reason: String,
+    },
     /// 工具调用需要用户确认（v4 会话流 `permission.requested`）。
     Permission(PermissionPrompt),
     PermissionResolved { request_id: String },

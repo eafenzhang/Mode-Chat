@@ -629,9 +629,11 @@ impl AgentEmitter for UiEmitter {
                 }));
             }
             AgentEvent::RetryScheduled { error, attempt, max_retries, .. } => {
-                self.send(SessionEvent::Error {
+                self.send(SessionEvent::Retry {
                     member: self.member.clone(),
-                    message: format!("请求失败，重试中（{attempt}/{max_retries}）：{error}"),
+                    attempt,
+                    max_retries,
+                    reason: error,
                 });
             }
             AgentEvent::AgentEnd { .. } => {
