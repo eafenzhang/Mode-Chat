@@ -5258,8 +5258,6 @@ impl PilotApp {
         div()
             .w_full()
             .max_w(px(560.))
-            .mx_auto()
-            .mb(px(14.))
             .flex_shrink_0()
             .rounded(px(12.))
             .border_1()
@@ -5807,6 +5805,33 @@ impl PilotApp {
     }
 
     /// 审批卡同问题卡：支持多张并存，卡头标注归属成员。
+    /// WebView 的交互层：待审批/待回答以居中模态显示，一次一个。
+    fn interaction_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let chat = self.chats.get(&key)?;
+        let content = if let Some(pending) = chat.permissions.first() {
+            self.approval_card_el(pending, cx)
+        } else if let Some(pending) = chat.questions.first() {
+            self.question_card_el(pending, cx)
+        } else {
+            return None;
+        };
+        Some(
+            gpui::deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(gpui::rgba(0x00000066))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {})
+                    .child(div().w_full().max_w(px(560.)).px(px(16.)).child(content)),
+            )
+            .into_any_element(),
+        )
+    }
+
     fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let Some(key) = self.active_key() else {
             return Vec::new();
@@ -5907,8 +5932,6 @@ impl PilotApp {
         div()
             .w_full()
             .max_w(px(560.))
-            .mx_auto()
-            .mb(px(14.))
             .flex_shrink_0()
             .rounded(px(12.))
             .border_1()
@@ -5969,6 +5992,16 @@ impl PilotApp {
         debug_action("CloseOverlay");
         // IME 组合中 Esc 是「取消候选」，不能顺手关掉当前浮层。
         if self.ime_composing(cx) {
+            return;
+        }
+        // 待审批/待回答是模态交互：Esc 不关闭，必须先作答。
+        if self
+            .active_key()
+            .and_then(|key| self.chats.get(&key))
+            .is_some_and(|chat| {
+                !chat.permissions.is_empty() || !chat.questions.is_empty()
+            })
+        {
             return;
         }
         if self.new_menu_open {
@@ -20268,6 +20301,28 @@ fn tool_state_color(state: &str) -> Rgba {
 }
 
 /// 企微风格的工具卡：单行 chip，不再用满宽预览撑开。
+/// 工具类别对应的行图标（贴近 WebView ToolLayout 的工具语义）。
+fn tool_icon(name: &str) -> icons::Icon {
+    let name = name.to_ascii_lowercase();
+    if name.contains("bash") || name.contains("shell") || name.contains("exec") || name.contains("terminal") {
+        icons::Icon::Terminal
+    } else if name.contains("read") || name.contains("write") || name.contains("edit") || name.contains("patch") || name.contains("apply") {
+        icons::Icon::Pencil
+    } else if name.contains("search") || name.contains("grep") || name.contains("glob") || name.contains("find") || name.contains("browser") || name.contains("fetch") || name.contains("web") {
+        icons::Icon::Search
+    } else if name.contains("list") || name.contains("file") || name.contains("dir") {
+        icons::Icon::Folder
+    } else if name.contains("ask") || name.contains("question") {
+        icons::Icon::MessageCircle
+    } else if name.contains("mcp") || name.contains("connector") {
+        icons::Icon::Plug
+    } else if name.contains("plan") || name.contains("todo") || name.contains("task") {
+        icons::Icon::ListChecks
+    } else {
+        icons::Icon::Terminal
+    }
+}
+
 fn wecom_tool_card(
     message: &Message,
     expanded: bool,
@@ -20310,7 +20365,7 @@ fn wecom_tool_card(
                     });
                 })
         })
-        .child(icons::icon(icons::Icon::Terminal, 14., icon_color))
+        .child(icons::icon(tool_icon(&message.tool_name), 14., icon_color))
         .children((!state_label.is_empty()).then(|| {
             div()
                 .flex_shrink_0()
@@ -21523,9 +21578,7 @@ impl PilotApp {
             )
             .child(self.wecom_transcript(window, cx))
             .children(self.wecom_working_row(cx))
-            .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
-            .children(self.approval_cards(cx))
             .children(self.group_task_bar(cx))
             .child(self.wecom_composer(window, cx))
     }
@@ -22228,6 +22281,7 @@ impl Render for PilotApp {
             .children(None::<gpui::AnyElement>)
             .children(self.find_dialog_overlay(window, cx))
             .children(self.palette_overlay(window, cx))
+            .children(self.interaction_overlay(cx))
 ;
         // 渲染成本打点（元素构建耗时；> 8ms 才报，避免日志噪音）。
         if std::env::var("BOT_PILOT_DEBUG").ok().as_deref() == Some("1") {
