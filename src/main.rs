@@ -5188,7 +5188,7 @@ impl PilotApp {
         let request_id = card.request_id.clone();
         let sent = pending.sent;
 
-        let mut options = div().flex().flex_wrap().gap(px(6.));
+        let mut options = div().flex().flex_col().gap(px(6.));
         if sent {
             options = options.child(
                 div()
@@ -5207,25 +5207,25 @@ impl PilotApp {
                             "question-opt-{}-{}",
                             request_id, index
                         )))
-                        .h(px(28.))
-                        .rounded_full()
+                        .h(px(36.))
+                        .w_full()
+                        .rounded(px(8.))
                         .border_1()
-                        .border_color(ui_accent())
-                        .bg(theme::raised())
-                        .px(px(12.))
+                        .border_color(theme::edge())
+                        .bg(theme::card())
+                        .px(px(10.))
                         .flex()
                         .items_center()
                         .cursor_pointer()
-                        .hover(|style| style.opacity(0.85))
+                        .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.answer_question(request_id_click.clone(), Some(value.clone()), cx);
                         }))
                         .child(
                             div()
                                 .font_family(theme::FONT_FAMILY)
-                                .text_size(px(12.))
-                                .line_height(px(16.))
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_size(px(13.))
+                                .line_height(px(18.))
                                 .text_color(theme::ink())
                                 .child(SharedString::from(label.clone())),
                         ),
@@ -5234,15 +5234,14 @@ impl PilotApp {
             options = options.child(
                 div()
                     .id(SharedString::from(format!("question-cancel-{}", request_id)))
-                    .h(px(28.)).rounded_full()
-                    .border_1()
-                    .border_color(theme::danger())
-                    .bg(theme::card())
+                    .h(px(30.))
+                    .w_full()
+                    .rounded(px(8.))
                     .px(px(10.))
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .hover(|style| style.opacity(0.85))
+                    .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.answer_question(request_id.clone(), None, cx);
                     }))
@@ -5258,14 +5257,15 @@ impl PilotApp {
 
         div()
             .w_full()
-            .max_w(px(960.))
+            .max_w(px(560.))
             .mx_auto()
             .mb(px(14.))
             .flex_shrink_0()
-            .rounded(px(theme::RADIUS_CARD))
+            .rounded(px(12.))
             .border_1()
-            .border_color(theme::success())
+            .border_color(theme::edge())
             .bg(theme::card())
+            .shadow(theme::shadow_3())
             .p(px(12.))
             .flex()
             .flex_col()
@@ -5280,9 +5280,9 @@ impl PilotApp {
                             .font_family(theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(18.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(theme::ink())
-                            .child(i18n::t("Bot 提问 · AskUserQuestion")),
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme::ink_secondary())
+                            .child(i18n::t("需要你的回答")),
                     )
                     .child(div().flex_1())
                     .children(member_label(&card.member)),
@@ -5290,9 +5290,9 @@ impl PilotApp {
             .children((!card.question.is_empty()).then(|| {
                 div()
                     .font_family(theme::FONT_FAMILY)
-                    .text_size(px(12.))
-                    .line_height(px(16.))
-                    .text_color(theme::ink_secondary())
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink())
                     .child(SharedString::from(card.question.clone()))
             }))
             .child(options)
@@ -5840,7 +5840,7 @@ impl PilotApp {
             tri!("风险 {}", "Risk {}", label)
         };
 
-        let mut options = div().flex().flex_wrap().gap(px(6.));
+        let mut options = div().flex().flex_col().gap(px(6.));
         if sent {
             options = options.child(
                 div()
@@ -5855,9 +5855,9 @@ impl PilotApp {
                 let option_id = option.option_id.clone();
                 let request_id_click = request_id.clone();
                 let (bg, border, fg) = match kind.as_str() {
-                    "deny" => (theme::card(), theme::danger(), theme::danger()),
+                    "deny" => (theme::card(), theme::edge(), theme::danger()),
                     "allowAlways" | "allow_always" => {
-                        (ui_accent(), ui_accent(), theme::accent_ink())
+                        (ui_accent_soft(), ui_accent(), theme::ink())
                     }
                     _ => (theme::raised(), theme::edge(), theme::ink()),
                 };
@@ -5867,24 +5867,35 @@ impl PilotApp {
                             "approval-opt-{}-{}",
                             request_id, index
                         )))
-                        .h(px(28.))
-                        .rounded_full()
+                        .h(px(36.))
+                        .w_full()
+                        .rounded(px(8.))
                         .border_1()
                         .border_color(border)
                         .bg(bg)
-                        .px(px(12.))
+                        .px(px(10.))
                         .flex()
                         .items_center()
+                        .gap(px(8.))
                         .cursor_pointer()
-                        .hover(|style| style.opacity(0.85))
+                        .hover(|style| style.opacity(0.88))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.resolve_permission(request_id_click.clone(), option_id.clone(), cx);
                         }))
                         .child(
                             div()
+                                .w(px(16.))
+                                .flex_shrink_0()
                                 .font_family(theme::FONT_FAMILY)
                                 .text_size(px(12.))
-                                .line_height(px(16.))
+                                .text_color(theme::ink_tertiary())
+                                .child(SharedString::from(format!("{}.", index + 1))),
+                        )
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(13.))
+                                .line_height(px(18.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(fg)
                                 .child(SharedString::from(i18n::owned(approval_option_label(
@@ -5897,13 +5908,16 @@ impl PilotApp {
         }
 
         div()
-            .mx(px(14.))
+            .w_full()
+            .max_w(px(560.))
+            .mx_auto()
             .mb(px(14.))
             .flex_shrink_0()
-            .rounded(px(10.))
+            .rounded(px(12.))
             .border_1()
-            .border_color(ui_accent())
+            .border_color(theme::edge())
             .bg(theme::card())
+            .shadow(theme::shadow_3())
             .p(px(12.))
             .flex()
             .flex_col()
@@ -5918,26 +5932,42 @@ impl PilotApp {
                             .font_family(theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(18.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(theme::ink())
-                            .child(tri!("需要确认 · {}", "Needs confirmation · {}", prompt.tool_name)),
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme::ink_secondary())
+                            .child(i18n::t("需要你的确认")),
                     )
                     .child(div().flex_1())
                     .children(member_label(&prompt.member))
                     .children((!risk.is_empty()).then(|| {
                         div()
+                            .rounded(px(4.))
+                            .bg(theme::hover())
+                            .px(px(6.))
+                            .py(px(2.))
                             .font_family(theme::FONT_FAMILY)
-                            .text_size(px(11.))
+                            .text_size(px(10.))
                             .text_color(theme::ink_tertiary())
                             .child(risk)
                     })),
+            )
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(format!(
+                        "{} · {}",
+                        i18n::t("工具"),
+                        prompt.tool_name
+                    ))),
             )
             .children((!prompt.reason.is_empty()).then(|| {
                 div()
                     .font_family(theme::FONT_FAMILY)
                     .text_size(px(13.))
                     .line_height(px(18.))
-                    .text_color(theme::ink_secondary())
+                    .text_color(theme::ink())
                     .child(SharedString::from(prompt.reason.clone()))
             }))
             .child(options)
