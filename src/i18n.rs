@@ -359,6 +359,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "提交" => Some("Submit"),
         "重试中" => Some("Retrying"),
         "队列已满（最多 5 条）" => Some("Queue is full (up to 5)"),
+        "Enter 排队" => Some("Enter to queue"),
         "已加入队列，回复结束后自动发送" => Some("Queued; it will send after this turn"),
         "已停止，排队消息已清空" => Some("Stopped; queued messages were cleared"),
         "其他（自行输入）" => Some("Other (type your own)"),

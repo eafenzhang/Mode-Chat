@@ -791,6 +791,10 @@ struct ChatState {
     retry: Option<RetryStatus>,
     /// 回合进行中继续发送的消息队列（结束后按顺序自动发出）。
     queued: Vec<QueuedSend>,
+    /// 本轮待结算的 token 用量（AgentEnd 先于 Done 到达）。
+    pending_usage: Option<TurnUsageView>,
+    /// 最近一轮结束后的统计（回合尾一行小字）。
+    last_turn: Option<TurnReport>,
     ready: bool,
     status: String,
     error: bool,
@@ -819,6 +823,20 @@ struct ChatState {
     pending_attachments: Vec<backend::AttachmentUpload>,
     /// 与 `pending_attachments` 对齐的本地预览路径（图片才有）。
     pending_attachment_previews: Vec<Option<std::path::PathBuf>>,
+}
+
+/// 一轮 token 用量（内嵌引擎的 assistant usage 汇总）。
+#[derive(Clone, Copy)]
+struct TurnUsageView {
+    input: i64,
+    output: i64,
+    cache_read: i64,
+}
+
+/// 回合尾统计：token 用量 + 从发送到 Done 的耗时。
+struct TurnReport {
+    usage: TurnUsageView,
+    duration_ms: u64,
 }
 
 /// 回合进行中暂存的待发消息（附件已读入内存，引用在入队时固化）。
@@ -4577,6 +4595,8 @@ impl PilotApp {
                         chat.push_user(text);
                         chat.turn_started = Some(time::now_ms());
                         chat.retry = None;
+                        chat.pending_usage = None;
+                        chat.last_turn = None;
                         chat.status = i18n::t("等待回复…").to_string();
                         chat.error = false;
                     }
@@ -4608,6 +4628,21 @@ impl PilotApp {
                         }
                         chat.error = false;
                     }
+                    SessionEvent::TurnUsage {
+                        member,
+                        input_tokens,
+                        output_tokens,
+                        cache_read,
+                        ..
+                    } => {
+                        if member.is_none() {
+                            chat.pending_usage = Some(TurnUsageView {
+                                input: input_tokens,
+                                output: output_tokens,
+                                cache_read,
+                            });
+                        }
+                    }
                     SessionEvent::Retry {
                         attempt,
                         max_retries,
@@ -4626,6 +4661,10 @@ impl PilotApp {
                         };
                     }
                     SessionEvent::Done { member } => {
+                        let turn_duration = chat
+                            .turn_started
+                            .map(|start| time::now_ms().saturating_sub(start))
+                            .unwrap_or(0);
                         chat.finish_reasoning(member.as_deref());
                         if !active {
                             chat.unread = chat.unread.saturating_add(1);
@@ -4652,6 +4691,14 @@ impl PilotApp {
                         }
                         chat.error = false;
                         chat.refresh_meta();
+                        if member.is_none()
+                            && let Some(usage) = chat.pending_usage.take()
+                        {
+                            chat.last_turn = Some(TurnReport {
+                                usage,
+                                duration_ms: turn_duration,
+                            });
+                        }
                         if member.is_none() {
                             chat.permissions.clear();
                             chat.questions.clear();
@@ -4801,6 +4848,8 @@ impl PilotApp {
                         if member.is_none() {
                             chat.turn_started = None;
                             chat.retry = None;
+                            chat.pending_usage = None;
+                            chat.last_turn = None;
                         }
                         chat.status = message.clone();
                         chat.error = true;
@@ -19020,6 +19069,8 @@ impl Default for ChatState {
             turn_started: None,
             retry: None,
             queued: Vec::new(),
+            pending_usage: None,
+            last_turn: None,
             ready: false,
             status: String::new(),
             error: false,
@@ -20651,6 +20702,15 @@ fn elapsed_label(ms: u64) -> String {
         format!("{secs} 秒")
     } else {
         format!("{} 分 {} 秒", secs / 60, secs % 60)
+    }
+}
+
+/// token 数的紧凑展示：1234 → 1.2k。
+fn compact_tokens(value: i64) -> String {
+    if value >= 1000 {
+        format!("{:.1}k", value as f64 / 1000.0)
+    } else {
+        value.to_string()
     }
 }
 
@@ -22552,6 +22612,7 @@ impl PilotApp {
             .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
+            .children(self.turn_footer())
             .children(self.group_task_bar(cx))
             .children(self.queue_panel(cx))
             .child(self.wecom_composer(window, cx))
@@ -23001,6 +23062,62 @@ impl PilotApp {
         )
     }
 
+    /// 回合尾统计：一行 10px 小字（用时 + token），不打断正文阅读。
+    fn turn_footer(&self) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let chat = self.chats.get(&key)?;
+        if chat.streaming
+            || !chat.permissions.is_empty()
+            || !chat.questions.is_empty()
+            || !chat.elicitations.is_empty()
+        {
+            return None;
+        }
+        let report = chat.last_turn.as_ref()?;
+        let mut parts: Vec<String> = Vec::new();
+        if report.duration_ms >= 1000 {
+            parts.push(if i18n::is_en() {
+                format!("{} elapsed", elapsed_label(report.duration_ms))
+            } else {
+                format!("用时 {}", elapsed_label(report.duration_ms))
+            });
+        }
+        if report.usage.input > 0 || report.usage.output > 0 {
+            parts.push(format!(
+                "↑{} ↓{}",
+                compact_tokens(report.usage.input),
+                compact_tokens(report.usage.output)
+            ));
+        }
+        if report.usage.cache_read > 0 {
+            parts.push(if i18n::is_en() {
+                format!("cache {}", compact_tokens(report.usage.cache_read))
+            } else {
+                format!("缓存 {}", compact_tokens(report.usage.cache_read))
+            });
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .w_full()
+                .px(px(14.))
+                .pb(px(2.))
+                .flex()
+                .justify_end()
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .line_height(px(14.))
+                        .text_color(wecom_theme::time_label())
+                        .child(SharedString::from(parts.join(" · "))),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// 排队消息条：回合进行中继续发送的消息，结束前可逐条移除。
     fn queue_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
@@ -23132,11 +23249,12 @@ impl PilotApp {
         let permission = self.selected_bot().map(|bot| bot.approval_level.clone());
         let is_bot = self.selected_bot().is_some();
         let is_group = self.selected_group().is_some();
+        let has_text = !self.input.read(cx).content().trim().is_empty();
         let send_enabled = (is_bot || is_group)
             && ready
             && !streaming
             && !pending_approval
-            && (!self.input.read(cx).content().trim().is_empty() || has_attachments);
+            && (has_text || has_attachments);
         let send_bg = if streaming {
             wecom_theme::nav_badge_bg()
         } else if send_enabled {
@@ -23232,6 +23350,14 @@ impl PilotApp {
                                 color,
                                 1.2,
                             ))
+                    }))
+                    .children((streaming && has_text).then(|| {
+                        div()
+                            .flex_shrink_0()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(10.))
+                            .text_color(wecom_theme::time_label())
+                            .child(i18n::t("Enter 排队"))
                     }))
                     .child(
                         div()

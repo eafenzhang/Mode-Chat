@@ -198,6 +198,14 @@ pub enum SessionEvent {
         member: Option<String>,
         message: String,
     },
+    /// 一轮结束的 token 用量（仅内嵌引擎上报；member=None 是私聊）。
+    TurnUsage {
+        member: Option<String>,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read: i64,
+        reasoning_tokens: i64,
+    },
     /// 供应商请求失败后的自动重试（不当作回合错误，重试成功后正常出字）。
     Retry {
         member: Option<String>,

@@ -696,7 +696,28 @@ impl AgentEmitter for UiEmitter {
                     reason: error,
                 });
             }
-            AgentEvent::AgentEnd { .. } => {
+            AgentEvent::AgentEnd { messages } => {
+                let mut input_tokens = 0i64;
+                let mut output_tokens = 0i64;
+                let mut cache_read = 0i64;
+                let mut reasoning_tokens = 0i64;
+                for message in &messages {
+                    if let rpi_agent::AgentMessage::Assistant(assistant) = message {
+                        input_tokens += assistant.usage.input;
+                        output_tokens += assistant.usage.output;
+                        cache_read += assistant.usage.cache_read;
+                        reasoning_tokens += assistant.usage.reasoning.unwrap_or(0);
+                    }
+                }
+                if input_tokens > 0 || output_tokens > 0 {
+                    self.send(SessionEvent::TurnUsage {
+                        member: self.member.clone(),
+                        input_tokens,
+                        output_tokens,
+                        cache_read,
+                        reasoning_tokens,
+                    });
+                }
                 self.send(SessionEvent::Done {
                     member: self.member.clone(),
                 });
