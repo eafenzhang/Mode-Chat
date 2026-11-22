@@ -20705,6 +20705,40 @@ fn elapsed_label(ms: u64) -> String {
     }
 }
 
+/// 当前回合的写文件汇总（从最后一条用户消息之后统计 edit/write 调用）。
+fn turn_edit_summary(messages: &[Message]) -> Option<(usize, usize, usize)> {
+    let start = messages
+        .iter()
+        .rposition(|message| message.role == Role::User)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let mut paths = HashSet::new();
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for message in &messages[start..] {
+        if message.kind != MsgKind::Tool
+            || tool_render::family(&message.tool_name) != tool_render::ToolFamily::Edit
+        {
+            continue;
+        }
+        if let Some(info) = tool_render::edit_info(
+            &message.tool_name,
+            &message.tool_input,
+            &message.tool_details,
+        ) {
+            if !info.path.is_empty() {
+                paths.insert(info.path);
+            }
+            added += info.added;
+            removed += info.removed;
+        }
+    }
+    if paths.is_empty() && added + removed == 0 {
+        return None;
+    }
+    Some((paths.len().max(1), added, removed))
+}
+
 /// token 数的紧凑展示：1234 → 1.2k。
 fn compact_tokens(value: i64) -> String {
     if value >= 1000 {
@@ -23075,6 +23109,13 @@ impl PilotApp {
         }
         let report = chat.last_turn.as_ref()?;
         let mut parts: Vec<String> = Vec::new();
+        if let Some((files, added, removed)) = turn_edit_summary(&chat.messages) {
+            parts.push(if i18n::is_en() {
+                format!("{files} files changed +{added} -{removed}")
+            } else {
+                format!("改动 {files} 个文件 +{added} -{removed}")
+            });
+        }
         if report.duration_ms >= 1000 {
             parts.push(if i18n::is_en() {
                 format!("{} elapsed", elapsed_label(report.duration_ms))
@@ -24151,6 +24192,53 @@ mod image_transcode_tests {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         let decoded = image::load_from_memory(&png).expect("decode png");
         assert_eq!(decoded.to_rgba8().get_pixel(0, 0).0[0], 220);
+    }
+}
+
+#[cfg(test)]
+mod turn_summary_tests {
+    use super::*;
+
+    fn tool(name: &str, input: &str) -> Message {
+        Message::tool(backend::ToolCard {
+            call_id: format!("{name}-call"),
+            name: name.to_string(),
+            state: "done".to_string(),
+            title: name.to_string(),
+            detail: String::new(),
+            input: input.to_string(),
+            details: String::new(),
+        })
+    }
+
+    #[test]
+    fn counts_unique_files_and_line_stats() {
+        let messages = vec![
+            Message::text(Role::User, "hi", false),
+            tool(
+                "write",
+                r#"{"path":"a.txt","content":"x\ny"}"#,
+            ),
+            tool(
+                "edit",
+                r#"{"path":"a.txt","edits":[{"oldText":"y","newText":"z"}]}"#,
+            ),
+            tool("read", r#"{"path":"a.txt"}"#),
+        ];
+        assert_eq!(turn_edit_summary(&messages), Some((1, 3, 1)));
+    }
+
+    #[test]
+    fn ignores_previous_turns() {
+        let messages = vec![
+            tool(
+                "write",
+                r#"{"path":"old.txt","content":"a"}"#,
+            ),
+            Message::text(Role::User, "next", false),
+            tool("read", r#"{"path":"a.txt"}"#),
+        ];
+        assert_eq!(turn_edit_summary(&messages), None);
     }
 }
 
