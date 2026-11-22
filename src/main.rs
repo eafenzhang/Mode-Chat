@@ -20982,6 +20982,72 @@ fn tool_row_base(
     }))
 }
 
+/// 展开面板右下角的轻量复制动作（仅展开时出现，不占常驻高度）。
+fn tool_copy_button(
+    id: String,
+    label: &'static str,
+    text: String,
+    weak: gpui::WeakEntity<PilotApp>,
+) -> gpui::AnyElement {
+    div()
+        .id(SharedString::from(id))
+        .h(px(18.))
+        .px(px(4.))
+        .rounded(px(3.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .font_family(wecom_theme::FONT_FAMILY)
+        .text_size(px(10.))
+        .text_color(wecom_theme::time_label())
+        .hover(|style| {
+            style
+                .bg(wecom_theme::nav_item_hover_bg())
+                .text_color(wecom_theme::chat_title())
+        })
+        .on_click(move |_event, _window, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+            let _ = weak.update(cx, |this, cx| {
+                this.toast(i18n::t("已复制"), cx);
+            });
+        })
+        .child(label)
+        .into_any_element()
+}
+
+fn tool_actions_row(
+    call_id: &str,
+    actions: Vec<(&'static str, String)>,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> gpui::AnyElement {
+    let mut row = div().w_full().flex().justify_end().items_center().gap(px(6.));
+    for (index, (label, text)) in actions.into_iter().enumerate() {
+        row = row.child(tool_copy_button(
+            format!("tool-copy-{call_id}-{index}"),
+            label,
+            text,
+            weak.clone(),
+        ));
+    }
+    row.into_any_element()
+}
+
+/// 把内联 diff 还原成可复制的纯文本。
+fn edit_info_text(info: &tool_render::EditInfo) -> String {
+    info.lines
+        .iter()
+        .map(|line| {
+            let marker = match line.kind {
+                tool_render::DiffKind::Added => "+",
+                tool_render::DiffKind::Removed => "-",
+                tool_render::DiffKind::Context => " ",
+            };
+            format!("{marker}{}", line.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn diff_count_el(added: usize, removed: usize) -> gpui::AnyElement {
     let mut row = div()
         .flex_shrink_0()
@@ -21143,6 +21209,7 @@ fn wecom_edit_card(
         || !message.tool_detail.trim().is_empty();
     let call_id = message.tool_call_id.clone();
     let key = call_id.clone();
+    let action_weak = weak.clone();
     let weak = weak.clone();
     let header = tool_row_base(
         icons::Icon::Pencil,
@@ -21167,7 +21234,8 @@ fn wecom_edit_card(
             })
     });
     let body = (expanded && has_content).then(|| {
-        info.as_ref()
+        let panel = info
+            .as_ref()
             .map(|info| edit_diff_panel(info, &message.tool_detail))
             .unwrap_or_else(|| {
                 div()
@@ -21184,7 +21252,25 @@ fn wecom_edit_card(
                     .text_color(wecom_theme::list_preview())
                     .child(SharedString::from(capped_text(&message.tool_detail, 40)))
                     .into_any_element()
-            })
+            });
+        let actions = info.as_ref().map(|info| {
+            let mut actions = Vec::new();
+            if !info.path.is_empty() {
+                actions.push(("复制路径", info.path.clone()));
+            }
+            let diff = edit_info_text(info);
+            if !diff.is_empty() {
+                actions.push(("复制 diff", diff));
+            }
+            tool_actions_row(&message.tool_call_id, actions, &action_weak)
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(panel)
+            .children(actions)
+            .into_any_element()
     });
     div().w_full().flex().justify_start().child(
         div()
@@ -21223,6 +21309,7 @@ fn wecom_exec_card(
     let has_content = !command.trim().is_empty() || !message.tool_detail.trim().is_empty();
     let call_id = message.tool_call_id.clone();
     let key = call_id.clone();
+    let action_weak = weak.clone();
     let weak = weak.clone();
     let header = tool_row_base(
         icons::Icon::Terminal,
@@ -21327,6 +21414,16 @@ fn wecom_exec_card(
                     })
                     .child(SharedString::from(label)),
             );
+        }
+        let mut actions = Vec::new();
+        if !command.trim().is_empty() {
+            actions.push(("复制命令", command.clone()));
+        }
+        if !message.tool_detail.trim().is_empty() {
+            actions.push(("复制输出", message.tool_detail.clone()));
+        }
+        if !actions.is_empty() {
+            panel = panel.child(tool_actions_row(&message.tool_call_id, actions, &action_weak));
         }
         panel
     });
@@ -21486,9 +21583,25 @@ fn wecom_tool_card(
                 || !message.tool_details.trim().is_empty();
             let call_id = message.tool_call_id.clone();
             let key = call_id.clone();
+            let action_weak = weak.clone();
             let weak = weak.clone();
-            let primary = tool_primary_text(message);
             let family = tool_render::family(&message.tool_name);
+            let mut primary = tool_primary_text(message);
+            // 搜索类在标题尾附结果行数，收起态也能看到规模。
+            if family == tool_render::ToolFamily::Search {
+                let hits = message
+                    .tool_detail
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count();
+                if hits > 0 {
+                    primary = if i18n::is_en() {
+                        format!("{primary} · {hits} results")
+                    } else {
+                        format!("{primary} · {hits} 条结果")
+                    };
+                }
+            }
             let icon = if family == tool_render::ToolFamily::Other {
                 tool_icon(&message.tool_name)
             } else {
@@ -21530,18 +21643,29 @@ fn wecom_tool_card(
                     .child(header)
                     .children((expanded && has_detail).then(|| {
                         div()
-                            .w_full()
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(wecom_theme::composer_border())
-                            .bg(wecom_theme::panel_card_bg())
-                            .px(px(10.))
-                            .py(px(8.))
-                            .font_family(theme::FONT_MONO)
-                            .text_size(px(11.))
-                            .line_height(px(15.))
-                            .text_color(wecom_theme::list_preview())
-                            .child(SharedString::from(capped_text(&detail, 40)))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(wecom_theme::composer_border())
+                                    .bg(wecom_theme::panel_card_bg())
+                                    .px(px(10.))
+                                    .py(px(8.))
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(11.))
+                                    .line_height(px(15.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(SharedString::from(capped_text(&detail, 40))),
+                            )
+                            .child(tool_actions_row(
+                                &message.tool_call_id,
+                                vec![("复制详情", detail.clone())],
+                                &action_weak,
+                            ))
                     })),
             )
             .into_any_element()
@@ -22634,6 +22758,15 @@ impl PilotApp {
             "Mode Chat".to_string()
         };
         let is_bot_chat = self.selected_bot().is_some();
+        let model_chip = self.selected_bot().map(|bot| {
+            (
+                bot.id.clone(),
+                bot.model
+                    .as_ref()
+                    .map(|model| model.model_id.clone())
+                    .unwrap_or_else(|| i18n::t("默认模型").to_string()),
+            )
+        });
         div()
             .flex_1()
             .min_w(px(0.))
@@ -22683,26 +22816,51 @@ impl PilotApp {
                     )
                     .child(
                         div()
-                            .id("wechat-more")
-                            .size(px(28.))
-                            .rounded(px(4.))
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                if this.selection.is_some() {
-                                    this.detail_menu_open = !this.detail_menu_open;
-                                    this.menu_selected = 0;
-                                }
-                                cx.notify();
+                            .gap(px(4.))
+                            .children(model_chip.map(|(bot_id, label)| {
+                                div()
+                                    .id("wechat-model-chip")
+                                    .max_w(px(150.))
+                                    .h(px(22.))
+                                    .px(px(6.))
+                                    .rounded(px(4.))
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .line_height(px(16.))
+                                    .text_color(wecom_theme::time_label())
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                                    .on_click(cx.listener(move |this, _event, window, cx| {
+                                        this.open_model_dialog(bot_id.clone(), window, cx);
+                                    }))
+                                    .child(SharedString::from(label))
                             }))
-                            .child(icons::icon(
-                                icons::Icon::Ellipsis,
-                                22.,
-                                wecom_theme::icon(),
-                            )),
+                            .child(
+                                div()
+                                    .id("wechat-more")
+                                    .size(px(28.))
+                                    .rounded(px(4.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        if this.selection.is_some() {
+                                            this.detail_menu_open = !this.detail_menu_open;
+                                            this.menu_selected = 0;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(icons::icon(
+                                        icons::Icon::Ellipsis,
+                                        22.,
+                                        wecom_theme::icon(),
+                                    )),
+                            ),
                     ),
             )
             .child(self.wecom_transcript(window, cx))
