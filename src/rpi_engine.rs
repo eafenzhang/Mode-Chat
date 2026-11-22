@@ -482,6 +482,20 @@ fn summarize_args(args: &serde_json::Value) -> String {
     }
 }
 
+/// 结果 details 的 JSON 文本（edit 的 diff、bash 的 exit_code）。
+/// 只用于展示，截断到 8k 字符，避免一条工具卡把整段 diff 全搬进 UI 状态。
+fn tool_details(value: &serde_json::Value) -> String {
+    if value.is_null() {
+        return String::new();
+    }
+    let text = serde_json::to_string(value).unwrap_or_default();
+    if text.chars().count() > 8_000 {
+        format!("{}…", text.chars().take(8_000).collect::<String>())
+    } else {
+        text
+    }
+}
+
 fn tool_detail(content: &[rpi_agent::TextContentOrImage]) -> String {
     let mut out = String::new();
     for item in content {
@@ -576,11 +590,14 @@ impl AgentEmitter for UiEmitter {
                     state: "running".to_string(),
                     title: tool_name,
                     detail: summarize_args(&args),
+                    input: serde_json::to_string(&args).unwrap_or_default(),
+                    details: String::new(),
                 }));
             }
             AgentEvent::ToolExecutionUpdate {
                 tool_call_id,
                 tool_name,
+                args,
                 partial_result,
                 ..
             } => {
@@ -590,6 +607,8 @@ impl AgentEmitter for UiEmitter {
                     state: "running".to_string(),
                     title: tool_name,
                     detail: tool_detail(&partial_result.content),
+                    input: serde_json::to_string(&args).unwrap_or_default(),
+                    details: tool_details(&partial_result.details),
                 }));
             }
             AgentEvent::ToolExecutionEnd {
@@ -605,6 +624,8 @@ impl AgentEmitter for UiEmitter {
                     state: if is_error { "error" } else { "done" }.to_string(),
                     title: tool_name,
                     detail: tool_detail(&result.content),
+                    input: String::new(),
+                    details: tool_details(&result.details),
                 }));
             }
             AgentEvent::RetryScheduled { error, attempt, max_retries, .. } => {
@@ -791,6 +812,8 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
         return Vec::new();
     };
     let mut out = Vec::new();
+    // assistant 消息里的 toolCall（含参数）先记下，等 tool_result 到达时配回去。
+    let mut tool_args: HashMap<String, String> = HashMap::new();
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -851,6 +874,10 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
                     .and_then(|item| item.as_bool())
                     .unwrap_or(false);
                 let detail: String = output.trim().chars().take(6_000).collect();
+                let input = tool_args.remove(&call_id).unwrap_or_default();
+                let details = tool_details(
+                    message.get("details").unwrap_or(&serde_json::Value::Null),
+                );
                 out.push(crate::backend::HistoryEntry {
                     user: false,
                     reasoning: false,
@@ -861,6 +888,8 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
                         state: if is_error { "error" } else { "done" }.to_string(),
                         title: name,
                         detail,
+                        input,
+                        details,
                     }),
                     attachments: Vec::new(),
                     member: None,
@@ -876,6 +905,18 @@ pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
             .flatten()
         {
             match content.get("type").and_then(|item| item.as_str()) {
+                Some("toolCall") => {
+                    if let Some(id) = content.get("id").and_then(|item| item.as_str()) {
+                        let args = content
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        tool_args.insert(
+                            id.to_string(),
+                            serde_json::to_string(&args).unwrap_or_default(),
+                        );
+                    }
+                }
                 Some("text") => text_body.push_str(
                     content
                         .get("text")

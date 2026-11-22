@@ -804,12 +804,23 @@ fn handle_notification(
                 "in_progress" | "running" => "running",
                 _ => "scheduled",
             };
+            let input = update
+                .get("rawInput")
+                .map(|value| serde_json::to_string(value).unwrap_or_default())
+                .unwrap_or_default();
+            let details = update
+                .get("rawOutput")
+                .map(|value| serde_json::to_string(value).unwrap_or_default())
+                .map(|text| text.chars().take(8_000).collect::<String>())
+                .unwrap_or_default();
             let _ = events.send(AcpEvent::Tool(ToolCard {
                 call_id,
                 name,
                 state: state.to_string(),
                 title: String::new(),
                 detail: String::new(),
+                input,
+                details,
             }));
         }
         _ => {}

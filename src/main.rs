@@ -46,6 +46,7 @@ mod browser_tools;
 mod computer_tools;
 mod cua_tree;
 mod tool_scope;
+mod tool_render;
 mod update;
 // 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
 #[allow(dead_code)]
@@ -708,6 +709,10 @@ struct Message {
     tool_state: String,
     tool_title: String,
     tool_detail: String,
+    /// 调用参数 JSON（edit 的 path/edits、bash 的 command）。
+    tool_input: String,
+    /// 结果 details JSON（edit 的 diff、bash 的 exit_code）。
+    tool_details: String,
 }
 
 impl Message {
@@ -736,6 +741,8 @@ impl Message {
             tool_state: String::new(),
             tool_title: String::new(),
             tool_detail: String::new(),
+            tool_input: String::new(),
+            tool_details: String::new(),
         }
     }
 
@@ -761,6 +768,8 @@ impl Message {
             tool_state: card.state,
             tool_title: card.title,
             tool_detail: card.detail,
+            tool_input: card.input,
+            tool_details: card.details,
         }
     }
 }
@@ -2457,12 +2466,25 @@ impl ChatState {
         }
     }
 
-    fn apply_tool(&mut self, card: ToolCard) {
+    fn apply_tool(&mut self, mut card: ToolCard) {
+        card.state = normalize_tool_state(&card.state).to_string();
         if let Some(index) = self.tool_index.get(&card.call_id)
             && let Some(message) = self.messages.get_mut(*index)
         {
             message.tool_state = card.state;
-            message.tool_title = card.title;
+            // 后续事件只带增量字段：空串不覆盖启动时拿到的参数/标题。
+            if !card.title.trim().is_empty() {
+                message.tool_title = card.title;
+            }
+            if !card.detail.trim().is_empty() {
+                message.tool_detail = card.detail;
+            }
+            if !card.input.trim().is_empty() {
+                message.tool_input = card.input;
+            }
+            if !card.details.trim().is_empty() {
+                message.tool_details = card.details;
+            }
             return;
         }
         self.tool_index
@@ -3011,6 +3033,8 @@ struct PilotApp {
     /// 新建/重命名分组对话框。
     pending_section_dialog: Option<SectionDialogRequest>,
     tool_expanded: std::collections::HashSet<String>,
+    /// 工具分组的展开态（键 = 组内首个 call_id）。
+    tool_group_expanded: std::collections::HashSet<String>,
     wecom_last_row_fingerprint: u64,
     wecom_scroller_chat: Option<String>,
     /// 会话列表虚拟列表（gpui-kit ListState）。
@@ -3194,7 +3218,20 @@ enum WecomRow {
         expanded: bool,
         duration_ms: Option<u64>,
     },
-    Tool(Message),
+    Tool {
+        // Message 现在带 input/details 两段文本，装箱避免撑大整个 WecomRow。
+        message: Box<Message>,
+        expanded: bool,
+    },
+    /// 连续同类工具调用折叠成一组（WebView 的 execute/edit/explore/cua 组）。
+    ToolGroup {
+        /// 组内首个 call_id（展开态键）。
+        key: String,
+        family: tool_render::ToolFamily,
+        /// (消息, 自身展开态)：展开态进指纹，子卡展开后才会重新测量行高。
+        messages: Vec<(Message, bool)>,
+        expanded: bool,
+    },
 }
 
 /// 侧栏底栏齿轮菜单动作（原版 `BotSidebar` 的 7 项）。
@@ -3418,6 +3455,7 @@ impl PilotApp {
             sidebar_sections: load_sidebar_sections(),
             pending_section_dialog: None,
             tool_expanded: std::collections::HashSet::new(),
+            tool_group_expanded: std::collections::HashSet::new(),
             wecom_last_row_fingerprint: 0,
             wecom_scroller_chat: None,
             wecom_list_state: gpui::ListState::new(
@@ -17543,6 +17581,20 @@ fn is_group_prompt(text: &str) -> bool {
             && (text.contains("群规则：") || text.contains("请直接写你在群里的回复")))
 }
 
+/// 单张工具卡的指纹：状态、标题、输入/输出/details 的长度都要参与，
+/// 否则流式输出增长而卡片不重新测量。
+fn tool_message_fingerprint(message: &Message) -> u64 {
+    (message.tool_title.len() as u64)
+        .wrapping_mul(17)
+        .wrapping_add(message.tool_state.len() as u64)
+        .wrapping_mul(17)
+        .wrapping_add(message.tool_detail.len() as u64)
+        .wrapping_mul(17)
+        .wrapping_add(message.tool_input.len() as u64)
+        .wrapping_mul(17)
+        .wrapping_add(message.tool_details.len() as u64)
+}
+
 fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
     match row {
         WecomRow::LoadEarlier { hidden, .. } => (*hidden as u64).wrapping_add(1),
@@ -17565,11 +17617,28 @@ fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
             .wrapping_add(author.len() as u64)
             .wrapping_add(author_id.len() as u64)
             + 30,
-        WecomRow::Tool(message) => {
-            (message.tool_title.len() as u64)
-                .wrapping_mul(17)
-                .wrapping_add(message.tool_state.len() as u64)
-                + 40
+        WecomRow::Tool { message, expanded } => tool_message_fingerprint(message)
+            .wrapping_add(u64::from(*expanded) * 7919)
+            .wrapping_add(40),
+        WecomRow::ToolGroup {
+            family,
+            messages,
+            expanded,
+            ..
+        } => {
+            let mut hash = (*family as u64).wrapping_add(60);
+            hash = hash
+                .wrapping_mul(31)
+                .wrapping_add(messages.len() as u64)
+                .wrapping_add(u64::from(*expanded) * 104_729);
+            for (message, child_expanded) in messages {
+                hash = hash
+                    .wrapping_mul(31)
+                    .wrapping_add(tool_message_fingerprint(message))
+                    .wrapping_mul(31)
+                    .wrapping_add(u64::from(*child_expanded));
+            }
+            hash
         }
         WecomRow::Reasoning {
             text,
@@ -17866,9 +17935,23 @@ fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
                 mix(author.len());
                 mix(author_id.len());
             }
-            WecomRow::Tool(message) => {
-                mix(message.tool_title.len());
-                mix(message.tool_state.len());
+            WecomRow::Tool { message, expanded } => {
+                mix(tool_message_fingerprint(message) as usize);
+                mix(usize::from(*expanded));
+            }
+            WecomRow::ToolGroup {
+                family,
+                messages,
+                expanded,
+                ..
+            } => {
+                mix(*family as usize);
+                mix(messages.len());
+                mix(usize::from(*expanded));
+                for (message, child_expanded) in messages {
+                    mix(tool_message_fingerprint(message) as usize);
+                    mix(usize::from(*child_expanded));
+                }
             }
             WecomRow::Reasoning {
                 text,
@@ -18135,13 +18218,15 @@ fn wecom_row_el(
                 div().w_full().child(block).into_any_element()
             }
         }
-        WecomRow::Tool(message) => {
-            let expanded = weak
-                .upgrade()
-                .map(|app| app.read(cx).tool_expanded.contains(&message.tool_call_id))
-                .unwrap_or(false);
-            wecom_tool_card(message, expanded, weak).into_any_element()
+        WecomRow::Tool { message, expanded } => {
+            wecom_tool_card(message, *expanded, weak).into_any_element()
         }
+        WecomRow::ToolGroup {
+            key,
+            family,
+            messages,
+            expanded,
+        } => wecom_tool_group_card(key, *family, messages, *expanded, weak).into_any_element(),
     }
 }
 
@@ -20248,6 +20333,16 @@ fn elapsed_label(ms: u64) -> String {
     }
 }
 
+/// ACP 的 completed/failed/scheduled 与 pi 的 done/error/pending 统一成一套状态词。
+fn normalize_tool_state(state: &str) -> &str {
+    match state {
+        "completed" => "done",
+        "failed" => "error",
+        "scheduled" => "pending",
+        other => other,
+    }
+}
+
 fn tool_state_label(state: &str) -> &'static str {
     match state {
         "pending" => i18n::t("排队中"),
@@ -20290,49 +20385,46 @@ fn tool_icon(name: &str) -> icons::Icon {
     }
 }
 
-fn wecom_tool_card(
-    message: &Message,
-    expanded: bool,
-    weak: &gpui::WeakEntity<PilotApp>,
-) -> impl IntoElement {
-    let state_label = tool_state_label(&message.tool_state);
-    let (status_color, icon_color) = match message.tool_state.as_str() {
-        "running" => (wecom_theme::send_enabled(), wecom_theme::send_enabled()),
-        "error" => (wecom_theme::nav_badge_bg(), wecom_theme::nav_badge_bg()),
-        "done" => (wecom_theme::chat_title(), wecom_theme::chip_text()),
-        _ => (wecom_theme::time_label(), wecom_theme::chip_text()),
-    };
+/// 工具卡主文案：优先显示参数里用户关心的对象（路径 / 命令 / 搜索词）。
+fn tool_primary_text(message: &Message) -> String {
     let title = if message.tool_title.trim().is_empty() {
         message.tool_name.trim()
     } else {
         message.tool_title.trim()
     };
-    let has_detail = !message.tool_detail.trim().is_empty();
-    let call_id = message.tool_call_id.clone();
-    let toggle_id = SharedString::from(format!("tool-toggle-{call_id}"));
-    let weak = weak.clone();
-    let header = div()
-        .id(toggle_id)
+    let subject = tool_render::subject(&message.tool_name, &message.tool_input, title);
+    let subject = if subject.trim().is_empty() {
+        message.tool_name.trim().to_string()
+    } else {
+        subject
+    };
+    tool_render::single_line(&subject, 96)
+}
+
+/// 一行式工具卡的行头（图标 + 状态 + 主文案 + 可选计数 + 折叠箭头）。
+fn tool_row_base(
+    icon: icons::Icon,
+    state: &str,
+    primary: &str,
+    counts: Option<(usize, usize)>,
+    has_content: bool,
+    expanded: bool,
+) -> gpui::Div {
+    let state_label = tool_state_label(state);
+    let (status_color, icon_color) = match state {
+        "running" => (wecom_theme::send_enabled(), wecom_theme::send_enabled()),
+        "error" => (wecom_theme::nav_badge_bg(), wecom_theme::nav_badge_bg()),
+        "done" => (wecom_theme::chat_title(), wecom_theme::chip_text()),
+        _ => (wecom_theme::time_label(), wecom_theme::chip_text()),
+    };
+    let mut row = div()
         .w_full()
         .flex()
         .items_center()
         .gap(px(6.))
         .px(px(2.))
         .py(px(2.))
-        .when(has_detail, |el| {
-            el.cursor_pointer()
-                .hover(|style| style.opacity(0.9))
-                .on_click(move |_event, _window, cx| {
-                    let key = call_id.clone();
-                    let _ = weak.update(cx, |this, cx| {
-                        if !this.tool_expanded.remove(&key) {
-                            this.tool_expanded.insert(key.clone());
-                        }
-                        cx.notify();
-                    });
-                })
-        })
-        .child(icons::icon(tool_icon(&message.tool_name), 14., icon_color))
+        .child(icons::icon(icon, 14., icon_color))
         .children((!state_label.is_empty()).then(|| {
             div()
                 .flex_shrink_0()
@@ -20351,27 +20443,192 @@ fn wecom_tool_card(
                 .text_size(px(12.))
                 .line_height(px(18.))
                 .text_color(wecom_theme::list_preview())
-                .child(SharedString::from(title.to_string())),
+                .child(SharedString::from(primary.to_string())),
+        );
+    if let Some((added, removed)) = counts
+        && added + removed > 0
+    {
+        row = row.child(diff_count_el(added, removed));
+    }
+    row.children(has_content.then(|| {
+        icons::icon(
+            if expanded {
+                icons::Icon::ChevronLeft
+            } else {
+                icons::Icon::ChevronRight
+            },
+            12.,
+            wecom_theme::icon(),
         )
-        .children(has_detail.then(|| {
-            icons::icon(
-                if expanded {
-                    icons::Icon::ChevronLeft
+    }))
+}
+
+fn diff_count_el(added: usize, removed: usize) -> gpui::AnyElement {
+    let mut row = div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .font_family(theme::FONT_MONO)
+        .text_size(px(11.))
+        .line_height(px(16.));
+    if added > 0 {
+        row = row.child(
+            div()
+                .text_color(theme::success())
+                .child(SharedString::from(format!("+{added}"))),
+        );
+    }
+    if removed > 0 {
+        row = row.child(
+            div()
+                .text_color(theme::danger())
+                .child(SharedString::from(format!("-{removed}"))),
+        );
+    }
+    row.into_any_element()
+}
+
+/// edit 内联 diff：逐行渲染，超过上限只显示前 N 行 + 剩余数量。
+fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyElement {
+    const MAX_LINES: usize = 60;
+    let mut panel = div()
+        .w_full()
+        .rounded(px(6.))
+        .bg(wecom_theme::panel_card_bg())
+        .py(px(4.))
+        .flex()
+        .flex_col()
+        .overflow_hidden();
+    if info.lines.is_empty() {
+        if !output.trim().is_empty() {
+            panel = panel.child(
+                div()
+                    .px(px(8.))
+                    .py(px(2.))
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(wecom_theme::list_preview())
+                    .child(SharedString::from(output.to_string())),
+            );
+        }
+        return panel.into_any_element();
+    }
+    for line in info.lines.iter().take(MAX_LINES) {
+        let (marker, color) = match line.kind {
+            tool_render::DiffKind::Added => ("+", theme::success()),
+            tool_render::DiffKind::Removed => ("-", theme::danger()),
+            tool_render::DiffKind::Context => (" ", wecom_theme::list_preview()),
+        };
+        let text = if line.text.is_empty() {
+            " ".to_string()
+        } else {
+            line.text.clone()
+        };
+        panel = panel.child(
+            div()
+                .w_full()
+                .flex()
+                .items_start()
+                .gap(px(6.))
+                .px(px(8.))
+                .py(px(1.))
+                .font_family(theme::FONT_MONO)
+                .text_size(px(11.))
+                .line_height(px(16.))
+                .child(
+                    div()
+                        .w(px(28.))
+                        .flex_shrink_0()
+                        .text_right()
+                        .text_color(wecom_theme::time_label())
+                        .child(SharedString::from(
+                            line.number.clone().unwrap_or_default(),
+                        )),
+                )
+                .child(div().w(px(8.)).flex_shrink_0().text_color(color).child(marker))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .text_color(color)
+                        .child(SharedString::from(text)),
+                ),
+        );
+    }
+    if info.lines.len() > MAX_LINES {
+        panel = panel.child(
+            div()
+                .px(px(8.))
+                .pt(px(2.))
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(11.))
+                .line_height(px(16.))
+                .text_color(wecom_theme::time_label())
+                .child(SharedString::from(if i18n::is_en() {
+                    format!("… {} more lines", info.lines.len() - MAX_LINES)
                 } else {
-                    icons::Icon::ChevronRight
-                },
-                12.,
-                wecom_theme::icon(),
-            )
-        }));
-    div().w_full().flex().justify_start().child(
-        div()
-            .max_w(px(560.))
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .child(header)
-            .children((expanded && has_detail).then(|| {
+                    format!("… 还有 {} 行", info.lines.len() - MAX_LINES)
+                })),
+        );
+    }
+    panel.into_any_element()
+}
+
+/// edit / write 工具卡：标题是文件路径，右侧是 +N/-M，展开为内联 diff。
+fn wecom_edit_card(
+    message: &Message,
+    expanded: bool,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> gpui::AnyElement {
+    let info = tool_render::edit_info(
+        &message.tool_name,
+        &message.tool_input,
+        &message.tool_details,
+    );
+    let primary = info
+        .as_ref()
+        .map(|info| tool_render::single_line(&info.path, 96))
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| tool_primary_text(message));
+    let counts = info
+        .as_ref()
+        .map(|info| (info.added, info.removed))
+        .filter(|(added, removed)| added + removed > 0);
+    let has_content = info
+        .as_ref()
+        .is_some_and(|info| !info.lines.is_empty())
+        || !message.tool_detail.trim().is_empty();
+    let call_id = message.tool_call_id.clone();
+    let key = call_id.clone();
+    let weak = weak.clone();
+    let header = tool_row_base(
+        icons::Icon::Pencil,
+        &message.tool_state,
+        &primary,
+        counts,
+        has_content,
+        expanded,
+    )
+    .id(SharedString::from(format!("tool-toggle-{call_id}")))
+    .when(has_content, |el| {
+        el.cursor_pointer()
+            .hover(|style| style.opacity(0.9))
+            .on_click(move |_event, _window, cx| {
+                let key = key.clone();
+                let _ = weak.update(cx, |this, cx| {
+                    if !this.tool_expanded.remove(&key) {
+                        this.tool_expanded.insert(key.clone());
+                    }
+                    cx.notify();
+                });
+            })
+    });
+    let body = (expanded && has_content).then(|| {
+        info.as_ref()
+            .map(|info| edit_diff_panel(info, &message.tool_detail))
+            .unwrap_or_else(|| {
                 div()
                     .w_full()
                     .rounded(px(6.))
@@ -20383,8 +20640,377 @@ fn wecom_tool_card(
                     .line_height(px(16.))
                     .text_color(wecom_theme::list_preview())
                     .child(SharedString::from(message.tool_detail.clone()))
-            })),
+                    .into_any_element()
+            })
+    });
+    div().w_full().flex().justify_start().child(
+        div()
+            .max_w(px(560.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(header)
+            .children(body),
     )
+    .into_any_element()
+}
+
+/// bash / powershell 工具卡：标题是命令（或描述），展开为 `$ 命令` + 输出 + 退出码。
+fn wecom_exec_card(
+    message: &Message,
+    expanded: bool,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> gpui::AnyElement {
+    let info = tool_render::exec_info(&message.tool_input, &message.tool_details);
+    let command = info
+        .as_ref()
+        .map(|info| info.command.clone())
+        .unwrap_or_default();
+    let primary = info
+        .as_ref()
+        .map(|info| {
+            if info.description.trim().is_empty() {
+                tool_render::single_line(&info.command, 96)
+            } else {
+                tool_render::single_line(&info.description, 96)
+            }
+        })
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| tool_primary_text(message));
+    let has_content = !command.trim().is_empty() || !message.tool_detail.trim().is_empty();
+    let call_id = message.tool_call_id.clone();
+    let key = call_id.clone();
+    let weak = weak.clone();
+    let header = tool_row_base(
+        icons::Icon::Terminal,
+        &message.tool_state,
+        &primary,
+        None,
+        has_content,
+        expanded,
+    )
+    .id(SharedString::from(format!("tool-toggle-{call_id}")))
+    .when(has_content, |el| {
+        el.cursor_pointer()
+            .hover(|style| style.opacity(0.9))
+            .on_click(move |_event, _window, cx| {
+                let key = key.clone();
+                let _ = weak.update(cx, |this, cx| {
+                    if !this.tool_expanded.remove(&key) {
+                        this.tool_expanded.insert(key.clone());
+                    }
+                    cx.notify();
+                });
+            })
+    });
+    let body = (expanded && has_content).then(|| {
+        let mut panel = div()
+            .w_full()
+            .rounded(px(6.))
+            .bg(wecom_theme::panel_card_bg())
+            .px(px(8.))
+            .py(px(6.))
+            .flex()
+            .flex_col()
+            .gap(px(6.));
+        if !command.trim().is_empty() {
+            panel = panel.child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap(px(6.))
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(wecom_theme::time_label())
+                            .child("$"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_color(wecom_theme::chat_title())
+                            .child(SharedString::from(command.clone())),
+                    ),
+            );
+        }
+        // 输出最多显示 200 行；完整输出仍在会话记录里。
+        const MAX_OUTPUT_LINES: usize = 200;
+        let output = message.tool_detail.trim();
+        if output.is_empty() {
+            if message.tool_state == "running" {
+                panel = panel.child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wecom_theme::time_label())
+                        .child(i18n::t("等待输出…")),
+                );
+            }
+        } else {
+            let mut shown = String::new();
+            let mut total = 0usize;
+            for line in output.lines() {
+                total += 1;
+                if total <= MAX_OUTPUT_LINES {
+                    if !shown.is_empty() {
+                        shown.push('\n');
+                    }
+                    shown.push_str(line);
+                }
+            }
+            if total > MAX_OUTPUT_LINES {
+                shown.push_str(&if i18n::is_en() {
+                    format!("\n… {} more lines", total - MAX_OUTPUT_LINES)
+                } else {
+                    format!("\n… 还有 {} 行", total - MAX_OUTPUT_LINES)
+                });
+            }
+            panel = panel.child(
+                div()
+                    .w_full()
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(wecom_theme::list_preview())
+                    .child(SharedString::from(shown)),
+            );
+        }
+        if let Some(exit_code) = info.as_ref().and_then(|info| info.exit_code) {
+            let failed = exit_code != 0;
+            let label = if i18n::is_en() {
+                format!("exit code {exit_code}")
+            } else {
+                format!("退出码 {exit_code}")
+            };
+            panel = panel.child(
+                div()
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(11.))
+                    .text_color(if failed {
+                        theme::danger()
+                    } else {
+                        wecom_theme::time_label()
+                    })
+                    .child(SharedString::from(label)),
+            );
+        }
+        panel
+    });
+    div().w_full().flex().justify_start().child(
+        div()
+            .max_w(px(560.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(header)
+            .children(body),
+    )
+    .into_any_element()
+}
+
+fn family_icon(family: tool_render::ToolFamily) -> icons::Icon {
+    match family {
+        tool_render::ToolFamily::Execute => icons::Icon::Terminal,
+        tool_render::ToolFamily::Edit => icons::Icon::Pencil,
+        tool_render::ToolFamily::Search => icons::Icon::Search,
+        tool_render::ToolFamily::Read => icons::Icon::Folder,
+        tool_render::ToolFamily::Cua => icons::Icon::Monitor,
+        tool_render::ToolFamily::Other => icons::Icon::Terminal,
+    }
+}
+
+fn tool_group_summary(family: tool_render::ToolFamily, count: usize, unique_files: usize) -> String {
+    if i18n::is_en() {
+        match family {
+            tool_render::ToolFamily::Execute => format!("Executed {count} commands"),
+            tool_render::ToolFamily::Edit if unique_files < count => {
+                format!("{count} edits in {unique_files} files")
+            }
+            tool_render::ToolFamily::Edit => format!("Edited {unique_files} files"),
+            tool_render::ToolFamily::Search => format!("Searched {count} times"),
+            tool_render::ToolFamily::Read => format!("Read {count} items"),
+            tool_render::ToolFamily::Cua => format!("{count} computer steps"),
+            tool_render::ToolFamily::Other => format!("{count} tool calls"),
+        }
+    } else {
+        match family {
+            tool_render::ToolFamily::Execute => format!("执行了 {count} 条命令"),
+            tool_render::ToolFamily::Edit if unique_files < count => {
+                format!("编辑了 {count} 次（{unique_files} 个文件）")
+            }
+            tool_render::ToolFamily::Edit => format!("编辑了 {unique_files} 个文件"),
+            tool_render::ToolFamily::Search => format!("搜索了 {count} 次"),
+            tool_render::ToolFamily::Read => format!("读取了 {count} 项"),
+            tool_render::ToolFamily::Cua => format!("操作了 {count} 步"),
+            tool_render::ToolFamily::Other => format!("调用了 {count} 次工具"),
+        }
+    }
+}
+
+/// 连续同类工具调用折叠卡（execute/edit/search/read/cua 组）。
+fn wecom_tool_group_card(
+    key: &str,
+    family: tool_render::ToolFamily,
+    messages: &[(Message, bool)],
+    expanded: bool,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> gpui::AnyElement {
+    let mut running = false;
+    let mut failed = false;
+    for (message, _) in messages {
+        match message.tool_state.as_str() {
+            "running" | "pending" => running = true,
+            "error" => failed = true,
+            _ => {}
+        }
+    }
+    let state = if running {
+        "running"
+    } else if failed {
+        "error"
+    } else {
+        "done"
+    };
+    let mut added = 0;
+    let mut removed = 0;
+    let mut files = HashSet::new();
+    if family == tool_render::ToolFamily::Edit {
+        for (message, _) in messages {
+            if let Some(info) = tool_render::edit_info(
+                &message.tool_name,
+                &message.tool_input,
+                &message.tool_details,
+            ) {
+                added += info.added;
+                removed += info.removed;
+                if !info.path.is_empty() {
+                    files.insert(info.path);
+                }
+            }
+        }
+    }
+    let unique_files = if family == tool_render::ToolFamily::Edit && !files.is_empty() {
+        files.len()
+    } else {
+        messages.len()
+    };
+    let summary = tool_group_summary(family, messages.len(), unique_files);
+    let toggle_key = key.to_string();
+    let click_weak = weak.clone();
+    let header = tool_row_base(
+        family_icon(family),
+        state,
+        &summary,
+        Some((added, removed)),
+        true,
+        expanded,
+    )
+    .id(SharedString::from(format!("tool-group-{key}")))
+    .cursor_pointer()
+    .hover(|style| style.opacity(0.9))
+    .on_click(move |_event, _window, cx| {
+        let key = toggle_key.clone();
+        let _ = click_weak.update(cx, |this, cx| {
+            if !this.tool_group_expanded.remove(&key) {
+                this.tool_group_expanded.insert(key.clone());
+            }
+            cx.notify();
+        });
+    });
+    let mut inner = div()
+        .w_full()
+        .max_w(px(560.))
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(header);
+    if expanded {
+        let mut children = div().w_full().flex().flex_col().gap(px(4.)).pl(px(8.));
+        for (message, child_expanded) in messages {
+            children = children.child(wecom_tool_card(message, *child_expanded, weak));
+        }
+        inner = inner.child(children);
+    }
+    div().w_full().flex().justify_start().child(inner).into_any_element()
+}
+
+fn wecom_tool_card(
+    message: &Message,
+    expanded: bool,
+    weak: &gpui::WeakEntity<PilotApp>,
+) -> gpui::AnyElement {
+    match tool_render::family(&message.tool_name) {
+        tool_render::ToolFamily::Edit => wecom_edit_card(message, expanded, weak),
+        tool_render::ToolFamily::Execute => wecom_exec_card(message, expanded, weak),
+        _ => {
+            let has_detail = !message.tool_detail.trim().is_empty()
+                || !message.tool_details.trim().is_empty();
+            let call_id = message.tool_call_id.clone();
+            let key = call_id.clone();
+            let weak = weak.clone();
+            let primary = tool_primary_text(message);
+            let family = tool_render::family(&message.tool_name);
+            let icon = if family == tool_render::ToolFamily::Other {
+                tool_icon(&message.tool_name)
+            } else {
+                family_icon(family)
+            };
+            let header = tool_row_base(
+                icon,
+                &message.tool_state,
+                &primary,
+                None,
+                has_detail,
+                expanded,
+            )
+            .id(SharedString::from(format!("tool-toggle-{call_id}")))
+            .when(has_detail, |el| {
+                el.cursor_pointer()
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(move |_event, _window, cx| {
+                        let key = key.clone();
+                        let _ = weak.update(cx, |this, cx| {
+                            if !this.tool_expanded.remove(&key) {
+                                this.tool_expanded.insert(key.clone());
+                            }
+                            cx.notify();
+                        });
+                    })
+            });
+            let detail = if message.tool_detail.trim().is_empty() {
+                message.tool_details.clone()
+            } else {
+                message.tool_detail.clone()
+            };
+            div().w_full().flex().justify_start().child(
+                div()
+                    .max_w(px(560.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(header)
+                    .children((expanded && has_detail).then(|| {
+                        div()
+                            .w_full()
+                            .rounded(px(6.))
+                            .bg(wecom_theme::panel_card_bg())
+                            .px(px(8.))
+                            .py(px(6.))
+                            .font_family(theme::FONT_MONO)
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(wecom_theme::list_preview())
+                            .child(SharedString::from(detail))
+                    })),
+            )
+            .into_any_element()
+        }
+    }
 }
 
 fn tool_card(message: &Message) -> impl IntoElement {
@@ -21620,9 +22246,51 @@ impl PilotApp {
             });
         }
         let mut last_day: Option<String> = None;
-        for (_index, message) in chat.messages.iter().enumerate().skip(start) {
+        // 分组扫描跳过的下标（组内后续工具卡已随组一起进 rows）。
+        let mut tool_group_skip = 0;
+        for (index, message) in chat.messages.iter().enumerate().skip(start) {
+            if index < tool_group_skip {
+                continue;
+            }
             if message.kind == MsgKind::Tool {
-                rows.push(WecomRow::Tool(message.clone()));
+                let family = tool_render::family(&message.tool_name);
+                let mut count = 1;
+                while tool_render::groupable(family)
+                    && index + count < chat.messages.len()
+                {
+                    let next = &chat.messages[index + count];
+                    if next.kind != MsgKind::Tool
+                        || tool_render::family(&next.tool_name) != family
+                    {
+                        break;
+                    }
+                    count += 1;
+                }
+                if count >= 2 {
+                    let key = message.tool_call_id.clone();
+                    let expanded = self.tool_group_expanded.contains(&key);
+                    let messages = chat.messages[index..index + count]
+                        .iter()
+                        .map(|child| {
+                            (
+                                child.clone(),
+                                self.tool_expanded.contains(&child.tool_call_id),
+                            )
+                        })
+                        .collect();
+                    rows.push(WecomRow::ToolGroup {
+                        key,
+                        family,
+                        messages,
+                        expanded,
+                    });
+                    tool_group_skip = index + count;
+                } else {
+                    rows.push(WecomRow::Tool {
+                        message: Box::new(message.clone()),
+                        expanded: self.tool_expanded.contains(&message.tool_call_id),
+                    });
+                }
                 continue;
             }
             if message.kind == MsgKind::Reasoning {

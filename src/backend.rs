@@ -59,6 +59,10 @@ pub struct ToolCard {
     pub title: String,
     /// 展开详情（输入/输出/错误），最多约 6k 字符。
     pub detail: String,
+    /// 工具调用参数 JSON（edit 的 path/edits、bash 的 command）。更新事件里为空时沿用旧值。
+    pub input: String,
+    /// 工具结果的结构化 details JSON（edit 的 diff、bash 的 exit_code）。最多约 8k 字符。
+    pub details: String,
 }
 
 #[derive(Debug, Clone)]
