@@ -789,6 +789,8 @@ struct ChatState {
     turn_started: Option<u64>,
     /// 供应商请求重试状态（有值时工作中行显示一行重试提示）。
     retry: Option<RetryStatus>,
+    /// 回合进行中继续发送的消息队列（结束后按顺序自动发出）。
+    queued: Vec<QueuedSend>,
     ready: bool,
     status: String,
     error: bool,
@@ -817,6 +819,14 @@ struct ChatState {
     pending_attachments: Vec<backend::AttachmentUpload>,
     /// 与 `pending_attachments` 对齐的本地预览路径（图片才有）。
     pending_attachment_previews: Vec<Option<std::path::PathBuf>>,
+}
+
+/// 回合进行中暂存的待发消息（附件已读入内存，引用在入队时固化）。
+struct QueuedSend {
+    text: String,
+    payload: String,
+    attachments: Vec<backend::AttachmentUpload>,
+    attachment_names: Vec<String>,
 }
 
 /// 供应商请求重试状态（attempt 从 1 开始，不含首次请求）。
@@ -4456,6 +4466,7 @@ impl PilotApp {
                 let task_key = key.clone();
                 let mut review_due = false;
                 let mut task_bar_due = false;
+                let mut queue_due = false;
                 let mut mirror_reply_session: Option<String> = None;
                 let active = self.active_key().as_deref() == Some(key.as_str());
                 let bot_id = key
@@ -4669,6 +4680,10 @@ impl PilotApp {
                                 cx,
                             );
                         }
+                        // 私聊回合结束：把排队消息按顺序放出去（群聊暂不支持排队）。
+                        if member.is_none() && !chat.streaming && !chat.queued.is_empty() {
+                            queue_due = true;
+                        }
                     }
                     SessionEvent::Permission(prompt) => {
                         chat.error = false;
@@ -4835,6 +4850,18 @@ impl PilotApp {
                 if review_due {
                     self.schedule_group_memory_review(&task_key, cx);
                 }
+                if queue_due {
+                    // Done 在 lane 清理前发出；稍等一拍再发下一条，避免
+                    // "Lane main already has an active run operation"。
+                    let queue_key = task_key.clone();
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(800))
+                            .await;
+                        let _ = this.update(cx, |this, cx| this.flush_queue(&queue_key, cx));
+                    })
+                    .detach();
+                }
                 if let Some(session_id) = mirror_reply_session {
                     let reply = self.chats.get(&task_key).and_then(|chat| {
                         chat.messages
@@ -4886,6 +4913,19 @@ impl PilotApp {
         };
         let key = bot_key(&bot.id);
         let text = self.input.read(cx).content().trim().to_string();
+        // 回合进行中继续发送 = 排队（私聊）；不打断当前回合。
+        let streaming = self.chats.get(&key).is_some_and(|chat| chat.streaming);
+        if streaming {
+            let has_pending = self
+                .chats
+                .get(&key)
+                .is_some_and(|chat| !chat.pending_attachments.is_empty());
+            if text.is_empty() && !has_pending {
+                return;
+            }
+            self.queue_current(&key, text, window, cx);
+            return;
+        }
         let Some(chat) = self.chats.get_mut(&key) else {
             return;
         };
@@ -4949,6 +4989,121 @@ impl PilotApp {
             }
         }
         self.input.update(cx, |input, cx| input.clear(window, cx));
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 回合进行中把输入暂存到队列（最多 5 条）；回合结束后自动按序发出。
+    fn queue_current(
+        &mut self,
+        key: &str,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        const MAX_QUEUED: usize = 5;
+        let mut full = false;
+        let mut accepted = false;
+        {
+            let Some(chat) = self.chats.get_mut(key) else {
+                return;
+            };
+            if chat.queued.len() >= MAX_QUEUED {
+                full = true;
+            } else {
+                let attachments = std::mem::take(&mut chat.pending_attachments);
+                chat.pending_attachment_previews.clear();
+                let attachment_names = attachments
+                    .iter()
+                    .map(|attachment| attachment.file_name.clone())
+                    .collect();
+                let payload = compose_with_quote(&text, chat.quote.take());
+                chat.queued.push(QueuedSend {
+                    text,
+                    payload,
+                    attachments,
+                    attachment_names,
+                });
+                accepted = true;
+            }
+        }
+        if full {
+            self.toast(i18n::t("队列已满（最多 5 条）"), cx);
+            return;
+        }
+        if accepted {
+            self.drafts.remove(key);
+            self.input.update(cx, |input, cx| input.clear(window, cx));
+            self.toast(i18n::t("已加入队列，回复结束后自动发送"), cx);
+            cx.notify();
+        }
+    }
+
+    /// 发出队首消息（回合 Done 后调用）；附件与引用在入队时已固化。
+    fn flush_queue(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.chats.get(key).is_some_and(|chat| chat.streaming) {
+            return;
+        }
+        let Some(item) = self.chats.get_mut(key).and_then(|chat| {
+            if chat.ready && !chat.queued.is_empty() {
+                Some(chat.queued.remove(0))
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        let QueuedSend {
+            text,
+            payload,
+            attachments,
+            attachment_names,
+        } = item;
+        let attachment_count = attachments.len();
+        let mirror_session;
+        {
+            let Some(chat) = self.chats.get_mut(key) else {
+                return;
+            };
+            chat.push_user(payload.clone());
+            if !attachment_names.is_empty()
+                && let Some(message) = chat
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| message.role == Role::User && message.kind == MsgKind::Text)
+            {
+                message.attachments = attachment_names;
+            }
+            chat.status = i18n::t("等待回复…").to_string();
+            chat.error = false;
+            chat.last_sent = Some(text.clone());
+            mirror_session = chat.session_id.clone();
+        }
+        if attachments.is_empty() {
+            self.backend.send(key.to_string(), payload.clone());
+        } else {
+            self.backend
+                .send_with_attachments(key.to_string(), payload.clone(), attachments);
+        }
+        // IM 镜像与手动发送同口径。
+        if let Some(session_id) = mirror_session
+            && let Some(bot_id) = key.strip_prefix("bot:")
+            && let Some(bot) = self.roster.bot_by_id(bot_id)
+            && let Some(service) = im_service::handle()
+        {
+            let identity = bot.identity();
+            let mirrored = service.mirror_desktop_message(
+                &session_id,
+                &bot.directory,
+                Some(&identity),
+                &payload,
+                attachment_count,
+            );
+            if mirrored > 0 {
+                self.mirror_reply_sessions.insert(session_id);
+            }
+        }
         self.scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -5178,10 +5333,16 @@ impl PilotApp {
         let Some(key) = self.active_key() else {
             return;
         };
+        let mut cleared_queue = false;
         if let Some(chat) = self.chats.get_mut(&key) {
             // Stop 会把挂起的权限/表单在 ACP 侧一并 cancel；卡片立即收走。
             chat.elicitations.clear();
             chat.turn_started = None;
+            // 停止即视为放弃本轮，排队消息一并清掉，避免停完又自动发出去。
+            if !chat.queued.is_empty() {
+                chat.queued.clear();
+                cleared_queue = true;
+            }
         }
         // 群任务台账：停止本轮所有开放任务，避免列表停在 Running。
         if let Some(Selection::Group(index)) = self.selection
@@ -5192,6 +5353,9 @@ impl PilotApp {
             refresh_group_tasks_view(self.group_tasks_view.as_ref(), &key, cx);
         }
         self.backend.stop(key);
+        if cleared_queue {
+            self.toast(i18n::t("已停止，排队消息已清空"), cx);
+        }
         cx.notify();
     }
 
@@ -18855,6 +19019,7 @@ impl Default for ChatState {
             streaming: false,
             turn_started: None,
             retry: None,
+            queued: Vec::new(),
             ready: false,
             status: String::new(),
             error: false,
@@ -20497,6 +20662,45 @@ fn normalize_tool_state(state: &str) -> &str {
         "scheduled" => "pending",
         other => other,
     }
+}
+
+/// 首字前的「正在输入」三点气泡（错峰呼吸；无额外计时行）。
+fn typing_bubble() -> gpui::AnyElement {
+    let mut dots = div().flex().items_center().gap(px(4.));
+    for index in 0..3 {
+        dots = dots.child(
+            div()
+                .size(px(5.))
+                .rounded_full()
+                .bg(wecom_theme::time_label())
+                .with_animation(
+                    SharedString::from(format!("typing-dot-{index}")),
+                    gpui::Animation::new(Duration::from_millis(1100)).repeat(),
+                    move |el, delta| {
+                        let phase = (delta + index as f32 * 0.2) % 1.0;
+                        let wave = (phase * std::f32::consts::TAU).sin().max(0.0);
+                        el.opacity(0.35 + 0.65 * wave)
+                    },
+                ),
+        );
+    }
+    div()
+        .w_full()
+        .px(px(14.))
+        .pb(px(4.))
+        .flex()
+        .justify_start()
+        .child(
+            div()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(wecom_theme::composer_border())
+                .bg(wecom_theme::panel_card_bg())
+                .px(px(10.))
+                .py(px(8.))
+                .child(dots),
+        )
+        .into_any_element()
 }
 
 fn tool_state_label(state: &str) -> &'static str {
@@ -22349,6 +22553,7 @@ impl PilotApp {
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
             .children(self.group_task_bar(cx))
+            .children(self.queue_panel(cx))
             .child(self.wecom_composer(window, cx))
     }
 
@@ -22692,8 +22897,22 @@ impl PilotApp {
     /// 转录底部的「工作中 N 秒」行（streaming 时显示，1s ticker 刷新）。
     fn wecom_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
-        let (started, waiting, retry) = {
+        let (started, waiting, retry, has_output) = {
             let chat = self.chats.get(&key)?;
+            let turn_start = chat
+                .messages
+                .iter()
+                .rposition(|message| message.role == Role::User)
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let has_output = chat
+                .messages
+                .get(turn_start..)
+                .is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        message.kind == MsgKind::Tool || !message.text.trim().is_empty()
+                    })
+                });
             (
                 chat.turn_started,
                 !chat.permissions.is_empty()
@@ -22702,12 +22921,17 @@ impl PilotApp {
                 chat.retry
                     .as_ref()
                     .map(|retry| (retry.attempt, retry.max_retries, retry.reason.clone())),
+                has_output,
             )
         };
         if waiting {
             return None;
         }
         let started = started?;
+        // 首字前的空窗：三点「正在输入」气泡，出字/出工具后让位给工作中行。
+        if !has_output && retry.is_none() {
+            return Some(typing_bubble());
+        }
         self.ensure_working_ticker(cx);
         let elapsed = time::now_ms().saturating_sub(started);
         let spinner = gpui::svg()
@@ -22773,6 +22997,123 @@ impl PilotApp {
                         .text_color(wecom_theme::time_label())
                         .child(SharedString::from(elapsed_label(elapsed))),
                 )
+                .into_any_element(),
+        )
+    }
+
+    /// 排队消息条：回合进行中继续发送的消息，结束前可逐条移除。
+    fn queue_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let chat = self.chats.get(&key)?;
+        if chat.queued.is_empty() {
+            return None;
+        }
+        let mut rows = div().w_full().flex().flex_col().pb(px(2.));
+        for (index, item) in chat.queued.iter().enumerate() {
+            let preview = tool_render::single_line(&item.text, 60);
+            let attachment_count = item.attachments.len();
+            let remove_key = key.clone();
+            rows = rows.child(
+                div()
+                    .w_full()
+                    .h(px(24.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(10.))
+                            .text_color(wecom_theme::time_label())
+                            .child(SharedString::from(format!("{}.", index + 1))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(wecom_theme::list_preview())
+                            .child(SharedString::from(preview)),
+                    )
+                    .children((attachment_count > 0).then(|| {
+                        div()
+                            .flex_shrink_0()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(10.))
+                            .text_color(wecom_theme::time_label())
+                            .child(SharedString::from(if i18n::is_en() {
+                                format!("+{attachment_count} files")
+                            } else {
+                                format!("+{attachment_count} 附件")
+                            }))
+                    }))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("queue-remove-{index}")))
+                            .size(px(18.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Some(chat) = this.chats.get_mut(&remove_key)
+                                    && index < chat.queued.len()
+                                {
+                                    chat.queued.remove(index);
+                                }
+                                cx.notify();
+                            }))
+                            .child(icons::icon(icons::Icon::X, 11., wecom_theme::time_label())),
+                    ),
+            );
+        }
+        Some(
+            div()
+                .mx(px(14.))
+                .mb(px(4.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(wecom_theme::composer_border())
+                .bg(wecom_theme::panel_card_bg())
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h(px(24.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .child(icons::icon(
+                            icons::Icon::ListChecks,
+                            12.,
+                            wecom_theme::time_label(),
+                        ))
+                        .child(
+                            div()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(wecom_theme::time_label())
+                                .child(SharedString::from(if i18n::is_en() {
+                                    format!(
+                                        "{} queued · sends after this turn",
+                                        chat.queued.len()
+                                    )
+                                } else {
+                                    format!(
+                                        "排队中 {} 条 · 回复结束后自动发送",
+                                        chat.queued.len()
+                                    )
+                                })),
+                        ),
+                )
+                .child(rows)
                 .into_any_element(),
         )
     }
