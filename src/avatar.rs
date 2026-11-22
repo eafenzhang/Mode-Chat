@@ -6,28 +6,12 @@
 //! 机器人面是原版 `ui/avatar.tsx` 的四段 SVG（24 viewBox、stroke 2），与图标同一套
 //! `svg().data()` 渲染管线。
 
-use std::sync::{Arc, OnceLock};
-
 use gpui::{
-    div, hsla, img, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
-    Image, ImageFormat, IntoElement, ParentElement, Rgba, Styled,
+    div, hsla, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
+    IntoElement, ParentElement, Rgba, Styled,
 };
 
 use crate::theme;
-
-/// 应用图标（WorkBuddy 风格的绿底白猫 + 面罩），embed 在 exe 里。
-static APP_ICON: OnceLock<Arc<Image>> = OnceLock::new();
-
-fn app_icon_image() -> Arc<Image> {
-    APP_ICON
-        .get_or_init(|| {
-            Arc::new(Image::from_bytes(
-                ImageFormat::Png,
-                include_bytes!("../assets/icons/app.png").to_vec(),
-            ))
-        })
-        .clone()
-}
 
 /// 头像色相哈希：照原版 `avatarHash`（`hash = hash*31 + charCode`，取绝对值）。
 /// 用 UTF-16 码元与 JS 的 `charCodeAt` 对齐。
@@ -44,23 +28,14 @@ pub fn avatar_hue(id: &str) -> f32 {
     (avatar_hash(id) % 360) as f32
 }
 
-/// 机器人面变体（0..3）。
+/// 机器人面变体（0..3；旧色相头像测试用）。
+#[cfg(test)]
 pub fn avatar_variant(id: &str) -> usize {
     (avatar_hash(id) % 4) as usize
 }
 
 fn deg(h: f32, s: f32, l: f32, a: f32) -> Hsla {
     hsla(h / 360.0, s, l, a)
-}
-
-/// BOT 机器人面（按变体）。
-fn bot_face(variant: usize) -> &'static [u8] {
-    match variant % 4 {
-        0 => include_bytes!("../assets/icons/bot-face-0.svg"),
-        1 => include_bytes!("../assets/icons/bot-face-1.svg"),
-        2 => include_bytes!("../assets/icons/bot-face-2.svg"),
-        _ => include_bytes!("../assets/icons/bot-face-3.svg"),
-    }
 }
 
 /// 头像外壳：色相渐变 + 内描边 + 外阴影。
@@ -107,77 +82,90 @@ pub fn bot_icon_tile(icon: &str, color: &str, size: f32, radius: f32) -> AnyElem
 }
 
 /// 只有机器人分层的版本（选择器格子自己画底色/描边）。
-pub fn bot_icon_glyph(icon: &str, tile_size: f32) -> AnyElement {
-    icon_layers(
-        icon,
-        gpui::rgb(0xffffff),
-        gpui::rgb(0x0a0b0c),
-        tile_size * 0.72,
-    )
-    .into_any_element()
+pub fn bot_icon_glyph(icon: &str, tile_size: f32, background: Rgba) -> AnyElement {
+    icon_layers(icon, gpui::rgb(0xffffff), background, tile_size).into_any_element()
 }
 
-/// 面罩机器人分层：头/天线剪影 + 面罩 + 眼睛 + 嘴。
+/// 应用图标的 Bot 版分层：白气泡 + 面罩（用底色）+ 白眼睛。
+/// 图标 id 仍保留在存储里以兼容旧 Bot，但所有 id 都渲染同一套新图形。
 fn icon_layers(
-    icon: &str,
+    _icon: &str,
     tint: Rgba,
     dark: Rgba,
     glyph_size: f32,
 ) -> gpui::Div {
-    let k = glyph_size / 640.0;
-    let mut glyph = div()
+    let side = px(glyph_size);
+    // 面罩比底色暗一档，小尺寸下白色眼睛才有对比。
+    let visor = Rgba {
+        r: dark.r * 0.76,
+        g: dark.g * 0.76,
+        b: dark.b * 0.76,
+        a: dark.a,
+    };
+    let layer = |bytes: &'static [u8], color: Rgba| {
+        svg()
+            .data(bytes)
+            .absolute()
+            .top(px(0.))
+            .left(px(0.))
+            .size(side)
+            .text_color(color)
+    };
+    div()
         .relative()
-        .size(px(glyph_size))
-        .child(
-            svg()
-                .data(crate::bot_icon::head_svg())
-                .size(px(glyph_size))
-                .text_color(tint),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(px(120. * k))
-                .top(px(286. * k))
-                .w(px(400. * k))
-                .h(px(172. * k))
-                .rounded(px(86. * k))
-                .bg(dark)
-                .flex()
-                .items_center()
-                .justify_center()
-                // 眼睛放进面罩内部，保证在面罩底色之上。
-                .child(
-                    svg()
-                        .data(crate::bot_icon::eyes_svg(icon))
-                        .w(px(400. * k))
-                        .h(px(172. * k))
-                        .text_color(tint),
-                ),
-        );
-    if let Some(mouth) = crate::bot_icon::mouth_svg(icon) {
-        glyph = glyph.child(
-            svg()
-                .data(mouth)
-                .absolute()
-                .left(px(248. * k))
-                .top(px(468. * k))
-                .w(px(144. * k))
-                .h(px(90. * k))
-                .text_color(dark),
-        );
-    }
-    glyph
+        .size(side)
+        // 头像单独用居中、无尾巴、无倾斜的图层：小尺寸下不会被尾巴带偏。
+        .child(layer(
+            include_bytes!("../assets/icons/bot-avatar-bubble.svg"),
+            tint,
+        ))
+        .child(layer(
+            include_bytes!("../assets/icons/bot-avatar-visor.svg"),
+            visor,
+        ))
+        .child(layer(
+            include_bytes!("../assets/icons/bot-avatar-eyes.svg"),
+            tint,
+        ))
 }
 
 /// App 图标（矢量版）：近黑圆角底 + K1 绿色机器人，任意尺寸都清晰。
 pub fn app_icon(size: f32, radius: f32) -> AnyElement {
+    // 矢量分层：渐变底 + 白气泡/尾巴 + 绿面罩 + 白眼睛。
+    // 不缩放位图，36/26/18px 下也保持锐利。
+    let side = px(size);
+    let layer = |bytes: &'static [u8], color: Rgba| {
+        svg()
+            .data(bytes)
+            .absolute()
+            .top(px(0.))
+            .left(px(0.))
+            .size(side)
+            .text_color(color)
+    };
     div()
-        .size(px(size))
+        .relative()
+        .size(side)
         .flex_shrink_0()
         .rounded(px(radius))
         .overflow_hidden()
-        .child(img(app_icon_image()).size(px(size)))
+        .bg(linear_gradient(
+            135.0,
+            linear_color_stop(gpui::rgba(0x1ad6a8ff), 0.0),
+            linear_color_stop(gpui::rgba(0x28be70ff), 1.0),
+        ))
+        .child(layer(
+            include_bytes!("../assets/icons/app-layer-bubble.svg"),
+            gpui::rgb(0xffffff),
+        ))
+        .child(layer(
+            include_bytes!("../assets/icons/app-layer-visor.svg"),
+            gpui::rgb(0x0eac78),
+        ))
+        .child(layer(
+            include_bytes!("../assets/icons/app-layer-eyes.svg"),
+            gpui::rgb(0xffffff),
+        ))
         .into_any_element()
 }
 
@@ -191,7 +179,6 @@ pub fn bot_icon_tile_rect(
 ) -> AnyElement {
     let size = width.min(height);
     let white = gpui::rgb(0xffffff);
-    let dark = gpui::rgb(0x0a0b0c);
     let bg = crate::bot_icon::parse_color(color);
     div()
         .w(px(width))
@@ -199,10 +186,12 @@ pub fn bot_icon_tile_rect(
         .flex_shrink_0()
         .rounded(px(radius))
         .bg(bg)
+        .overflow_hidden()
         .flex()
         .items_center()
         .justify_center()
-        .child(icon_layers(icon, white, dark, size * 0.72))
+        // 与应用图标同一比例；图形在画布里略偏右下，这里补偿回视觉中心。
+        .child(icon_layers(icon, white, bg, size))
         .into_any_element()
 }
 
@@ -216,21 +205,13 @@ pub fn bot_avatar(id: &str, size: f32) -> AnyElement {
             (size * 0.24).max(4.),
         );
     }
-    let hue = avatar_hue(id);
-    let fg = if theme::is_light() {
-        deg(hue, 0.52, 0.30, 1.)
-    } else {
-        deg(hue, 0.65, 0.88, 1.)
-    };
-    let glyph = (size * 0.52).max(10.0);
-    shell(hue, size, size, size / 2.0)
-        .child(
-            svg()
-                .data(bot_face(avatar_variant(id)))
-                .size(px(glyph))
-                .text_color(fg),
-        )
-        .into_any_element()
+    // 没有自定义外观的旧 Bot 也统一用新应用图标（默认绿底）。
+    bot_icon_tile(
+        crate::bot_icon::DEFAULT_ICON,
+        crate::bot_icon::DEFAULT_COLOR,
+        size,
+        (size * 0.24).max(4.),
+    )
 }
 
 /// 本机用户头像：与 App 图标同构的矢量版，任意尺寸都清晰。
@@ -249,21 +230,13 @@ pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> AnyEle
             radius,
         );
     }
-    let hue = avatar_hue(id);
-    let fg = if theme::is_light() {
-        deg(hue, 0.52, 0.30, 1.)
-    } else {
-        deg(hue, 0.65, 0.88, 1.)
-    };
-    let glyph = (width.min(height) * 0.52).max(8.0);
-    shell(hue, width, height, radius)
-        .child(
-            svg()
-                .data(bot_face(avatar_variant(id)))
-                .size(px(glyph))
-                .text_color(fg),
-        )
-        .into_any_element()
+    bot_icon_tile_rect(
+        crate::bot_icon::DEFAULT_ICON,
+        crate::bot_icon::DEFAULT_COLOR,
+        width,
+        height,
+        radius,
+    )
 }
 
 /// 群聊头像（同一套色相，前景 `#`）。

@@ -182,9 +182,8 @@ fn main_window() -> Hwnd {
 
 fn load_icon() -> Hicon {
     let path = crate::instance::state_dir().join("app.ico");
-    if !path.exists() {
-        let _ = std::fs::write(&path, crate::window_style::icon_bytes());
-    }
+    // 总是覆盖，避免沿用上一代图标的缓存文件。
+    let _ = std::fs::write(&path, crate::window_style::icon_bytes());
     let wide_path = wide(&path.to_string_lossy());
     // SAFETY: 路径是 NUL 结尾宽字符串；失败返回空指针（下面判空）。
     unsafe {

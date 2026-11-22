@@ -2679,6 +2679,7 @@ impl Render for BotFormState {
                         .size(px(38.))
                         .rounded(px(9.))
                         .bg(bot_icon::parse_color(&self.color))
+                        .overflow_hidden()
                         .border_1()
                         .border_color(if selected { accent } else { transparent })
                         .flex()
@@ -2691,7 +2692,11 @@ impl Render for BotFormState {
                             this.error = None;
                             cx.notify();
                         }))
-                        .child(avatar::bot_icon_glyph(key, 38.))
+                        .child(avatar::bot_icon_glyph(
+                            key,
+                            38.,
+                            bot_icon::parse_color(&self.color),
+                        ))
                         .into_any_element(),
                 );
             }
@@ -4232,10 +4237,16 @@ impl PilotApp {
         name.update(cx, |input, cx| input.set_content(name_text, cx));
         role.update(cx, |input, cx| input.set_content(role_text, cx));
         directory.update(cx, |input, cx| input.set_content(directory_text, cx));
+        // 图标只剩一套：旧 Bot 存的 k1..k9 归一成新图标，颜色沿用。
         let (appearance_icon, appearance_color) = editing_id
             .as_deref()
             .and_then(bot_icon::get)
-            .map(|appearance| (appearance.icon, appearance.color))
+            .map(|appearance| {
+                (
+                    bot_icon::DEFAULT_ICON.to_string(),
+                    appearance.color,
+                )
+            })
             .unwrap_or_else(|| {
                 (
                     bot_icon::DEFAULT_ICON.to_string(),

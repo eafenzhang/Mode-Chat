@@ -52,10 +52,9 @@ pub fn apply() {
     }
 
     // 2) 任务栏图标：把嵌入的 ico 落到试点目录再从文件加载（避免解析 ICO 结构）。
+    // 每次都覆盖：旧版本缓存会让任务栏一直显示上一代图标。
     let icon_path = crate::instance::state_dir().join("app.ico");
-    if !icon_path.exists()
-        && let Err(error) = std::fs::write(&icon_path, ICON_BYTES)
-    {
+    if let Err(error) = std::fs::write(&icon_path, ICON_BYTES) {
         eprintln!("[window] 图标写入失败：{error}");
         return;
     }

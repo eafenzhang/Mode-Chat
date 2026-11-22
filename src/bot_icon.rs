@@ -10,21 +10,12 @@ use std::sync::{OnceLock, RwLock};
 
 use gpui::{rgb, Rgba};
 
-pub const DEFAULT_ICON: &str = "k1";
+pub const DEFAULT_ICON: &str = "app";
 pub const DEFAULT_COLOR: &str = "#2ed17f";
 
-/// 选择器顺序：中性、微笑、开心、眨眼、困倦、星星眼、爱心眼、惊讶、生气。
-pub const ICONS: [(&str, &str); 9] = [
-    ("k1", "中性"),
-    ("k9", "微笑"),
-    ("k2", "开心"),
-    ("k3", "眨眼"),
-    ("k4", "困倦"),
-    ("k5", "星星眼"),
-    ("k6", "爱心眼"),
-    ("k7", "惊讶"),
-    ("k8", "生气"),
-];
+/// 头像统一用新应用图标（对话气泡机器人）；底色仍可选。
+/// 旧 Bot 存的 k1..k9 仍能读到，但渲染一律用同一套图形。
+pub const ICONS: [(&str, &str); 1] = [("app", "气泡机器人")];
 
 pub const COLORS: [(&str, &str); 8] = [
     ("#2ed17f", "绿"),
@@ -123,41 +114,6 @@ fn persist() -> Result<(), String> {
         .map_err(|error| format!("图标偏好写入失败：{error}"))
 }
 
-/// 头部（天线/耳朵/脸）单色剪影：GPUI 的 svg 按 alpha 整体染色。
-pub fn head_svg() -> &'static [u8] {
-    include_bytes!("../assets/icons/bot-head.svg")
-}
-
-/// 表情眼睛（面罩内的形状，单色剪影）。
-pub fn eyes_svg(key: &str) -> &'static [u8] {
-    match key {
-        "k9" => include_bytes!("../assets/icons/bot-eyes-k9.svg"),
-        "k2" => include_bytes!("../assets/icons/bot-eyes-k2.svg"),
-        "k3" => include_bytes!("../assets/icons/bot-eyes-k3.svg"),
-        "k4" => include_bytes!("../assets/icons/bot-eyes-k4.svg"),
-        "k5" => include_bytes!("../assets/icons/bot-eyes-k5.svg"),
-        "k6" => include_bytes!("../assets/icons/bot-eyes-k6.svg"),
-        "k7" => include_bytes!("../assets/icons/bot-eyes-k7.svg"),
-        "k8" => include_bytes!("../assets/icons/bot-eyes-k8.svg"),
-        _ => include_bytes!("../assets/icons/bot-eyes-k1.svg"),
-    }
-}
-
-/// 嘴（没有嘴的表情返回 None）。
-pub fn mouth_svg(key: &str) -> Option<&'static [u8]> {
-    match key {
-        "k9" => Some(include_bytes!("../assets/icons/bot-mouth-k9.svg")),
-        "k2" => Some(include_bytes!("../assets/icons/bot-mouth-k2.svg")),
-        "k3" => Some(include_bytes!("../assets/icons/bot-mouth-k3.svg")),
-        "k4" => Some(include_bytes!("../assets/icons/bot-mouth-k4.svg")),
-        "k5" => Some(include_bytes!("../assets/icons/bot-mouth-k5.svg")),
-        "k6" => Some(include_bytes!("../assets/icons/bot-mouth-k6.svg")),
-        "k7" => Some(include_bytes!("../assets/icons/bot-mouth-k7.svg")),
-        "k8" => Some(include_bytes!("../assets/icons/bot-mouth-k8.svg")),
-        _ => None,
-    }
-}
-
 pub fn icon_label(key: &str) -> &'static str {
     ICONS
         .iter()
@@ -186,12 +142,9 @@ mod tests {
     }
 
     #[test]
-    fn every_icon_has_asset() {
-        for (key, _) in ICONS {
-            assert!(!eyes_svg(key).is_empty());
-        }
-        assert!(!head_svg().is_empty());
-        assert!(mouth_svg("k1").is_none());
-        assert!(mouth_svg("k2").is_some());
+    fn default_icon_is_selectable_and_legacy_values_fall_back() {
+        assert!(ICONS.iter().any(|(key, _)| *key == DEFAULT_ICON));
+        assert_eq!(icon_label("k3"), ICONS[0].1);
+        assert_eq!(icon_label(DEFAULT_ICON), ICONS[0].1);
     }
 }
