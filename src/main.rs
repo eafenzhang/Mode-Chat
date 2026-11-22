@@ -799,6 +799,8 @@ struct ChatState {
     pending_usage: Option<TurnUsageView>,
     /// 最近一轮结束后的统计（回合尾一行小字）。
     last_turn: Option<TurnReport>,
+    /// 回合尾「本轮改动」文件清单是否展开。
+    edit_summary_open: bool,
     ready: bool,
     status: String,
     error: bool,
@@ -849,6 +851,15 @@ struct QueuedSend {
     payload: String,
     attachments: Vec<backend::AttachmentUpload>,
     attachment_names: Vec<String>,
+}
+
+/// 会话内查找：只搜正文消息，当前命中用行底色标出。
+struct ChatFindState {
+    key: String,
+    input: Entity<SimpleInput>,
+    query: String,
+    matches: Vec<usize>,
+    current: usize,
 }
 
 /// 供应商请求重试状态（attempt 从 1 开始，不含首次请求）。
@@ -3005,6 +3016,11 @@ struct PilotApp {
     autostart_enabled: bool,
     /// 会话全文搜索对话框。
     find_dialog: Option<FindState>,
+    /// 会话内查找（独立于 Ctrl+F 的全局搜索）。
+    chat_find: Option<ChatFindState>,
+    /// 当前 transcript 的消息下标 → 行下标（查找跳转用）。
+    wecom_message_rows: HashMap<usize, usize>,
+    pending_find_scroll: bool,
     /// 搜索结果键盘高亮项（Tab/Shift+Tab 移动、Enter 跳转）。
     find_selected: usize,
     /// 搜索请求序号：异步结果回来时只有最新的那一份能落到 UI（防抖 + 丢弃过期）。
@@ -3130,6 +3146,8 @@ enum DetailMenuAction {
     ToggleMute(String, bool),
     ShareConversation(String),
     ExportConversation(String),
+    FindInChat,
+    RunStatus(String),
     CopySessionId(String),
 }
 
@@ -3251,11 +3269,13 @@ enum WecomRow {
         text: String,
         attachments: Vec<String>,
         attachment_meta: Vec<backend::HistoryAttachment>,
+        find_hit: bool,
     },
     Assistant {
         text: String,
         author: String,
         author_id: String,
+        find_hit: bool,
     },
     Reasoning {
         /// 展开态键（消息时间 + 成员，跨窗口稳定）。
@@ -3464,6 +3484,9 @@ impl PilotApp {
             history_images_pending: HashSet::new(),
             autostart_enabled: autostart::is_enabled(),
             find_dialog: None,
+            chat_find: None,
+            wecom_message_rows: HashMap::new(),
+            pending_find_scroll: false,
             find_selected: 0,
             find_seq: 0,
             palette: None,
@@ -3545,6 +3568,7 @@ impl PilotApp {
         }
         self.stash_draft(cx);
         self.selection = Some(Selection::Bot(index));
+        self.chat_find = None;
         self.active_tab = 0;
         if let Some(bot) = self.roster.bots.get(index) {
             let key = bot_key(&bot.id);
@@ -3797,6 +3821,7 @@ impl PilotApp {
         }
         self.stash_draft(cx);
         self.selection = Some(Selection::Group(index));
+        self.chat_find = None;
         self.active_tab = 0;
         if let Some(group) = self.roster.groups.get(index) {
             let key = group_key(&group.id);
@@ -4605,6 +4630,7 @@ impl PilotApp {
                         chat.retry = None;
                         chat.pending_usage = None;
                         chat.last_turn = None;
+                        chat.edit_summary_open = false;
                         chat.status = i18n::t("等待回复…").to_string();
                         chat.error = false;
                     }
@@ -6449,6 +6475,12 @@ impl PilotApp {
         if self.ime_composing(cx) {
             return;
         }
+        if self.chat_find.is_some() {
+            self.chat_find = None;
+            self.pending_find_scroll = false;
+            cx.notify();
+            return;
+        }
         if self.new_menu_open {
             self.new_menu_open = false;
             cx.notify();
@@ -6830,6 +6862,76 @@ impl PilotApp {
         });
         self.find_selected = 0;
         self.find_seq = self.find_seq.wrapping_add(1);
+        cx.notify();
+    }
+
+    /// 会话内查找：只搜当前 transcript 的正文消息。
+    fn open_chat_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let input = cx.new(|cx| {
+            SimpleInput::new(i18n::t("在当前会话中查找…"), theme::ink_tertiary, cx)
+        });
+        cx.observe(&input, |this: &mut Self, input, cx| {
+            if let Some(find) = this.chat_find.as_mut() {
+                find.query = input.read(cx).content().to_string();
+            }
+            this.recompute_chat_find();
+            this.pending_find_scroll = true;
+            cx.notify();
+        })
+        .detach();
+        let handle = input.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+        self.chat_find = Some(ChatFindState {
+            key,
+            input,
+            query: String::new(),
+            matches: Vec::new(),
+            current: 0,
+        });
+        self.pending_find_scroll = false;
+        cx.notify();
+    }
+
+    fn recompute_chat_find(&mut self) {
+        let Some(find) = self.chat_find.as_mut() else {
+            return;
+        };
+        let needle = find.query.trim().to_lowercase();
+        if needle.is_empty() {
+            find.matches.clear();
+            find.current = 0;
+            return;
+        }
+        if let Some(chat) = self.chats.get(&find.key) {
+            find.matches = chat
+                .messages
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| {
+                    message.kind == MsgKind::Text
+                        && message.text.to_lowercase().contains(&needle)
+                })
+                .map(|(index, _)| index)
+                .collect();
+        } else {
+            find.matches.clear();
+        }
+        find.current = 0;
+    }
+
+    fn chat_find_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(find) = self.chat_find.as_mut() else {
+            return;
+        };
+        if find.matches.is_empty() {
+            return;
+        }
+        let len = find.matches.len() as isize;
+        find.current = ((find.current as isize + delta).rem_euclid(len)) as usize;
+        self.pending_find_scroll = true;
         cx.notify();
     }
 
@@ -12915,6 +13017,16 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         DetailMenuAction::ExportConversation(key.clone()),
                     ));
                 }
+                entries.push((
+                    i18n::t("运行状态").to_string(),
+                    false,
+                    DetailMenuAction::RunStatus(key.clone()),
+                ));
+                entries.push((
+                    i18n::t("会话内查找").to_string(),
+                    false,
+                    DetailMenuAction::FindInChat,
+                ));
                 if self
                     .chats
                     .get(&key)
@@ -13003,6 +13115,16 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         DetailMenuAction::ExportConversation(key.clone()),
                     ));
                 }
+                entries.push((
+                    i18n::t("运行状态").to_string(),
+                    false,
+                    DetailMenuAction::RunStatus(key.clone()),
+                ));
+                entries.push((
+                    i18n::t("会话内查找").to_string(),
+                    false,
+                    DetailMenuAction::FindInChat,
+                ));
                 for section in &self.sidebar_sections.sections {
                     entries.push((
                         tri!("分组 · {}", "Section · {}", section.name),
@@ -13040,6 +13162,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             DetailMenuAction::ToggleMute(..) => icons::Icon::BellOff,
             DetailMenuAction::ShareConversation(_) => icons::Icon::MessageSquare,
             DetailMenuAction::ExportConversation(_) => icons::Icon::Download,
+            DetailMenuAction::FindInChat => icons::Icon::Search,
+            DetailMenuAction::RunStatus(_) => icons::Icon::Cpu,
             DetailMenuAction::CopySessionId(_) => icons::Icon::Key,
         }
     }
@@ -13213,6 +13337,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .detach();
                     }
                 }
+            }
+            DetailMenuAction::FindInChat => {
+                self.open_chat_find(window, cx);
+            }
+            DetailMenuAction::RunStatus(key) => {
+                self.open_run_status_dialog(key, window, cx);
             }
             DetailMenuAction::CopySessionId(key) => {
                 if let Some(session_id) = self
@@ -15264,6 +15394,110 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .scrollbar_width(px(6.))
                             .child(body),
                     )
+                })
+                .on_close(move |event, window, cx| restore(event, window, cx))
+        });
+    }
+
+    /// 运行状态：只读列出引擎/模型/会话/队列/本轮用量（无后台子代理时的等价面板）。
+    fn open_run_status_dialog(
+        &mut self,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let bot_id = key.strip_prefix("bot:");
+        let group = key
+            .strip_prefix("group:")
+            .and_then(|id| self.roster.groups.iter().find(|group| group.id == id));
+        let title = bot_id
+            .and_then(|id| self.roster.bot_by_id(id))
+            .map(|bot| bot.name.clone())
+            .or_else(|| group.map(|group| group.name.clone()))
+            .unwrap_or_else(|| "Mode Chat".to_string());
+        let engine = bot_id
+            .and_then(|id| self.sessions.engine_of(id))
+            .unwrap_or("mode");
+        let engine_label = if group.is_some() {
+            i18n::t("群聊 · 按成员").to_string()
+        } else if engine.is_empty() || engine.eq_ignore_ascii_case("mode") {
+            "Pi-Rust（内置）".to_string()
+        } else {
+            engine.to_string()
+        };
+        let model = bot_id
+            .and_then(|id| self.roster.bot_by_id(id))
+            .and_then(|bot| bot.model.as_ref())
+            .map(|model| model.label())
+            .unwrap_or_else(|| i18n::t("默认模型").to_string());
+        let workspace = bot_id
+            .and_then(|id| self.roster.bot_by_id(id))
+            .map(|bot| bot.directory.clone())
+            .or_else(|| group.and_then(|group| group.directory.clone()))
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or_else(|| i18n::t("未设置").to_string());
+        let chat = self.chats.get(&key);
+        let session = chat
+            .and_then(|chat| chat.session_id.as_deref())
+            .map(display_session_id)
+            .unwrap_or_else(|| i18n::t("尚未建立").to_string());
+        let status = chat
+            .map(|chat| {
+                if chat.streaming {
+                    i18n::t("运行中").to_string()
+                } else if chat.status.trim().is_empty() {
+                    i18n::t("就绪").to_string()
+                } else {
+                    chat.status.clone()
+                }
+            })
+            .unwrap_or_else(|| i18n::t("未连接").to_string());
+        let messages = chat.map(|chat| chat.messages.len()).unwrap_or(0);
+        let queued = chat.map(|chat| chat.queued.len()).unwrap_or(0);
+        let pending = chat
+            .map(|chat| {
+                chat.permissions.len() + chat.questions.len() + chat.elicitations.len()
+            })
+            .unwrap_or(0);
+        let turn = chat
+            .and_then(|chat| chat.last_turn.as_ref())
+            .map(|report| {
+                format!(
+                    "{} · ↑{} ↓{}",
+                    elapsed_label(report.duration_ms),
+                    compact_tokens(report.usage.input),
+                    compact_tokens(report.usage.output)
+                )
+            })
+            .unwrap_or_else(|| "—".to_string());
+        let rows = vec![
+            (i18n::t("会话").to_string(), title),
+            (i18n::t("引擎").to_string(), engine_label),
+            (i18n::t("模型").to_string(), model),
+            (i18n::t("工作目录").to_string(), workspace),
+            (i18n::t("会话 ID").to_string(), session),
+            (i18n::t("状态").to_string(), status),
+            (i18n::t("消息数").to_string(), messages.to_string()),
+            (i18n::t("排队消息").to_string(), queued.to_string()),
+            (i18n::t("待处理审批/提问").to_string(), pending.to_string()),
+            (i18n::t("最近一轮").to_string(), turn),
+        ];
+        let restore = self.dialog_focus_restore(cx);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let restore = restore.clone();
+            let rows = rows.clone();
+            alert
+                .title(i18n::t("运行状态"))
+                .width(px(560.))
+                .centered()
+                .ok_text(i18n::t("关闭"))
+                .show_cancel(false)
+                .content(move |content, _, _| {
+                    let mut body = div().w_full().flex().flex_col().gap(px(6.));
+                    for (label, value) in &rows {
+                        body = body.child(settings_row(label.clone(), Some(value.clone())));
+                    }
+                    content.child(body)
                 })
                 .on_close(move |event, window, cx| restore(event, window, cx))
         });
@@ -18089,19 +18323,23 @@ fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
             text,
             attachments,
             attachment_meta,
+            find_hit,
         } => (text.len() as u64)
             .wrapping_mul(31)
             .wrapping_add(attachments.len() as u64)
             .wrapping_add(attachment_meta.len() as u64)
+            .wrapping_add(u64::from(*find_hit))
             + 20,
         WecomRow::Assistant {
             text,
             author,
             author_id,
+            find_hit,
         } => (text.len() as u64)
             .wrapping_mul(131)
             .wrapping_add(author.len() as u64)
             .wrapping_add(author_id.len() as u64)
+            .wrapping_add(u64::from(*find_hit))
             + 30,
         WecomRow::Tool { message, expanded } => tool_message_fingerprint(message)
             .wrapping_add(u64::from(*expanded) * 7919)
@@ -18407,19 +18645,23 @@ fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
                 text,
                 attachments,
                 attachment_meta,
+                find_hit,
             } => {
                 mix(text.len());
                 mix(attachments.len());
                 mix(attachment_meta.len());
+                mix(usize::from(*find_hit));
             }
             WecomRow::Assistant {
                 text,
                 author,
                 author_id,
+                find_hit,
             } => {
                 mix(text.len());
                 mix(author.len());
                 mix(author_id.len());
+                mix(usize::from(*find_hit));
             }
             WecomRow::Tool { message, expanded } => {
                 mix(tool_message_fingerprint(message) as usize);
@@ -18512,11 +18754,15 @@ fn wecom_row_el(
             text,
             attachments,
             attachment_meta,
+            find_hit,
         } => div()
             .w_full()
             .flex()
             .justify_end()
             .items_start()
+            .when(*find_hit, |el| {
+                el.rounded(px(6.)).bg(theme::accent_soft())
+            })
             .child(
                 div()
                     .max_w(px(bubble_max))
@@ -18549,6 +18795,7 @@ fn wecom_row_el(
             text,
             author,
             author_id: _,
+            find_hit,
         } => {
             let mut cell = div()
                 .flex_1()
@@ -18589,7 +18836,15 @@ fn wecom_row_el(
                 ));
             cell = cell.child(bubble);
             // 群聊不再显示头像，只保留气泡上方的成员名称。
-            div().w_full().flex().items_start().child(cell).into_any_element()
+            div()
+                .w_full()
+                .flex()
+                .items_start()
+                .when(*find_hit, |el| {
+                    el.rounded(px(6.)).bg(theme::accent_soft())
+                })
+                .child(cell)
+                .into_any_element()
         }
         WecomRow::Reasoning {
             key,
@@ -19189,6 +19444,7 @@ impl Default for ChatState {
             queued: Vec::new(),
             pending_usage: None,
             last_turn: None,
+            edit_summary_open: false,
             ready: false,
             status: String::new(),
             error: false,
@@ -20823,16 +21079,14 @@ fn elapsed_label(ms: u64) -> String {
     }
 }
 
-/// 当前回合的写文件汇总（从最后一条用户消息之后统计 edit/write 调用）。
-fn turn_edit_summary(messages: &[Message]) -> Option<(usize, usize, usize)> {
+/// 当前回合按文件聚合的改动（路径, 新增行, 删除行），按路径排序。
+fn turn_edit_details(messages: &[Message]) -> Vec<(String, usize, usize)> {
     let start = messages
         .iter()
         .rposition(|message| message.role == Role::User)
         .map(|index| index + 1)
         .unwrap_or(0);
-    let mut paths = HashSet::new();
-    let mut added = 0usize;
-    let mut removed = 0usize;
+    let mut files: HashMap<String, (usize, usize)> = HashMap::new();
     for message in &messages[start..] {
         if message.kind != MsgKind::Tool
             || tool_render::family(&message.tool_name) != tool_render::ToolFamily::Edit
@@ -20843,18 +21097,31 @@ fn turn_edit_summary(messages: &[Message]) -> Option<(usize, usize, usize)> {
             &message.tool_name,
             &message.tool_input,
             &message.tool_details,
-        ) {
-            if !info.path.is_empty() {
-                paths.insert(info.path);
-            }
-            added += info.added;
-            removed += info.removed;
+        ) && !info.path.is_empty()
+        {
+            let entry = files.entry(info.path).or_insert((0, 0));
+            entry.0 += info.added;
+            entry.1 += info.removed;
         }
     }
-    if paths.is_empty() && added + removed == 0 {
+    let mut rows: Vec<(String, usize, usize)> = files
+        .into_iter()
+        .map(|(path, (added, removed))| (path, added, removed))
+        .collect();
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    rows
+}
+
+/// 当前回合的写文件汇总（文件数、新增、删除；单测用）。
+#[cfg(test)]
+fn turn_edit_summary(messages: &[Message]) -> Option<(usize, usize, usize)> {
+    let rows = turn_edit_details(messages);
+    if rows.is_empty() {
         return None;
     }
-    Some((paths.len().max(1), added, removed))
+    let added = rows.iter().map(|(_, added, _)| *added).sum();
+    let removed = rows.iter().map(|(_, _, removed)| *removed).sum();
+    Some((rows.len(), added, removed))
 }
 
 /// token 数的紧凑展示：1234 → 1.2k。
@@ -22980,12 +23247,13 @@ impl PilotApp {
                             ),
                     ),
             )
+            .children(self.chat_find_bar(cx))
             .child(self.wecom_transcript(window, cx))
             .children(self.wecom_working_row(cx))
             .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
-            .children(self.turn_footer())
+            .children(self.turn_footer(cx))
             .children(self.group_task_bar(cx))
             .children(self.queue_panel(cx))
             .child(self.wecom_composer(window, cx))
@@ -23050,6 +23318,12 @@ impl PilotApp {
         }
         let start = chat.messages.len().saturating_sub(chat.transcript_limit);
         let chat_key = key.clone().unwrap_or_default();
+        let find_hit_message = self
+            .chat_find
+            .as_ref()
+            .filter(|find| find.key == chat_key)
+            .and_then(|find| find.matches.get(find.current).copied());
+        let mut message_rows: HashMap<usize, usize> = HashMap::new();
         let mut rows: Vec<WecomRow> = Vec::new();
         let mut turn_rows: Vec<usize> = Vec::new();
         if start > 0 {
@@ -23097,12 +23371,17 @@ impl PilotApp {
                         messages,
                         expanded,
                     });
+                    let row = rows.len() - 1;
+                    for child in index..index + count {
+                        message_rows.insert(child, row);
+                    }
                     tool_group_skip = index + count;
                 } else {
                     rows.push(WecomRow::Tool {
                         message: Box::new(message.clone()),
                         expanded: self.tool_expanded.contains(&message.tool_call_id),
                     });
+                    message_rows.insert(index, rows.len() - 1);
                 }
                 continue;
             }
@@ -23123,6 +23402,7 @@ impl PilotApp {
                     streaming: message.streaming,
                     duration_ms: message.duration_ms,
                 });
+                message_rows.insert(index, rows.len() - 1);
                 continue;
             }
             if is_group && message.role == Role::User && is_group_prompt(&message.text) {
@@ -23151,7 +23431,9 @@ impl PilotApp {
                     text: message.text.clone(),
                     attachments: message.attachments.clone(),
                     attachment_meta: message.attachment_meta.clone(),
+                    find_hit: find_hit_message == Some(index),
                 });
+                message_rows.insert(index, rows.len() - 1);
                 turn_rows.push(rows.len() - 1);
                 continue;
             }
@@ -23172,8 +23454,11 @@ impl PilotApp {
                 text: message.text.clone(),
                 author,
                 author_id,
+                find_hit: find_hit_message == Some(index),
             });
+            message_rows.insert(index, rows.len() - 1);
         }
+        self.wecom_message_rows = message_rows;
         let count = rows.len();
         let fingerprint = wecom_rows_fingerprint(&rows);
         let last_row_fingerprint = rows.last().map(wecom_row_fingerprint).unwrap_or(0);
@@ -23221,6 +23506,15 @@ impl PilotApp {
                 .update(cx, |state, cx| state.remeasure(cx));
             self.wecom_rows_fingerprint = fingerprint;
             self.wecom_last_row_fingerprint = last_row_fingerprint;
+        }
+        if self.pending_find_scroll {
+            self.pending_find_scroll = false;
+            if let Some(hit) = find_hit_message
+                && let Some(row) = self.wecom_message_rows.get(&hit).copied()
+            {
+                self.wecom_scroller
+                    .update(cx, |state, cx| state.scroll_to_item(row, cx));
+            }
         }
         let turn_rows = std::sync::Arc::new(turn_rows);
         let rows = std::sync::Arc::new(rows);
@@ -23436,63 +23730,254 @@ impl PilotApp {
     }
 
     /// 回合尾统计：一行 10px 小字（用时 + token），不打断正文阅读。
-    fn turn_footer(&self) -> Option<gpui::AnyElement> {
+    fn turn_footer(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
-        let chat = self.chats.get(&key)?;
-        if chat.streaming
-            || !chat.permissions.is_empty()
-            || !chat.questions.is_empty()
-            || !chat.elicitations.is_empty()
-        {
-            return None;
-        }
-        let report = chat.last_turn.as_ref()?;
-        let mut parts: Vec<String> = Vec::new();
-        if let Some((files, added, removed)) = turn_edit_summary(&chat.messages) {
-            parts.push(if i18n::is_en() {
-                format!("{files} files changed +{added} -{removed}")
+        let (details, open, report) = {
+            let chat = self.chats.get(&key)?;
+            if chat.streaming
+                || !chat.permissions.is_empty()
+                || !chat.questions.is_empty()
+                || !chat.elicitations.is_empty()
+            {
+                return None;
+            }
+            let report = chat.last_turn.as_ref()?;
+            (
+                turn_edit_details(&chat.messages),
+                chat.edit_summary_open,
+                (report.usage, report.duration_ms),
+            )
+        };
+        let (usage, duration_ms) = report;
+        let mut stats: Vec<String> = Vec::new();
+        if duration_ms >= 1000 {
+            stats.push(if i18n::is_en() {
+                format!("{} elapsed", elapsed_label(duration_ms))
             } else {
-                format!("改动 {files} 个文件 +{added} -{removed}")
+                format!("用时 {}", elapsed_label(duration_ms))
             });
         }
-        if report.duration_ms >= 1000 {
-            parts.push(if i18n::is_en() {
-                format!("{} elapsed", elapsed_label(report.duration_ms))
-            } else {
-                format!("用时 {}", elapsed_label(report.duration_ms))
-            });
-        }
-        if report.usage.input > 0 || report.usage.output > 0 {
-            parts.push(format!(
+        if usage.input > 0 || usage.output > 0 {
+            stats.push(format!(
                 "↑{} ↓{}",
-                compact_tokens(report.usage.input),
-                compact_tokens(report.usage.output)
+                compact_tokens(usage.input),
+                compact_tokens(usage.output)
             ));
         }
-        if report.usage.cache_read > 0 {
-            parts.push(if i18n::is_en() {
-                format!("cache {}", compact_tokens(report.usage.cache_read))
+        if usage.cache_read > 0 {
+            stats.push(if i18n::is_en() {
+                format!("cache {}", compact_tokens(usage.cache_read))
             } else {
-                format!("缓存 {}", compact_tokens(report.usage.cache_read))
+                format!("缓存 {}", compact_tokens(usage.cache_read))
             });
         }
-        if parts.is_empty() {
+        if details.is_empty() && stats.is_empty() {
             return None;
         }
-        Some(
-            div()
+        let mut column = div().w_full().px(px(14.)).pb(px(2.)).flex().flex_col().gap(px(2.));
+        if !details.is_empty() {
+            let files = details.len();
+            let added: usize = details.iter().map(|(_, added, _)| *added).sum();
+            let removed: usize = details.iter().map(|(_, _, removed)| *removed).sum();
+            let mut card = div()
                 .w_full()
-                .px(px(14.))
-                .pb(px(2.))
-                .flex()
-                .justify_end()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(wecom_theme::composer_border())
+                .bg(wecom_theme::panel_card_bg())
+                .overflow_hidden()
                 .child(
+                    div()
+                        .id("turn-files-toggle")
+                        .h(px(26.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            if let Some(key) = this.active_key()
+                                && let Some(chat) = this.chats.get_mut(&key)
+                            {
+                                chat.edit_summary_open = !chat.edit_summary_open;
+                            }
+                            cx.notify();
+                        }))
+                        .child(icons::icon(
+                            icons::Icon::Pencil,
+                            12.,
+                            wecom_theme::time_label(),
+                        ))
+                        .child(
+                            div()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .text_color(wecom_theme::list_preview())
+                                .child(SharedString::from(if i18n::is_en() {
+                                    format!("This turn changed {files} files")
+                                } else {
+                                    format!("本轮改动 {files} 个文件")
+                                })),
+                        )
+                        .child(div().flex_1())
+                        .child(diff_count_el(added, removed))
+                        .child(icons::icon(
+                            if open {
+                                icons::Icon::ChevronLeft
+                            } else {
+                                icons::Icon::ChevronRight
+                            },
+                            12.,
+                            wecom_theme::icon(),
+                        )),
+                );
+            if open {
+                let mut rows = div().w_full().flex().flex_col().pb(px(2.));
+                for (path, added, removed) in &details {
+                    rows = rows.child(
+                        div()
+                            .h(px(20.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(10.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(SharedString::from(path.clone())),
+                            )
+                            .children((*added > 0).then(|| {
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(10.))
+                                    .text_color(theme::success())
+                                    .child(SharedString::from(format!("+{added}")))
+                            }))
+                            .children((*removed > 0).then(|| {
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(10.))
+                                    .text_color(theme::danger())
+                                    .child(SharedString::from(format!("-{removed}")))
+                            })),
+                    );
+                }
+                card = card.child(rows);
+            }
+            column = column.child(card);
+        }
+        if !stats.is_empty() {
+            column = column.child(
+                div().w_full().flex().justify_end().child(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)
                         .text_size(px(10.))
                         .line_height(px(14.))
                         .text_color(wecom_theme::time_label())
-                        .child(SharedString::from(parts.join(" · "))),
+                        .child(SharedString::from(stats.join(" · "))),
+                ),
+            );
+        }
+        Some(column.into_any_element())
+    }
+
+    /// 会话内查找条：输入即搜，↑/↓ 跳命中，Esc/× 关闭。
+    fn chat_find_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let find = self.chat_find.as_ref()?;
+        if self.active_key().as_deref() != Some(find.key.as_str()) {
+            return None;
+        }
+        let count = if find.matches.is_empty() {
+            i18n::t("无结果").to_string()
+        } else {
+            format!("{}/{}", find.current + 1, find.matches.len())
+        };
+        let input = find.input.clone();
+        let nav_button = |id: &'static str,
+                          label: &'static str,
+                          previous: bool,
+                          cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .size(px(22.))
+                .rounded(px(4.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.chat_find_step(if previous { -1 } else { 1 }, cx);
+                }))
+                .child(
+                    div()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(12.))
+                        .text_color(wecom_theme::icon())
+                        .child(label),
+                )
+        };
+        Some(
+            div()
+                .mx(px(14.))
+                .mb(px(4.))
+                .h(px(32.))
+                .flex_shrink_0()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(wecom_theme::composer_border())
+                .bg(wecom_theme::panel_card_bg())
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(icons::icon(
+                    icons::Icon::Search,
+                    13.,
+                    wecom_theme::time_label(),
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h(px(24.))
+                        .child(input),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(wecom_theme::FONT_FAMILY)
+                        .text_size(px(10.))
+                        .text_color(wecom_theme::time_label())
+                        .child(SharedString::from(count)),
+                )
+                .child(nav_button("chat-find-prev", "↑", true, cx))
+                .child(nav_button("chat-find-next", "↓", false, cx))
+                .child(
+                    div()
+                        .id("chat-find-close")
+                        .size(px(22.))
+                        .rounded(px(4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.chat_find = None;
+                            this.pending_find_scroll = false;
+                            cx.notify();
+                        }))
+                        .child(icons::icon(icons::Icon::X, 12., wecom_theme::time_label())),
                 )
                 .into_any_element(),
         )
