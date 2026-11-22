@@ -3146,6 +3146,7 @@ enum DetailMenuAction {
     ToggleMute(String, bool),
     ShareConversation(String),
     ExportConversation(String),
+    ImportMarkdown(String),
     FindInChat,
     RunStatus(String),
     CopySessionId(String),
@@ -13027,6 +13028,13 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     false,
                     DetailMenuAction::FindInChat,
                 ));
+                if let Some(bot_id) = key.strip_prefix("bot:") {
+                    entries.push((
+                        i18n::t("导入 Markdown…").to_string(),
+                        false,
+                        DetailMenuAction::ImportMarkdown(bot_id.to_string()),
+                    ));
+                }
                 if self
                     .chats
                     .get(&key)
@@ -13162,6 +13170,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             DetailMenuAction::ToggleMute(..) => icons::Icon::BellOff,
             DetailMenuAction::ShareConversation(_) => icons::Icon::MessageSquare,
             DetailMenuAction::ExportConversation(_) => icons::Icon::Download,
+            DetailMenuAction::ImportMarkdown(_) => icons::Icon::Folder,
             DetailMenuAction::FindInChat => icons::Icon::Search,
             DetailMenuAction::RunStatus(_) => icons::Icon::Cpu,
             DetailMenuAction::CopySessionId(_) => icons::Icon::Key,
@@ -13336,6 +13345,86 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         })
                         .detach();
                     }
+                }
+            }
+            DetailMenuAction::ImportMarkdown(bot_id) => {
+                if let Some(bot) = self.roster.bot_by_id(&bot_id).cloned() {
+                    let workspace = if bot.directory.trim().is_empty() {
+                        backend::fallback_workspace().to_string_lossy().into_owned()
+                    } else {
+                        bot.directory.clone()
+                    };
+                    let key = bot_key(&bot.id);
+                    cx.spawn(async move |this, cx| {
+                        let loaded = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let paths = file_dialog::pick_files();
+                                let path = paths.into_iter().next()?;
+                                let text = std::fs::read_to_string(&path).ok()?;
+                                Some((path, text))
+                            })
+                            .await;
+                        let Some((path, text)) = loaded else {
+                            return;
+                        };
+                        let entries = parse_imported_markdown(&text);
+                        if entries.is_empty() {
+                            let _ = this.update(cx, |this, cx| {
+                                this.toast(i18n::t("Markdown 里没有可导入的消息"), cx);
+                            });
+                            return;
+                        }
+                        let count = entries.len();
+                        let created = cx
+                            .background_executor()
+                            .spawn(async move {
+                                crate::rpi_engine::import_markdown_session(&workspace, &entries)
+                            })
+                            .await;
+                        match created {
+                            Ok(session_path) => {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.sessions.set(&bot_id, &session_path);
+                                    this.sessions.save();
+                                    this.backend.reset_session(key.clone());
+                                    if let Some(chat) = this.chats.get_mut(&key) {
+                                        chat.ready = false;
+                                        chat.messages.clear();
+                                        chat.session_id = None;
+                                        chat.tool_index.clear();
+                                    }
+                                    this.tool_expanded.clear();
+                                    if let Some(index) =
+                                        this.roster.bots.iter().position(|bot| bot.id == bot_id)
+                                    {
+                                        this.select_bot(index, cx);
+                                    }
+                                    let name = path
+                                        .rsplit(['\\', '/'])
+                                        .next()
+                                        .unwrap_or(&path)
+                                        .to_string();
+                                    this.toast(
+                                        tri!(
+                                            "已导入 {count} 条消息（{name}）",
+                                            "Imported {count} messages ({name})"
+                                        ),
+                                        cx,
+                                    );
+                                });
+                            }
+                            Err(message) => {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.toast(
+                                        tri!("导入失败：{message}", "Import failed: {message}"),
+                                        cx,
+                                    );
+                                });
+                            }
+                        }
+                    })
+                    .detach();
                 }
             }
             DetailMenuAction::FindInChat => {
@@ -24572,6 +24661,44 @@ fn conversation_markdown(chat: &ChatState, title: &str) -> String {
     }
 }
 
+/// 解析导出格式的 Markdown：`**你：** 文本` / `**Bot：** 文本`，空行保留在消息内。
+fn parse_imported_markdown(text: &str) -> Vec<(bool, String)> {
+    let marker = "：**";
+    let mut out: Vec<(bool, String)> = Vec::new();
+    let mut current: Option<(bool, String)> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("**")
+            && let Some(position) = rest.find(marker)
+        {
+            if let Some(done) = current.take() {
+                out.push(done);
+            }
+            let who = rest[..position].trim();
+            let body = rest[position + marker.len()..].trim_start();
+            current = Some((
+                who == i18n::t("你") || who.eq_ignore_ascii_case("you"),
+                body.to_string(),
+            ));
+            continue;
+        }
+        if let Some((_, body)) = current.as_mut() {
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(line);
+        }
+    }
+    if let Some(done) = current {
+        out.push(done);
+    }
+    out.into_iter()
+        .filter_map(|(user, text)| {
+            let text = text.trim_end().to_string();
+            (!text.is_empty()).then_some((user, text))
+        })
+        .collect()
+}
+
 /// 导出文件名：清掉 Windows 非法字符，空名回落会话。
 fn export_file_name(title: &str) -> String {
     let sanitized: String = title
@@ -25105,6 +25232,18 @@ mod turn_summary_tests {
             tool("read", r#"{"path":"a.txt"}"#),
         ];
         assert_eq!(turn_edit_summary(&messages), Some((1, 3, 1)));
+    }
+
+    #[test]
+    fn parses_exported_markdown() {
+        let text = "# 会话\n\n**你：** 第一行\n第二行\n\n**Bot：** 回复";
+        assert_eq!(
+            parse_imported_markdown(text),
+            vec![
+                (true, "第一行\n第二行".to_string()),
+                (false, "回复".to_string())
+            ]
+        );
     }
 
     #[test]

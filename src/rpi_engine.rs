@@ -997,6 +997,108 @@ impl RpiSession {
 }
 
 
+/// 把导入的 Markdown 转成一条可 resume 的 pi-rust JSONL 会话。
+/// entries 为 (是否用户, 文本)；返回新会话文件路径。
+pub fn import_markdown_session(
+    workspace: &str,
+    entries: &[(bool, String)],
+) -> Result<String, String> {
+    if entries.is_empty() {
+        return Err("没有可导入的消息".to_string());
+    }
+    let dir = sessions_root().join(format!(
+        "--{}--",
+        workspace
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>()
+    ));
+    std::fs::create_dir_all(&dir).map_err(|error| format!("创建会话目录失败：{error}"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let path = dir.join(format!("{now}_import_{session_id}.jsonl"));
+    let mut lines: Vec<String> = Vec::new();
+    let header = serde_json::json!({
+        "kind": "header",
+        "version": 4,
+        "id": session_id,
+        "createdAt": now,
+        "cwd": workspace,
+        "progressFormat": "assistant-progress-v1",
+    });
+    lines.push(serde_json::to_string(&header).map_err(|error| error.to_string())?);
+    let mut parent: Option<String> = None;
+    for (index, (user, text)) in entries.iter().enumerate() {
+        let entry_id = uuid::Uuid::new_v4().to_string();
+        let timestamp = now + index as u64;
+        let message = if *user {
+            serde_json::json!({
+                "kind": "user",
+                "role": "user",
+                "content": text,
+                "timestamp": timestamp,
+            })
+        } else {
+            // assistant 消息是 provider 快照：content 为内容块数组，且带 api/provider/model/usage。
+            serde_json::json!({
+                "kind": "assistant",
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+                "api": "anthropic-messages",
+                "provider": "anthropic",
+                "model": "imported",
+                "usage": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "reasoning": 0,
+                    "totalTokens": 0,
+                    "cost": {"input": 0.0, "output": 0.0, "cacheRead": 0.0, "cacheWrite": 0.0, "total": 0.0}
+                },
+                "stopReason": "stop",
+                "timestamp": timestamp,
+            })
+        };
+        let entry = serde_json::json!({
+            "kind": "entry",
+            "lane": "main",
+            "type": "message",
+            "id": entry_id,
+            "seq": index as u64 + 1,
+            "parentId": parent,
+            "timestamp": timestamp,
+            "message": message,
+        });
+        lines.push(serde_json::to_string(&entry).map_err(|error| error.to_string())?);
+        parent = Some(entry_id);
+    }
+    let body = format!("{}\n", lines.join("\n"));
+    atomic_file::write_text_atomic(
+        &path,
+        &body,
+        &atomic_file::WriteOptions::default(),
+    )
+    .map_err(|error| format!("写入会话文件失败：{error}"))?;
+    // pi-rust resume 要求 history 与 progress companion 同时存在。
+    let progress_path = PathBuf::from(format!("{}.progress.jsonl", path.display()));
+    let progress = serde_json::json!({
+        "format": "assistant-progress-v1",
+        "session_id": session_id,
+        "state": {"sequence": 0, "frames": []},
+    });
+    atomic_file::write_text_atomic(
+        &progress_path,
+        &format!("{}\n", serde_json::to_string(&progress).unwrap_or_default()),
+        &atomic_file::WriteOptions::default(),
+    )
+    .map_err(|error| format!("写入会话进度失败：{error}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// 从 JSONL 会话文件还原用户/助手文本（重启后的历史回放）。
 pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
     let Ok(text) = std::fs::read_to_string(path) else {

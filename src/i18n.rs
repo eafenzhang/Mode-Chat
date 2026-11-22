@@ -360,6 +360,8 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "重试中" => Some("Retrying"),
         "默认模型" => Some("Default model"),
         "导出 Markdown…" => Some("Export Markdown…"),
+        "导入 Markdown…" => Some("Import Markdown…"),
+        "Markdown 里没有可导入的消息" => Some("No importable messages in this Markdown"),
         "会话内查找" => Some("Find in conversation"),
         "在当前会话中查找…" => Some("Find in this conversation…"),
         "无结果" => Some("No results"),
