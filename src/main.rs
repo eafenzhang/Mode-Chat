@@ -5856,9 +5856,6 @@ impl PilotApp {
                 let request_id_click = request_id.clone();
                 let (bg, border, fg) = match kind.as_str() {
                     "deny" => (theme::card(), theme::edge(), theme::danger()),
-                    "allowAlways" | "allow_always" => {
-                        (ui_accent_soft(), ui_accent(), theme::ink())
-                    }
                     _ => (theme::raised(), theme::edge(), theme::ink()),
                 };
                 options = options.child(
@@ -5962,14 +5959,7 @@ impl PilotApp {
                         prompt.tool_name
                     ))),
             )
-            .children((!prompt.reason.is_empty()).then(|| {
-                div()
-                    .font_family(theme::FONT_FAMILY)
-                    .text_size(px(13.))
-                    .line_height(px(18.))
-                    .text_color(theme::ink())
-                    .child(SharedString::from(prompt.reason.clone()))
-            }))
+            .children((!prompt.reason.is_empty()).then(|| approval_reason_view(&prompt.reason)))
             .child(options)
             .into_any_element()
     }
@@ -16916,6 +16906,86 @@ fn approval_option_label(kind: &str, label: &str) -> String {
 }
 
 /// 审批档位说明（与 WebView 的 desc 文案对齐）。
+/// 审批原因：协议里的 reason 常是工具入参 JSON；尽量渲染成人话 + 代码块。
+fn approval_reason_view(reason: &str) -> gpui::AnyElement {
+    let mut block = div().flex().flex_col().gap(px(6.));
+    let mut rendered = false;
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(reason) {
+        let text = |key: &str| {
+            value
+                .get(key)
+                .and_then(|item| item.as_str())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+        };
+        if let Some(question) = text("question") {
+            block = block.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink())
+                    .child(SharedString::from(question.to_string())),
+            );
+            rendered = true;
+        }
+        if let Some(description) = text("description") {
+            block = block.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(description.to_string())),
+            );
+            rendered = true;
+        }
+        if let Some(command) = text("command") {
+            block = block.child(
+                div()
+                    .w_full()
+                    .rounded(px(6.))
+                    .bg(theme::inset())
+                    .px(px(8.))
+                    .py(px(6.))
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink())
+                    .child(SharedString::from(command.to_string())),
+            );
+            rendered = true;
+        }
+        if let Some(path) = text("path").or_else(|| text("file_path")) {
+            block = block.child(
+                div()
+                    .w_full()
+                    .rounded(px(6.))
+                    .bg(theme::inset())
+                    .px(px(8.))
+                    .py(px(6.))
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink_secondary())
+                    .child(SharedString::from(path.to_string())),
+            );
+            rendered = true;
+        }
+    }
+    if !rendered {
+        block = block.child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .text_color(theme::ink())
+                .child(SharedString::from(reason.to_string())),
+        );
+    }
+    block.into_any_element()
+}
+
 fn approval_note(level: &str) -> &'static str {
     match level {
         "auto" => i18n::t("只读工具自动放行；写操作仍会询问。"),
