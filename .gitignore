@@ -10,3 +10,6 @@
 Thumbs.db
 
 /docs/icon-samples
+
+# 临时探查脚本（不属于项目代码）
+/.tmp-probe

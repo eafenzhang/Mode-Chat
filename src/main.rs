@@ -191,14 +191,19 @@ const WINDOW_MIN_H: f32 = 600.0;
 ///
 /// 窗口已经被用户手动拉宽时（> 最小宽度）不再撑窗口，侧栏占用现有宽度。
 /// 「展开前宽度」存在调用方，避免判断歧义。
-fn panel_target_width(current: f32, opening: bool, restore: Option<f32>) -> Option<f32> {
+fn panel_target_width(
+    current: f32,
+    opening: bool,
+    restore: Option<f32>,
+    panel: f32,
+) -> Option<f32> {
     const SLACK: f32 = 1.;
     if opening {
         // 只有贴着最小宽度才撑窗口。
         if current > WINDOW_MIN_W + SLACK {
             return None;
         }
-        Some(current + PANEL_WIDTH)
+        Some(current + panel)
     } else {
         // 收起：还原到展开前的宽度（只有确实撑过窗口才有值）。
         let restore = restore?;
@@ -2936,8 +2941,12 @@ struct PilotApp {
     active_tab: usize,
     /// 右侧详情栏是否展开（DS §10.10：顶部胶囊点击开合）。
     right_panel_open: bool,
-    /// 展开侧栏前的窗口宽度（只有撑过窗口才有值，收起时还原）。
+    /// 展开会话侧栏前的窗口宽度（只有撑过窗口才有值，收起时还原）。
     panel_restore_width: Option<f32>,
+    /// 设置页详情面板是否正显示（用于检测开合并联动窗口宽度）。
+    settings_panel_shown: bool,
+    /// 展开设置详情面板前的窗口宽度。
+    settings_panel_restore: Option<f32>,
 }
 
 /// ⋯ 菜单动作（鼠标与键盘 Enter 共用；参数在构建条目时取快照，执行时不再查名册）。
@@ -3353,6 +3362,8 @@ impl PilotApp {
             active_tab: 0,
             right_panel_open: true,
             panel_restore_width: None,
+            settings_panel_shown: false,
+            settings_panel_restore: None,
         };
         if let Some(Selection::Bot(index)) = app.selection {
             app.ensure_bot(index);
@@ -10181,12 +10192,12 @@ impl PilotApp {
         let current = f32::from(window.bounds().size.width);
         if open {
             // 只有从「贴最小宽度」展开时才撑窗口，记下原宽度供收起时还原。
-            let target = panel_target_width(current, true, None);
+            let target = panel_target_width(current, true, None, PANEL_WIDTH);
             self.panel_restore_width = target.map(|_| current);
             self.right_panel_open = true;
             apply_panel_width(window, target);
         } else {
-            let target = panel_target_width(current, false, self.panel_restore_width);
+            let target = panel_target_width(current, false, self.panel_restore_width, PANEL_WIDTH);
             self.right_panel_open = false;
             self.panel_restore_width = None;
             apply_panel_width(window, target);
@@ -25932,6 +25943,39 @@ impl Render for PilotApp {
         if let Some(geometry) = current_geometry(window) {
             window_state::calibrate_if_pending((geometry.x, geometry.y));
             window_state::remember(geometry);
+        }
+        // 设置页详情面板开合 -> 窗口宽度联动（与会话侧栏同一套规则）。
+        //
+        // 放在 render 顶部而不是各个入口：设置面板有 60+ 处赋值点（选模型、
+        // 改密钥、群目标……），逐处改既易漏也易错；这里按「上一帧是否显示」
+        // 比较一次即可捕获所有开合。
+        {
+            let shown = self.settings_open && self.settings_detail.is_some();
+            if shown != self.settings_panel_shown {
+                self.settings_panel_shown = shown;
+                let current = f32::from(window.bounds().size.width);
+                let target = if shown {
+                    let target = panel_target_width(current, true, None, ui_kit::PANEL_W);
+                    self.settings_panel_restore = target.map(|_| current);
+                    target
+                } else {
+                    let target = panel_target_width(
+                        current,
+                        false,
+                        self.settings_panel_restore,
+                        ui_kit::PANEL_W,
+                    );
+                    self.settings_panel_restore = None;
+                    target
+                };
+                // 改窗口尺寸要放在本帧渲染之后：render 里直接 resize 会让
+                // 布局在渲染中途失效。
+                if target.is_some() {
+                    window.defer(cx, move |window, _cx| {
+                        apply_panel_width(window, target);
+                    });
+                }
+            }
         }
         if !self.first_frame_logged {
             self.first_frame_logged = true;
