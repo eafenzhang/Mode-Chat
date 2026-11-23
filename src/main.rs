@@ -107,7 +107,7 @@ use bot_team::goal::{GoalAction, GoalStatus, GroupGoal, StageStatus};
 use bot_team::group::group_member_workspace_identity;
 use data::{Bot, Group, ModelSpec, Roster};
 use simple_input::SimpleInput;
-use composer_input::{ComposerInput, Send};
+use composer_input::{ComposerInput, Send, SendSecondary};
 
 /// kit AlertDialog 关闭回调（统一恢复焦点用）。
 type DialogFocusRestore = std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
@@ -7545,6 +7545,82 @@ impl PilotApp {
             return;
         }
         self.send_current(window, cx);
+    }
+
+    /// Ctrl+Enter：回合进行中立即插话；空闲时与普通发送一致。
+    fn on_send_secondary(
+        &mut self,
+        _: &SendSecondary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ime_composing(cx) {
+            return;
+        }
+        if let Some((_, names)) = self.mention_context(cx) {
+            let index = self.mention_selected.min(names.len().saturating_sub(1));
+            let name = names[index].clone();
+            self.insert_mention_at(&name, cx);
+            return;
+        }
+        let streaming = self
+            .active_key()
+            .and_then(|key| self.chats.get(&key))
+            .is_some_and(|chat| chat.streaming);
+        if streaming {
+            self.interject_current(window, cx);
+        } else {
+            self.send_current(window, cx);
+        }
+    }
+
+    /// 回合进行中把当前输入直接 steer 给正在跑的引擎，而不是等回合结束。
+    fn interject_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let text = self.input.read(cx).content().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let is_group = key.starts_with("group:");
+        // 外部 ACP 引擎没有 steering 通道：退回排队，而不是先落气泡再报错。
+        if !self.current_engine_is_mode() {
+            self.queue_current(&key, text, window, cx);
+            return;
+        }
+        let Some(chat) = self.chats.get_mut(&key) else {
+            return;
+        };
+        if !chat.ready || !chat.streaming {
+            return;
+        }
+        if !chat.pending_attachments.is_empty() {
+            self.toast(i18n::t("插话暂不支持附件"), cx);
+            return;
+        }
+        if chat.elicitations.iter().any(|pending| !pending.sent) {
+            return;
+        }
+        let payload = compose_with_quote(&text, chat.quote.take());
+        let members: Vec<String> = if is_group {
+            chat.member_stream.keys().cloned().collect()
+        } else {
+            Vec::new()
+        };
+        if is_group {
+            chat.push_user_group(payload.clone(), Vec::new());
+        } else {
+            chat.push_user(payload.clone());
+        }
+        chat.last_sent = Some(text.clone());
+        chat.retry = None;
+        self.drafts.remove(&key);
+        self.backend.interject(key, payload, members);
+        self.input.update(cx, |input, cx| input.clear(window, cx));
+        self.toast(i18n::t("已插话，当前回合会立即收到"), cx);
+        self.scroll.scroll_to_bottom();
+        cx.notify();
     }
 
     // ---- @ 提及候选（群聊 composer） ----
@@ -17267,6 +17343,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         let pending_approval = chat
             .is_some_and(|chat| !chat.permissions.is_empty() || !chat.questions.is_empty());
         let has_attachments = chat.is_some_and(|chat| !chat.pending_attachments.is_empty());
+        let has_text = !self.input.read(cx).content().trim().is_empty();
+        // 只有内嵌引擎支持 lane steering；外部 ACP 引擎没有插话通道。
+        let can_interject = streaming && self.current_engine_is_mode() && has_text;
         let multiline = self.input.read(cx).content().contains('\n');
         let send_enabled = (is_bot || is_group)
             && ready
@@ -17308,6 +17387,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             i18n::t("请先填写上方表单")
         } else if pending_approval {
             i18n::t("请先处理上方审批")
+        } else if streaming {
+            i18n::t("回合进行中 · Ctrl+Enter 插话 · Enter 排队")
         } else if is_group {
             i18n::t("Enter 发送 · @成员名 点名 · 管理员默认接话")
         } else {
@@ -17462,6 +17543,31 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .key_context("Composer")
                             .child(self.input.clone()),
                     )
+                    .children(can_interject.then(|| {
+                        div()
+                            .id("composer-interject")
+                            .size(px(28.))
+                            .mb(px(8.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::subtle())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_color(theme::ink_secondary())
+                            .hover(|style| style.bg(theme::subtle_hover()).text_color(theme::ink()))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.interject_current(window, cx);
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::MessageSquare,
+                                14.,
+                                theme::ink_secondary(),
+                            ))
+                    }))
                     .child(
                         div()
                             .id(if streaming {
@@ -24368,6 +24474,8 @@ impl PilotApp {
         let is_bot = self.selected_bot().is_some();
         let is_group = self.selected_group().is_some();
         let has_text = !self.input.read(cx).content().trim().is_empty();
+        // 只有内嵌引擎支持 lane steering；外部 ACP 引擎没有插话通道。
+        let can_interject = streaming && has_text && self.current_engine_is_mode();
         let send_enabled = (is_bot || is_group)
             && ready
             && !streaming
@@ -24468,6 +24576,38 @@ impl PilotApp {
                                 color,
                                 1.2,
                             ))
+                    }))
+                    .children(can_interject.then(|| {
+                        div()
+                            .id("wechat-interject")
+                            .h(px(26.))
+                            .px(px(8.))
+                            .flex_shrink_0()
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(wecom_theme::composer_border())
+                            .bg(wecom_theme::panel_card_bg())
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.interject_current(window, cx);
+                            }))
+                            .child(icons::icon_with_stroke(
+                                icons::Icon::MessageSquare,
+                                14.,
+                                wecom_theme::icon(),
+                                1.2,
+                            ))
+                            .child(
+                                div()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(wecom_theme::icon())
+                                    .child(i18n::t("插话")),
+                            )
                     }))
                     .children((streaming && has_text).then(|| {
                         div()
@@ -24672,6 +24812,7 @@ impl Render for PilotApp {
             .font_family(theme::FONT_FAMILY)
             .text_color(theme::ink())
             .on_action(cx.listener(Self::on_send))
+            .on_action(cx.listener(Self::on_send_secondary))
             .on_action(cx.listener(Self::on_close_overlay))
             .on_action(cx.listener(Self::on_new_session_shortcut))
             .on_action(cx.listener(Self::on_search_shortcut))

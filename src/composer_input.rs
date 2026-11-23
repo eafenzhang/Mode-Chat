@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::{theme, wecom_theme};
 
-gpui::actions!(composer, [Send]);
+gpui::actions!(composer, [Send, SendSecondary]);
 
 pub struct ComposerInput {
     state: Option<Entity<TextareaState>>,
@@ -127,7 +127,13 @@ impl Render for ComposerInput {
                             *secondary
                         };
                         if send {
-                            window.dispatch_action(Box::new(Send), cx);
+                            // Ctrl+Enter 单独派发：回合进行中它是「立即插话」，
+                            // Enter 仍按排队处理。
+                            if *secondary {
+                                window.dispatch_action(Box::new(SendSecondary), cx);
+                            } else {
+                                window.dispatch_action(Box::new(Send), cx);
+                            }
                         }
                     }
                     _ => {}

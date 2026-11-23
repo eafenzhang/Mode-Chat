@@ -991,6 +991,24 @@ impl RpiSession {
         }
     }
 
+    /// 回合进行中插话：交给 lane 的 steering 队列，在当前工具批次之后
+    /// 作为新的用户输入进入模型上下文，不新开回合。
+    pub async fn steer(&self, text: String) {
+        let message = rpi_agent::AgentMessage::User(rpi_ai::types::UserMessage::new(
+            text,
+            crate::time::now_ms() as i64,
+        ));
+        if let Err(error) = self.lane.steer(message).await {
+            let _ = self.gate.events.send(BackendEvent::Session {
+                key: self.gate.key.clone(),
+                event: SessionEvent::Error {
+                    member: self.gate.member.clone(),
+                    message: format!("插话失败：{error}"),
+                },
+            });
+        }
+    }
+
     pub async fn abort(&self) {
         let _ = self.lane.abort().await;
     }

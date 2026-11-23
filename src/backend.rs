@@ -414,6 +414,13 @@ enum Command {
         text: String,
         attachments: Vec<AttachmentUpload>,
     },
+    /// 回合进行中实时插话：把文本 steer 给正在跑的 lane。
+    /// `members` 为空 = 私聊/旁路会话；否则是群聊里当前正在流式的成员名。
+    Interject {
+        key: String,
+        text: String,
+        members: Vec<String>,
+    },
     Resolve {
         key: String,
         request_id: String,
@@ -525,6 +532,20 @@ impl BackendHandle {
             key: key.into(),
             text: text.into(),
             attachments,
+        });
+    }
+
+    /// 回合进行中实时插话（私聊/群聊当前流式成员）。
+    pub fn interject(
+        &self,
+        key: impl Into<String>,
+        text: impl Into<String>,
+        members: Vec<String>,
+    ) {
+        let _ = self.tx.send(Command::Interject {
+            key: key.into(),
+            text: text.into(),
+            members,
         });
     }
 
@@ -1606,6 +1627,65 @@ async fn run_agent(
                         });
                     }
                     continue;
+                }
+            }
+            Command::Interject {
+                key,
+                text,
+                members,
+            } => {
+                // 私聊/旁路：路由到当前活跃会话；群聊：只发给正在流式的成员。
+                let targets: Vec<(String, Option<String>)> = if let Some(spec) = groups.get(&key)
+                {
+                    members
+                        .iter()
+                        .filter_map(|name| {
+                            spec.members
+                                .iter()
+                                .find(|member| member.name == *name)
+                                .map(|member| {
+                                    (
+                                        member_session_key(&key, &member.member_id),
+                                        Some(member.name.clone()),
+                                    )
+                                })
+                        })
+                        .collect()
+                } else {
+                    vec![(
+                        active_internal.get(&key).cloned().unwrap_or_else(|| key.clone()),
+                        None,
+                    )]
+                };
+                if targets.is_empty() {
+                    let _ = events.send(BackendEvent::Session {
+                        key,
+                        event: SessionEvent::Error {
+                            member: None,
+                            message: "当前没有可以插话的进行中回合".to_string(),
+                        },
+                    });
+                    continue;
+                }
+                for (internal, member) in targets {
+                    let Some(ctx) = sessions.get(&internal) else {
+                        continue;
+                    };
+                    if let SessionEngine::Rpi(session) = &ctx.engine {
+                        let session = Arc::clone(session);
+                        let text = text.clone();
+                        tokio::spawn(async move {
+                            session.steer(text).await;
+                        });
+                    } else if let Some(member) = member {
+                        let _ = events.send(BackendEvent::Session {
+                            key: key.clone(),
+                            event: SessionEvent::Error {
+                                member: Some(member),
+                                message: "该引擎不支持实时插话".to_string(),
+                            },
+                        });
+                    }
                 }
             }
         }

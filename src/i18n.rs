@@ -369,6 +369,14 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "队列已满（最多 5 条）" => Some("Queue is full (up to 5)"),
         "Enter 排队" => Some("Enter to queue"),
         "已加入队列，回复结束后自动发送" => Some("Queued; it will send after this turn"),
+        "插话" => Some("Steer"),
+        "插话暂不支持附件" => Some("Interjections cannot include attachments"),
+        "已插话，当前回合会立即收到" => Some("Sent as a steer; the running turn receives it immediately"),
+        "回合进行中 · Ctrl+Enter 插话 · Enter 排队" => {
+            Some("Turn running · Ctrl+Enter to steer · Enter to queue")
+        }
+        "当前没有可以插话的进行中回合" => Some("No running turn to steer"),
+        "该引擎不支持实时插话" => Some("This engine does not support steering"),
         "已停止，排队消息已清空" => Some("Stopped; queued messages were cleared"),
         "其他（自行输入）" => Some("Other (type your own)"),
         "输入你的回答…" => Some("Type your answer…"),
