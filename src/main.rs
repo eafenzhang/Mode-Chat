@@ -178,6 +178,54 @@ gpui::actions!(
 
 const SIDEBAR_WIDTH: f32 = 280.0;
 const PANEL_WIDTH: f32 = 320.0;
+
+/// 主窗口最小尺寸（窗口系统层）。侧栏展开时以此为基础加宽，
+/// 保证左侧名单 / 中间会话的宽度不变。
+const WINDOW_MIN_W: f32 = 900.0;
+const WINDOW_MIN_H: f32 = 600.0;
+
+/// 打开 / 收起右侧栏，并在**窗口处于最小宽度**时把窗口加宽。
+///
+/// 需求：最小宽度下开侧栏不能挤压左侧名单与中间会话——其它模块宽度保持不变，
+/// 窗口整体加宽 `PANEL_WIDTH`；收起时再还原回去。
+///
+/// 窗口已经被用户手动拉宽时（> 最小宽度）不再撑窗口，侧栏占用现有宽度。
+/// 「展开前宽度」存在调用方，避免判断歧义。
+fn panel_target_width(current: f32, opening: bool, restore: Option<f32>) -> Option<f32> {
+    const SLACK: f32 = 1.;
+    if opening {
+        // 只有贴着最小宽度才撑窗口。
+        if current > WINDOW_MIN_W + SLACK {
+            return None;
+        }
+        Some(current + PANEL_WIDTH)
+    } else {
+        // 收起：还原到展开前的宽度（只有确实撑过窗口才有值）。
+        let restore = restore?;
+        if (restore - current).abs() < SLACK {
+            return None;
+        }
+        Some(restore.max(WINDOW_MIN_W))
+    }
+}
+
+/// 应用 `panel_target_width` 的结果（最大化/全屏时不改窗口）。
+fn apply_panel_width(window: &mut Window, target: Option<f32>) {
+    let Some(target) = target else {
+        return;
+    };
+    if window.is_maximized() || window.is_fullscreen() {
+        return;
+    }
+    let bounds = window.bounds();
+    let current = f32::from(bounds.size.width);
+    if (target - current).abs() < 1. {
+        return;
+    }
+    let height = f32::from(bounds.size.height);
+    window.resize(size(px(target), px(height)));
+}
+
 const TITLEBAR_HEIGHT: f32 = 28.0;
 /// 气泡最大宽度（DS：Bot 气泡 ≈80% 列宽；中栏 1100 窗口下约 560px）。
 const BUBBLE_MAX_WIDTH: f32 = 672.0;
@@ -2888,6 +2936,8 @@ struct PilotApp {
     active_tab: usize,
     /// 右侧详情栏是否展开（DS §10.10：顶部胶囊点击开合）。
     right_panel_open: bool,
+    /// 展开侧栏前的窗口宽度（只有撑过窗口才有值，收起时还原）。
+    panel_restore_width: Option<f32>,
 }
 
 /// ⋯ 菜单动作（鼠标与键盘 Enter 共用；参数在构建条目时取快照，执行时不再查名册）。
@@ -3302,6 +3352,7 @@ impl PilotApp {
             scroll: ScrollHandle::new(),
             active_tab: 0,
             right_panel_open: true,
+            panel_restore_width: None,
         };
         if let Some(Selection::Bot(index)) = app.selection {
             app.ensure_bot(index);
@@ -10122,6 +10173,26 @@ impl PilotApp {
         }
     }
 
+    /// 设置右侧栏开合并联动窗口宽度（最小宽度下加宽窗口而不是挤压内容）。
+    fn set_right_panel(&mut self, open: bool, window: &mut Window) {
+        if self.right_panel_open == open {
+            return;
+        }
+        let current = f32::from(window.bounds().size.width);
+        if open {
+            // 只有从「贴最小宽度」展开时才撑窗口，记下原宽度供收起时还原。
+            let target = panel_target_width(current, true, None);
+            self.panel_restore_width = target.map(|_| current);
+            self.right_panel_open = true;
+            apply_panel_width(window, target);
+        } else {
+            let target = panel_target_width(current, false, self.panel_restore_width);
+            self.right_panel_open = false;
+            self.panel_restore_width = None;
+            apply_panel_width(window, target);
+        }
+    }
+
     /// 详情面板的多字段表单：首次进入时按 `specs` 创建，已有则原样返回。
     ///
     /// `specs` 是 (占位符, 初始值)。返回第一个字段 + 其余字段，
@@ -15214,7 +15285,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             DetailMenuAction::RunStatus(key) => {
                 // 只读明细走右侧详情栏（规范 §8），不再弹框。
                 self.chat_detail = Some(SettingsDetail::RunStatus { key });
-                self.right_panel_open = true;
+                if !self.right_panel_open {
+                    self.set_right_panel(true, window);
+                }
                 self.active_tab = 0;
                 cx.notify();
             }
@@ -16469,8 +16542,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .justify_center()
                     .cursor_pointer()
                     .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.right_panel_open = !this.right_panel_open;
+                    .on_click(cx.listener(|this, _event, window, cx| {
+                        let next = !this.right_panel_open;
+                        this.set_right_panel(next, window);
                         cx.notify();
                     }))
                     .child(icons::icon(
@@ -17002,8 +17076,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .track_focus(&capsule_focus)
                     .key_context("TabStop")
                     .when(capsule_focused, |el| el.border_color(theme::accent()))
-                    .on_action(cx.listener(|this, _: &ActivateTabStop, _window, cx| {
-                        this.right_panel_open = !this.right_panel_open;
+                    .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
+                        let next = !this.right_panel_open;
+                        this.set_right_panel(next, window);
                         cx.notify();
                     }))
                     .h(px(39.))
@@ -17019,8 +17094,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .shadow(theme::shadow_1())
                     .cursor_pointer()
                     .hover(|style| style.bg(theme::raised()))
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.right_panel_open = !this.right_panel_open;
+                    .on_click(cx.listener(|this, _event, window, cx| {
+                        let next = !this.right_panel_open;
+                        this.set_right_panel(next, window);
                         cx.notify();
                     }))
                     .child(if is_group {
@@ -18411,8 +18487,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     )
                     .child(
                         icon_button("panel-collapse", icons::Icon::PaneCollapse).on_click(
-                            cx.listener(|this, _event, _window, cx| {
-                                this.right_panel_open = false;
+                            cx.listener(|this, _event, window, cx| {
+                                this.set_right_panel(false, window);
                                 cx.notify();
                             }),
                         ),
@@ -24184,8 +24260,8 @@ impl PilotApp {
                             .justify_center()
                             .cursor_pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.right_panel_open = false;
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.set_right_panel(false, window);
                                 cx.notify();
                             }))
                             .child(icons::icon(
@@ -24700,8 +24776,9 @@ impl PilotApp {
                                         el.bg(wecom_theme::chip_bg())
                                     })
                                     .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.right_panel_open = !this.right_panel_open;
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        let next = !this.right_panel_open;
+                                        this.set_right_panel(next, window);
                                         cx.notify();
                                     }))
                                     .child(icons::icon(
@@ -26359,7 +26436,7 @@ fn main() {
                 appears_transparent: true,
                 traffic_light_position: None,
             }),
-            window_min_size: Some(size(px(900.), px(600.))),
+            window_min_size: Some(size(px(WINDOW_MIN_W), px(WINDOW_MIN_H))),
             ..Default::default()
         };
 
