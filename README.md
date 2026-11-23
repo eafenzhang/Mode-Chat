@@ -17,6 +17,27 @@ replaced by an embedded [pi-rust](https://github.com/bigfish1913/pi-rust) runtim
 - Known gaps until the host-side MCP bridge lands: plugin market, connectors, and
   non-image attachments are unavailable in the embedded engine.
 
+## Capabilities
+
+- **Steering (插话)** — during a running turn `Ctrl+Enter` (or the composer's
+  steer button) pushes the text into the engine's steering queue instead of
+  queueing it for later; plain `Enter` still queues. Only the embedded engine has
+  a steering channel — external ACP sessions fall back to queueing.
+- **Side chat (`/side`)** — a throwaway session that is neither written to the
+  main transcript nor shown in history or global search; its JSONL lands under
+  `mode-chat-sessions/.side`. Open it from the composer (`/side`), the `⋯` menu,
+  or the command palette. Attachments, question cards and forms are not
+  supported there yet.
+- **Private bots** — a private bot keeps its sessions under
+  `mode-chat-sessions/.private/<botId>`, is excluded from global search, cannot
+  join a group, and cannot be the team Chief.
+- **Team Chief** — only the single `isChief` bot (enforced on create and update)
+  gets the team tools in a group: `team_roster`, `team_goal_show|create|stage`,
+  `team_task_list`, `team_assign`. `team_assign` writes a child task onto the
+  group task ledger and dispatches the target member's turn; re-dispatch of a
+  member already running in the same turn is rejected, and one turn dispatches
+  at most 4 tasks.
+
 ## Build
 
 ```powershell

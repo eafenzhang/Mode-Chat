@@ -279,3 +279,27 @@ src/theme.rs       Bot 深色 token（与 tokens.css 对齐）
 产品化路线图见主仓 `docs/plans/2026-11-14-gpui-productize.md`
 （P0 落库门禁 → P1 数据面收口 → P2 内容层 → P3 外壳完备 → P4 产品级横切面 → P5 切换退役，
 含 5 个待拍板决策点 D1–D5 与各阶段验收标准）。
+
+## 2026-11-23 批次：插话 / 旁路会话 / 隐私 Bot / 团队 Chief
+
+| 面 | 能力 | 落点 |
+| --- | --- | --- |
+| 插话 | 回合进行中 `Ctrl+Enter`（或 composer 的插话按钮）把文本塞进引擎 steering 队列，作为新的用户输入进入上下文，**不新开回合、不排队**；`Enter` 仍是排队 | `composer_input.rs`（`SendSecondary` 与 `Send` 分开派发）、`main.rs::interject_current`、`backend.rs::Command::Interject`、`rpi_engine.rs::RpiSession::steer` |
+| 插话 | 私聊路由到当前活跃会话；群聊只发给正在流式的成员（按名字回查 member id） | `backend.rs` `Command::Interject` 分支 |
+| 插话 | 只有内嵌引擎有 steering 通道：外部 ACP 会话**退回排队**（先判引擎，不再先落气泡再报「不支持实时插话」） | `main.rs::interject_current` 开头 |
+| 旁路会话 | `/side [问题]` 开一个一次性会话：不写主 transcript、不进历史列表、不进全局搜索；JSONL 落 `mode-chat-sessions/.side/` | `main.rs`（`SideChat` / `open_side` / `send_side` / `apply_side_event` / `side_panel`）、`rpi_engine.rs`（按 `key` 前缀 `side:` 换落盘根、`collect_search` 跳过 `.side`） |
+| 旁路会话 | 入口：composer 输入 `/side`、右栏 `⋯` 菜单「旁路会话」、命令面板「旁路会话」 | `main.rs::detail_menu_entries`、`palette_entries` |
+| 旁路会话 | 已知限制：不支持附件、提问卡、表单；审批卡只支持「允许一次 / 拒绝」 | `main.rs::apply_side_event` |
+| 隐私 Bot | 会话落 `mode-chat-sessions/.private/<botId>/`；全局搜索跳过 `.private` 且按旧会话 header 的 `cwd` 兜底排除；改名/改隐私会重建会话上下文 | `data.rs::private_workspace_dirs`、`rpi_engine.rs::private_bot_id` / `collect_search`、`backend.rs::open_rpi_session` |
+| 隐私 Bot | 不能进群：建群/编辑群成员列表、@ 候选、群成员计数与交接、群成员会话建立全部过滤 | `main.rs::visible_group_members` 等 |
+| 隐私 Bot | 与 Chief 互斥：`is_private && is_chief` 直接报错（建/改都校验） | `data.rs::check_chief_private` |
+| 团队 Chief | 管理员唯一：创建与编辑都会把其他 Bot 的 `isChief` 清掉 | `data.rs::demote_other_chiefs` |
+| 团队 Chief | 只有 `isChief` 成员的群会话装载团队工具：`team_roster` / `team_goal_show` / `team_goal_create` / `team_goal_stage` / `team_task_list` / `team_assign` | 新模块 `team_tools.rs`、`backend.rs::Command::EnsureGroup` |
+| 团队 Chief | `team_assign` 在当前根任务下建子任务（`group_tasks::create_handoff`）并发 `BackendEvent::TeamDispatch`，UI 触发目标成员回合；同回合已跑过的成员拒绝重复派活，单回合上限 4 次，超限把刚建的子任务收成失败 | `team_tools.rs::assign`、`main.rs::apply_event` 的 `TeamDispatch` 分支 |
+| 团队 Chief | 审批矩阵：`team_assign` / `team_goal_create` / `team_goal_stage` 归 write 档 | `rpi_engine.rs::ApprovalGate` |
+
+**验证**：`cargo check` / `cargo check --all-targets` / `cargo clippy --all-targets --locked -- -D warnings`
+（CI 同款）全绿；`cargo test` **139 passed / 0 failed / 2 ignored**（新增
+`data::chief_private_tests` 两条：私有≠Chief、Chief 唯一）。
+**尚未做**：真实回合人工验收（插话、`/side`、Chief 派活都只过了编译与单测）。
+
