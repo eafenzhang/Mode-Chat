@@ -1,5 +1,7 @@
 /target
 /dist
+# 打包用本地工具缓存（NSIS 等），不入库；CI 用 choco install 装
+/.release-tools
 **/*.rs.bk
 *.log
 /.acceptance
