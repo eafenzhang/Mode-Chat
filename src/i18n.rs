@@ -377,6 +377,15 @@ fn lookup(zh: &str) -> Option<&'static str> {
         }
         "当前没有可以插话的进行中回合" => Some("No running turn to steer"),
         "该引擎不支持实时插话" => Some("This engine does not support steering"),
+        "旁路会话" => Some("Side chat"),
+        "不写入主会话" => Some("Not saved to the main chat"),
+        "旁路提问（不写入主会话）…" => Some("Ask on the side (not saved to the main chat)…"),
+        "旁路会话不会写入主对话，也不会出现在历史列表。" => {
+            Some("Side chat is not written to the main conversation or the history list.")
+        }
+        "旁路会话暂不支持提问卡：{}" => Some("Side chat does not support question cards yet: {}"),
+        "旁路会话暂不支持表单：{}" => Some("Side chat does not support forms yet: {}"),
+        "需要审批" => Some("Needs approval"),
         "已停止，排队消息已清空" => Some("Stopped; queued messages were cleared"),
         "其他（自行输入）" => Some("Other (type your own)"),
         "输入你的回答…" => Some("Type your answer…"),

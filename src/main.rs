@@ -852,6 +852,26 @@ struct TurnReport {
     duration_ms: u64,
 }
 
+/// `/side` 旁路会话：临时会话，不写主 transcript、不进历史列表。
+struct SideChat {
+    key: String,
+    bot_name: String,
+    ready: bool,
+    streaming: bool,
+    messages: Vec<SideMessage>,
+    error: Option<String>,
+    input: Entity<SimpleInput>,
+    scroll: ScrollHandle,
+    /// 旁路里的审批卡（只支持允许一次/拒绝；工具仍走同一审批矩阵）。
+    permissions: Vec<backend::PermissionPrompt>,
+}
+
+struct SideMessage {
+    user: bool,
+    text: String,
+    tool: bool,
+}
+
 /// 回合进行中暂存的待发消息（附件已读入内存，引用在入队时固化）。
 struct QueuedSend {
     text: String,
@@ -951,6 +971,7 @@ enum PaletteCmd {
     EditBot,
     NewChannel,
     NewSession,
+    SideChat,
     FindMessages,
     OpenSettings,
     PickModel,
@@ -3131,6 +3152,8 @@ struct PilotApp {
     roster: Roster,
     selection: Option<Selection>,
     chats: HashMap<String, ChatState>,
+    /// `/side` 旁路会话（同一时间只开一个；关闭即丢弃上下文）。
+    side_chat: Option<SideChat>,
     sessions: state::SessionStore,
     backend_status: String,
     backend: BackendHandle,
@@ -3161,6 +3184,8 @@ enum DetailMenuAction {
     ShareConversation(String),
     ExportConversation(String),
     ImportMarkdown(String),
+    /// 打开（或复用）当前 Bot 的 `/side` 旁路会话输入框。
+    SideChat(String),
     FindInChat,
     RunStatus(String),
     CopySessionId(String),
@@ -3564,6 +3589,7 @@ impl PilotApp {
             roster,
             selection,
             chats: HashMap::new(),
+            side_chat: None,
             sessions,
             backend_status: i18n::t("连接 Agent…").to_string(),
             backend,
@@ -4536,6 +4562,10 @@ impl PilotApp {
                 }
             }
             BackendEvent::Session { key, event } => {
+                if key.starts_with("side:") {
+                    self.apply_side_event(&key, event, cx);
+                    return;
+                }
                 let task_key = key.clone();
                 let mut review_due = false;
                 let mut task_bar_due = false;
@@ -5142,11 +5172,19 @@ impl PilotApp {
         let Some(Selection::Bot(index)) = self.selection else {
             return;
         };
+        let text = self.input.read(cx).content().trim().to_string();
+        // `/side` 旁路会话：不写主 transcript，也不进历史/全局搜索。
+        if let Some(rest) = text.strip_prefix("/side")
+            && (rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace))
+        {
+            self.input.update(cx, |input, cx| input.clear(window, cx));
+            self.open_side(rest.trim(), window, cx);
+            return;
+        }
         let Some(bot) = self.roster.bots.get(index) else {
             return;
         };
         let key = bot_key(&bot.id);
-        let text = self.input.read(cx).content().trim().to_string();
         // 回合进行中继续发送 = 排队（私聊）；不打断当前回合。
         let streaming = self.chats.get(&key).is_some_and(|chat| chat.streaming);
         if streaming {
@@ -6950,7 +6988,19 @@ impl PilotApp {
     }
 
     /// Enter（Dialog 上下文）：优先提交群聊对话框；Bot 对话框走它自己的按钮。
-    fn on_submit_dialog(&mut self, _: &SubmitDialog, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_submit_dialog(
+        &mut self,
+        _: &SubmitDialog,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 旁路会话的单行输入：Enter 提交，不落到主 composer。
+        if let Some(side) = &self.side_chat
+            && side.input.read(cx).focus_handle(cx).is_focused(window)
+        {
+            self.send_side(window, cx);
+            return;
+        }
         debug_action("SubmitDialog");
     }
 
@@ -7262,6 +7312,11 @@ impl PilotApp {
             (i18n::t("编辑当前 Bot").to_string(), "Ctrl+E".to_string(), PaletteCmd::EditBot),
             (i18n::t("新建群聊").to_string(), "Ctrl+G".to_string(), PaletteCmd::NewChannel),
             (i18n::t("新会话").to_string(), "Ctrl+N".to_string(), PaletteCmd::NewSession),
+            (
+                i18n::t("旁路会话").to_string(),
+                i18n::t("不写入主会话").to_string(),
+                PaletteCmd::SideChat,
+            ),
             (i18n::t("搜索历史消息").to_string(), "Ctrl+F".to_string(), PaletteCmd::FindMessages),
             (i18n::t("选择运行时").to_string(), String::new(), PaletteCmd::PickModel),
             (i18n::t("审批白名单").to_string(), String::new(), PaletteCmd::EditAllowlist),
@@ -7413,6 +7468,12 @@ impl PilotApp {
                         );
                         cx.notify();
                     }
+                }
+            }
+            PaletteCmd::SideChat => {
+                // 旁路会话跟着当前选中的 Bot 走（私聊面板同样只开侧栏小窗）。
+                if self.selected_bot().is_some() {
+                    self.open_side("", window, cx);
                 }
             }
             PaletteCmd::FindMessages => {
@@ -7621,6 +7682,511 @@ impl PilotApp {
         self.toast(i18n::t("已插话，当前回合会立即收到"), cx);
         self.scroll.scroll_to_bottom();
         cx.notify();
+    }
+
+    // ---- /side 旁路会话 ----
+
+    /// 打开/复用旁路会话；`text` 非空时立刻发出去。
+    fn open_side(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Selection::Bot(index)) = self.selection else {
+            return;
+        };
+        let Some(bot) = self.roster.bots.get(index).cloned() else {
+            return;
+        };
+        let key = format!("side:{}", bot.id);
+        if self
+            .side_chat
+            .as_ref()
+            .is_some_and(|side| side.key == key)
+        {
+            let input = self.side_chat.as_ref().map(|side| side.input.clone());
+            if let Some(input) = input {
+                if text.trim().is_empty() {
+                    let handle = input.read(cx).focus_handle(cx);
+                    handle.focus(window, cx);
+                } else {
+                    input.update(cx, |input, cx| input.set_content(text, cx));
+                    self.send_side(window, cx);
+                }
+            }
+            return;
+        }
+        if let Some(old) = self.side_chat.take() {
+            self.backend.reset_session(old.key);
+        }
+        let workspace = if bot.directory.trim().is_empty() {
+            backend::fallback_workspace().to_string_lossy().into_owned()
+        } else {
+            bot.directory.clone()
+        };
+        let identity = bot.identity();
+        let model = bot.model.clone();
+        let engine = self.sessions.engine_of(&bot.id).map(str::to_string);
+        let input = cx.new(|cx| {
+            SimpleInput::new(
+                i18n::t("旁路提问（不写入主会话）…"),
+                theme::ink_tertiary,
+                cx,
+            )
+        });
+        self.side_chat = Some(SideChat {
+            key: key.clone(),
+            bot_name: bot.name.clone(),
+            ready: false,
+            streaming: false,
+            messages: Vec::new(),
+            error: None,
+            input: input.clone(),
+            scroll: ScrollHandle::new(),
+            permissions: Vec::new(),
+        });
+        self.backend
+            .ensure(key, workspace, identity, model, None, engine);
+        if text.trim().is_empty() {
+            let handle = input.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, cx| handle.focus(window, cx));
+        } else {
+            input.update(cx, |input, cx| input.set_content(text, cx));
+            self.send_side(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn send_side(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(side) = self.side_chat.as_mut() else {
+            return;
+        };
+        let text = side.input.read(cx).content().trim().to_string();
+        if text.is_empty() || side.streaming {
+            return;
+        }
+        side.messages.push(SideMessage {
+            user: true,
+            text: text.clone(),
+            tool: false,
+        });
+        side.streaming = true;
+        side.error = None;
+        side.input.update(cx, |input, cx| input.clear(window, cx));
+        let key = side.key.clone();
+        side.scroll.scroll_to_bottom();
+        self.backend.send(key, text);
+        cx.notify();
+    }
+
+    fn close_side(&mut self, cx: &mut Context<Self>) {
+        if let Some(side) = self.side_chat.take() {
+            self.backend.reset_session(side.key);
+        }
+        cx.notify();
+    }
+
+    /// 旁路事件：不进主 chat，也不触发群任务/记忆回顾/IM 镜像。
+    fn apply_side_event(
+        &mut self,
+        _key: &str,
+        event: SessionEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(side) = self.side_chat.as_mut() else {
+            return;
+        };
+        match event {
+            SessionEvent::Ready { .. } => {
+                side.ready = true;
+                side.error = None;
+            }
+            SessionEvent::Delta { text, .. } => {
+                if !text.is_empty() {
+                    match side.messages.last_mut() {
+                        Some(message) if !message.user && !message.tool => {
+                            message.text.push_str(&text);
+                        }
+                        _ => side.messages.push(SideMessage {
+                            user: false,
+                            text,
+                            tool: false,
+                        }),
+                    }
+                    side.streaming = true;
+                    side.scroll.scroll_to_bottom();
+                }
+            }
+            SessionEvent::Tool(card) => {
+                if card.state == "running" || card.state == "done" {
+                    let line = if card.state == "running" {
+                        format!("调用工具 · {}", card.name)
+                    } else {
+                        format!("完成工具 · {}", card.name)
+                    };
+                    if !side
+                        .messages
+                        .last()
+                        .is_some_and(|message| message.tool && message.text == line)
+                    {
+                        side.messages.push(SideMessage {
+                            user: false,
+                            text: line,
+                            tool: true,
+                        });
+                        side.scroll.scroll_to_bottom();
+                    }
+                }
+            }
+            SessionEvent::Permission(prompt) => {
+                if !side
+                    .permissions
+                    .iter()
+                    .any(|pending| pending.request_id == prompt.request_id)
+                {
+                    side.permissions.push(prompt);
+                }
+            }
+            SessionEvent::PermissionResolved { request_id } => {
+                side.permissions
+                    .retain(|pending| pending.request_id != request_id);
+            }
+            SessionEvent::Question(card) => {
+                let key = side.key.clone();
+                side.messages.push(SideMessage {
+                    user: false,
+                    text: tri!(
+                        "旁路会话暂不支持提问卡：{}",
+                        "Side chat does not support question cards yet: {}",
+                        card.question
+                    ),
+                    tool: false,
+                });
+                self.backend
+                    .answer_question(key, card.request_id, card.question, None);
+            }
+            SessionEvent::Elicitation(card) => {
+                let key = side.key.clone();
+                side.messages.push(SideMessage {
+                    user: false,
+                    text: tri!(
+                        "旁路会话暂不支持表单：{}",
+                        "Side chat does not support forms yet: {}",
+                        card.message
+                    ),
+                    tool: false,
+                });
+                self.backend
+                    .answer_elicitation(key, card.request_id, None);
+            }
+            SessionEvent::Done { .. } => {
+                side.streaming = false;
+                side.scroll.scroll_to_bottom();
+            }
+            SessionEvent::Error { message, .. } => {
+                side.streaming = false;
+                side.error = Some(message.clone());
+                side.messages.push(SideMessage {
+                    user: false,
+                    text: tri!("错误：{message}", "Error: {message}"),
+                    tool: false,
+                });
+            }
+            SessionEvent::Retry {
+                attempt,
+                max_retries,
+                reason,
+                ..
+            } => {
+                side.messages.push(SideMessage {
+                    user: false,
+                    text: tri!(
+                        "重试 {attempt}/{max_retries}：{reason}",
+                        "Retry {attempt}/{max_retries}: {reason}"
+                    ),
+                    tool: true,
+                });
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn side_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let side = self.side_chat.as_ref()?;
+        let key = side.key.clone();
+        let permissions = side.permissions.clone();
+        let mut messages = div()
+            .id("side-messages")
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .track_scroll(&side.scroll)
+            .p(px(12.))
+            .flex()
+            .flex_col()
+            .gap(px(8.));
+        for (index, message) in side.messages.iter().enumerate() {
+            messages = messages.child(if message.user {
+                div()
+                    .self_end()
+                    .max_w(px(300.))
+                    .rounded(px(8.))
+                    .bg(theme::accent_soft())
+                    .px(px(10.))
+                    .py(px(7.))
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(13.))
+                    .line_height(px(20.))
+                    .text_color(theme::ink())
+                    .child(SharedString::from(message.text.clone()))
+            } else if message.tool {
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(theme::ink_tertiary())
+                    .child(SharedString::from(message.text.clone()))
+            } else {
+                div()
+                    .w_full()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(13.))
+                    .text_color(theme::ink())
+                    .child(kit_markdown_el(
+                        format!("side-md-{index}"),
+                        &message.text,
+                        false,
+                        13.,
+                    ))
+            });
+        }
+        if side.messages.is_empty() {
+            messages = messages.child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(theme::ink_tertiary())
+                    .child(i18n::t("旁路会话不会写入主对话，也不会出现在历史列表。")),
+            );
+        }
+        Some(
+            div()
+                .absolute()
+                .top(px(60.))
+                .right(px(16.))
+                .bottom(px(16.))
+                .w(px(380.))
+                .rounded(px(12.))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::panel())
+                .shadow(theme::shadow_2())
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(14.))
+                        .py(px(10.))
+                        .border_b_1()
+                        .border_color(theme::edge())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(13.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme::ink())
+                                .truncate()
+                                .child(SharedString::from(format!(
+                                    "{} · {}",
+                                    i18n::t("旁路会话"),
+                                    side.bot_name
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .id("side-close")
+                                .size(px(24.))
+                                .rounded(px(6.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_color(theme::ink_tertiary())
+                                .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.close_side(cx);
+                                }))
+                                .child(icons::icon(
+                                    icons::Icon::X,
+                                    14.,
+                                    theme::ink_secondary(),
+                                )),
+                        ),
+                )
+                .child(messages)
+                .children((!permissions.is_empty()).then(|| {
+                    let mut cards = div()
+                        .px(px(12.))
+                        .pb(px(4.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.));
+                    for prompt in permissions {
+                        let request_id = prompt.request_id.clone();
+                        let resolve_key = key.clone();
+                        cards = cards.child(
+                            div()
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::raised())
+                                .p(px(8.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(11.))
+                                        .line_height(px(16.))
+                                        .text_color(theme::ink_secondary())
+                                        .child(SharedString::from(format!(
+                                            "{} · {}",
+                                            i18n::t("需要审批"),
+                                            prompt.tool_name
+                                        ))),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(6.))
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "side-allow-{request_id}"
+                                                )))
+                                                .h(px(24.))
+                                                .px(px(10.))
+                                                .rounded_full()
+                                                .bg(theme::accent())
+                                                .flex()
+                                                .items_center()
+                                                .cursor_pointer()
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(11.))
+                                                .text_color(theme::accent_ink())
+                                                .child(i18n::t("允许一次"))
+                                                .on_click(cx.listener({
+                                                    let request_id = request_id.clone();
+                                                    let resolve_key = resolve_key.clone();
+                                                    move |this, _event, _window, cx| {
+                                                        this.backend.resolve(
+                                                            resolve_key.clone(),
+                                                            request_id.clone(),
+                                                            "allow_once",
+                                                        );
+                                                        if let Some(side) =
+                                                            this.side_chat.as_mut()
+                                                        {
+                                                            side.permissions.retain(|pending| {
+                                                                pending.request_id != request_id
+                                                            });
+                                                        }
+                                                        cx.notify();
+                                                    }
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "side-deny-{request_id}"
+                                                )))
+                                                .h(px(24.))
+                                                .px(px(10.))
+                                                .rounded_full()
+                                                .bg(theme::subtle())
+                                                .flex()
+                                                .items_center()
+                                                .cursor_pointer()
+                                                .font_family(theme::FONT_FAMILY)
+                                                .text_size(px(11.))
+                                                .text_color(theme::ink_secondary())
+                                                .child(i18n::t("拒绝"))
+                                                .on_click(cx.listener({
+                                                    let request_id = request_id.clone();
+                                                    let resolve_key = resolve_key.clone();
+                                                    move |this, _event, _window, cx| {
+                                                        this.backend.resolve(
+                                                            resolve_key.clone(),
+                                                            request_id.clone(),
+                                                            "deny",
+                                                        );
+                                                        if let Some(side) =
+                                                            this.side_chat.as_mut()
+                                                        {
+                                                            side.permissions.retain(|pending| {
+                                                                pending.request_id != request_id
+                                                            });
+                                                        }
+                                                        cx.notify();
+                                                    }
+                                                })),
+                                        ),
+                                ),
+                        );
+                    }
+                    cards
+                }))
+                .child(
+                    div()
+                        .p(px(10.))
+                        .border_t_1()
+                        .border_color(theme::edge())
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .h(px(34.))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::composer_card())
+                                .px(px(10.))
+                                .flex()
+                                .items_center()
+                                .child(side.input.clone()),
+                        )
+                        .child(
+                            div()
+                                .id("side-send")
+                                .size(px(30.))
+                                .flex_shrink_0()
+                                .rounded_full()
+                                .bg(theme::accent())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .opacity(if side.streaming { 0.4 } else { 1.0 })
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.send_side(window, cx);
+                                }))
+                                .child(icons::icon(
+                                    icons::Icon::ArrowUp,
+                                    14.,
+                                    theme::accent_ink(),
+                                )),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     // ---- @ 提及候选（群聊 composer） ----
@@ -13262,6 +13828,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         false,
                         DetailMenuAction::ImportMarkdown(bot_id.to_string()),
                     ));
+                    entries.push((
+                        i18n::t("旁路会话").to_string(),
+                        false,
+                        DetailMenuAction::SideChat(bot_id.to_string()),
+                    ));
                 }
                 if self
                     .chats
@@ -13399,6 +13970,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             DetailMenuAction::ShareConversation(_) => icons::Icon::MessageSquare,
             DetailMenuAction::ExportConversation(_) => icons::Icon::Download,
             DetailMenuAction::ImportMarkdown(_) => icons::Icon::Folder,
+            DetailMenuAction::SideChat(_) => icons::Icon::MessageSquare,
             DetailMenuAction::FindInChat => icons::Icon::Search,
             DetailMenuAction::RunStatus(_) => icons::Icon::Cpu,
             DetailMenuAction::CopySessionId(_) => icons::Icon::Key,
@@ -13653,6 +14225,13 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         }
                     })
                     .detach();
+                }
+            }
+            DetailMenuAction::SideChat(bot_id) => {
+                // 菜单里点它只是打开侧栏小窗；真正发出去仍走 /side 或小窗输入框。
+                if let Some(index) = self.roster.bots.iter().position(|bot| bot.id == bot_id) {
+                    self.select_bot(index, cx);
+                    self.open_side("", window, cx);
                 }
             }
             DetailMenuAction::FindInChat => {
@@ -24838,6 +25417,7 @@ impl Render for PilotApp {
             .on_action(cx.listener(Self::on_focus_next))
             .on_action(cx.listener(Self::on_focus_prev))
             .child(self.shell(window, cx))
+            .children(self.side_panel(window, cx))
             .children(self.image_preview_overlay(cx))
             .children(self.settings_overlay(window, cx))
             .children(self.settings_dropdown_overlay(cx))
