@@ -9,9 +9,18 @@
 use gpui::{Hsla, IntoElement, Rgba, Styled, px, svg};
 
 /// 侧栏图标尺寸（左导轨）。
-pub const RAIL_SIZE: f32 = 24.;
+///
+/// 注意：Phosphor 的 256 viewBox 图形铺满整个画布（坐标跨 0..256），
+/// 而换库前的手绘 24 网格图标只用 stroke 画在约 70% 的内框里。
+/// 同样渲染 24px 时 Phosphor 的墨迹比旧图标大 20~25%，实测（1400x900
+/// 窗口逐图标量墨迹包围盒）后把名义尺寸从 24 收到 21 才对得上。
+pub const RAIL_SIZE: f32 = 21.;
 /// 设置菜单图标尺寸。
-pub const SETTINGS_SIZE: f32 = 18.;
+pub const SETTINGS_SIZE: f32 = 16.;
+/// 标题栏窗口控制按钮（最小化 / 最大化 / 关闭 / 置顶）的图标尺寸。
+///
+/// 同上：换库前名义 16px 的 stroke 图标，Phosphor 要 13px 才有相同观感。
+pub const TITLEBAR_SIZE: f32 = 13.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuIcon {

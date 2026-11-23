@@ -16560,7 +16560,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     }))
                     .child(icons::icon(
                         icons::Icon::PanelRight,
-                        15.,
+                        menu_icons::TITLEBAR_SIZE,
                         if panel_open {
                             theme::ink()
                         } else {
@@ -23250,9 +23250,9 @@ impl PilotApp {
                     }))
                     .child(icons::icon_light(
                         icons::Icon::Pushpin,
-                        16.,
+                        menu_icons::TITLEBAR_SIZE,
                         if topmost { wecom_theme::nav_text_active() } else { wecom_theme::icon() },
-                        )),
+                    )),
             )
             .child(
                 div()
@@ -23312,9 +23312,10 @@ impl PilotApp {
             icons::Icon::Minus | icons::Icon::WindowMaximize | icons::Icon::WindowRestore
         );
         let icon = if light {
-            icons::icon_light(glyph, 16., wecom_theme::icon()).into_any_element()
+            icons::icon_light(glyph, menu_icons::TITLEBAR_SIZE, wecom_theme::icon())
+                .into_any_element()
         } else {
-            icons::icon(glyph, 16., wecom_theme::icon()).into_any_element()
+            icons::icon(glyph, menu_icons::TITLEBAR_SIZE, wecom_theme::icon()).into_any_element()
         };
         base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
             .child(icon)
