@@ -22,91 +22,92 @@ APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(APP, "assets", "icons")
 
 # ---- Phosphor：Rust 枚举名 → 图标名 -----------------------------------------
-PHOSPHOR = {
-    "Search": "magnifying-glass",
-    "Plus": "plus",
-    "Ellipsis": "dots-three",
-    "Settings": "gear",
-    "X": "x",
-    "Check": "check",
-    "ArrowUp": "arrow-up",
-    "Stop": "square",
-    "ChevronLeft": "caret-left",
-    "ChevronRight": "caret-right",
-    "ChevronDown": "caret-down",
-    "Paperclip": "paperclip",
-    "Minus": "minus",
-    "WindowMaximize": "square",
-    "WindowRestore": "copy",
-    "PanelRight": "sidebar-simple",
-    "Hash": "hash",
-    "Pin": "push-pin",
-    "Star": "star",
-    "Crown": "crown",
-    "Pencil": "pencil-simple",
-    "Trash": "trash",
-    "EyeOff": "eye-slash",
-    "Archive": "archive",
-    "Chart": "chart-line",
-    "Cpu": "cpu",
-    "Plug": "plug",
-    "Calendar": "calendar-blank",
-    "Refresh": "arrows-clockwise",
-    "Download": "download-simple",
-    "MessageCircle": "chat-circle",
-    "Bot": "robot",
-    "ListChecks": "list-checks",
-    "Building": "buildings",
-    "Smile": "smiley",
-    "Shield": "shield",
-    "Terminal": "terminal-window",
-    "Folder": "folder",
-    "Scissors": "scissors",
-    "Mic": "microphone",
-    "BellOff": "bell-slash",
-    "Key": "key",
-    "Info": "info",
-    "MessageSquare": "chat",
-    "Sparkles": "sparkle",
-    "Contacts": "users",
-    "MessageCircleFilled": "chat-circle-fill",
-    "Brain": "brain",
-    "Pushpin": "push-pin",
-    "Sun": "sun",
-    "Moon": "moon",
-    "Monitor": "desktop",
-    # 右栏开合：展开 = 侧栏轮廓，折叠 = 双向箭头收拢
-    "SidebarExpand": "sidebar-simple",
-    "PaneCollapse": "caret-double-right",
-    "PaneExpand": "caret-double-left",
+# ---- Remix Icon：Icon 枚举名 -> Remix 图标名 ----------------------------------
+#
+# 全部用 `-line` 变体：线框、圆角柔和，正是替换 Phosphor 实心的目的。
+# 少数没有 -line 后缀的（hashtag / list-check）直接用原名。
+RI = {
+    "Search": "search-line",
+    "Plus": "add-line",
+    "Ellipsis": "more-line",
+    "Settings": "settings-3-line",
+    "X": "close-line",
+    "Check": "check-line",
+    "ArrowUp": "arrow-up-line",
+    "Stop": "stop-line",
+    "ChevronLeft": "arrow-left-s-line",
+    "ChevronRight": "arrow-right-s-line",
+    "ChevronDown": "arrow-down-s-line",
+    "Paperclip": "attachment-line",
+    "Minus": "subtract-line",
+    "WindowMaximize": "checkbox-blank-line",
+    "WindowRestore": "file-copy-line",
+    "PanelRight": "layout-right-line",
+    "Hash": "hashtag",
+    "Pin": "pushpin-line",
+    "Star": "star-line",
+    "Crown": "vip-crown-line",
+    "Pencil": "edit-line",
+    "Trash": "delete-bin-line",
+    "EyeOff": "eye-off-line",
+    "Archive": "archive-line",
+    "Chart": "line-chart-line",
+    "Cpu": "cpu-line",
+    "Plug": "plug-line",
+    "Calendar": "calendar-line",
+    "Refresh": "refresh-line",
+    "Download": "download-line",
+    "MessageCircle": "chat-3-line",
+    "Bot": "robot-line",
+    "ListChecks": "list-check-2",
+    "Building": "building-line",
+    "Smile": "emotion-happy-line",
+    "Shield": "shield-check-line",
+    "Terminal": "terminal-box-line",
+    "Folder": "folder-line",
+    "Scissors": "scissors-line",
+    "Mic": "mic-line",
+    "BellOff": "notification-off-line",
+    "Key": "key-2-line",
+    "Info": "information-line",
+    "MessageSquare": "message-2-line",
+    "Sparkles": "sparkling-line",
+    "Contacts": "contacts-line",
+    "MessageCircleFilled": "chat-3-fill",
+    "Brain": "brain-line",
+    "Pushpin": "pushpin-line",
+    "Sun": "sun-line",
+    "Moon": "moon-line",
+    "Monitor": "computer-line",
+    "SidebarExpand": "layout-left-line",
+    "PaneCollapse": "arrow-right-double-line",
+    "PaneExpand": "arrow-left-double-line",
 }
 
 # 侧栏 / 设置菜单：21 组，(线, 面)
 MENU = {
-    # 消息沿用对话气泡+点；「反馈」改成扩音器，两者不再撞脸
-    "chat": ("chat-dots", "chat-dots-fill"),
-    "contacts": ("users", "users-fill"),
-    "channels": ("hash", "hash-fill"),
-    "gear": ("gear", "gear-fill"),
-    "sliders": ("faders", "faders-fill"),
-    "models": ("stack", "stack-fill"),
-    "plugins": ("puzzle-piece", "puzzle-piece-fill"),
-    # 智能体用电路图，Bot 用机器人：两个都用 robot 会撞脸（设置菜单里上下相邻）
-    "agents": ("circuitry", "circuitry-fill"),
-    "bot": ("robot", "robot-fill"),
-    "memory": ("brain", "brain-fill"),
-    "im": ("device-mobile", "device-mobile-fill"),
-    # 连接器用插头（插件页已占用拼图，两者语义也更容易区分）
-    "connectors": ("plug", "plug-fill"),
-    "schedules": ("calendar-blank", "calendar-blank-fill"),
-    "keys": ("key", "key-fill"),
-    "abilities": ("lightning", "lightning-fill"),
-    "usage": ("chart-line", "chart-line-fill"),
-    "about": ("info", "info-fill"),
-    "feedback": ("megaphone", "megaphone-fill"),
-    "browser": ("globe", "globe-fill"),
-    "computer": ("desktop", "desktop-fill"),
-    "more": ("dots-three-vertical", "dots-three-vertical-fill"),
+    "chat": ("chat-3-line", "chat-3-fill"),
+    "contacts": ("contacts-line", "contacts-fill"),
+    "channels": ("hashtag", "grid-fill"),
+    "gear": ("settings-3-line", "settings-3-fill"),
+    "sliders": ("equalizer-line", "equalizer-fill"),
+    "models": ("stack-line", "stack-fill"),
+    "plugins": ("puzzle-line", "puzzle-fill"),
+    # 智能体用 CPU（电路感），Bot 用机器人：两个都用 robot 会撞脸
+    "agents": ("cpu-line", "cpu-fill"),
+    "bot": ("robot-2-line", "robot-2-fill"),
+    "memory": ("brain-line", "brain-fill"),
+    "im": ("smartphone-line", "smartphone-fill"),
+    "connectors": ("plug-2-line", "plug-2-fill"),
+    "schedules": ("calendar-line", "calendar-fill"),
+    "keys": ("key-2-line", "key-2-fill"),
+    "abilities": ("flashlight-line", "flashlight-fill"),
+    "usage": ("line-chart-line", "line-chart-fill"),
+    "about": ("information-line", "information-fill"),
+    "feedback": ("megaphone-line", "megaphone-fill"),
+    "browser": ("global-line", "global-fill"),
+    "computer": ("computer-line", "computer-fill"),
+    "more": ("more-2-line", "more-2-fill"),
 }
 
 # 线框字重：regular 用作默认，light 用作「细线」场景（替代原来的 stroke-width 微调）
@@ -219,44 +220,37 @@ def write(path, text):
 
 
 def main():
-    ph, ph_w, ph_h = load_set("ph")
+    ri, ri_w, ri_h = load_set("ri")
     logos, logo_w, logo_h = load_set("logos")
 
-    ph_dir = os.path.join(ASSETS, "phosphor")
+    ui_dir = os.path.join(ASSETS, "ui")
     br_dir = os.path.join(ASSETS, "brands")
     pv_dir = os.path.join(ASSETS, "providers")
     agent_dir = os.path.join(ASSETS, "agents")
 
-    # 清掉旧产物
-    for d in (ph_dir, pv_dir):
+    # 清掉旧产物（含上一代 phosphor 目录）
+    old_ph = os.path.join(ASSETS, "phosphor")
+    for d in (ui_dir, old_ph, pv_dir):
         if os.path.isdir(d):
             for f in os.listdir(d):
                 os.remove(os.path.join(d, f))
+            if d == old_ph:
+                os.rmdir(d)
 
-    wanted = set(PHOSPHOR.values())
+    wanted = set(RI.values())
     for line, solid in MENU.values():
         wanted.add(line)
         wanted.add(solid)
 
     ok, fail = 0, []
 
-    # 图标名 → 输出文件名（去掉 fill 后缀的保留，按名字直接落盘）
     for name in sorted(wanted):
-        entry = ph.get(name)
+        entry = ri.get(name)
         if not entry:
-            fail.append(("ph", name))
+            fail.append(("ri", name))
             continue
-        write(os.path.join(ph_dir, name + ".svg"), iconify_svg(entry, ph_w, ph_h))
+        write(os.path.join(ui_dir, name + ".svg"), iconify_svg(entry, ri_w, ri_h))
         ok += 1
-        # 细线变体只给「线框」类（名字不带 -fill）
-        if not name.endswith("-fill"):
-            for w in LINE_WEIGHTS[1:]:
-                e = ph.get(name + w)
-                if e:
-                    write(os.path.join(ph_dir, name + w + ".svg"), iconify_svg(e, ph_w, ph_h))
-                    ok += 1
-                else:
-                    fail.append(("ph", name + w))
 
     # 单色源：simple-icons 按文件名、mdi/tdesign 走包内 icons.json
     simple_dir = os.path.join(ARGS.icon_sets, "x-simple", "package", "icons")

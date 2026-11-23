@@ -1,15 +1,16 @@
-//! 图标（Phosphor Icons，MIT）。
+//! 图标（Remix Icon，Apache-2.0）。
 //!
 //! 为什么用 SVG 原文而不是手绘 path：GPUI 的 `svg().data()` 直接渲染同源 SVG，
 //! 几何/线宽/圆角与设计稿一致，不需要近似重画。
 //!
-//! 资产在 `assets/icons/phosphor/`，由 `scripts/gen-icons-lobe.py` 一次性生成
-//! （不进构建链）。画布是 256×256（Phosphor 的原始网格），不是 24×24。
+//! 资产在 `assets/icons/ui/`，由 `scripts/gen-icons-lobe.py` 一次性生成
+//! （不进构建链）。画布是 24×24。
 //!
 //! 颜色走 `currentColor`：调用方用 `text_color` 指定，悬停换色不重新栅格化。
 //!
-//! **粗细由字重决定，不是 stroke-width**：Phosphor 是纯填充路径，没有描边属性。
-//! 需要更细的画面用 [`icon_light`]，想按数值微调的地方请改用 `Icon` 的 light 变体。
+//! 为什么从 Phosphor 换成 Remix：Phosphor 是实心填充、外框偏方，在 21px 下
+//! 显得厚重。Remix 的 `-line` 变体是 2px 线框、转角更圆，与旧版手绘风格更接近，
+//! 且同样提供 `-fill` 成对变体，菜单选中态可以照旧切实心。
 
 use gpui::{px, svg, Hsla, IntoElement, Rgba, Styled};
 
@@ -77,8 +78,7 @@ pub enum Icon {
     PaneExpand,
 }
 
-/// 图标字重。Phosphor 每个图标提供 regular / light / bold / fill 等变体，
-/// 这里的取值决定读哪个 SVG 文件。
+/// 图标字重。Remix 只提供 `-line` 与 `-fill` 两种；light 与 regular 同源。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Weight {
     /// 常规（默认）
@@ -168,149 +168,71 @@ impl Icon {
 
     fn regular_svg(self) -> &'static [u8] {
         match self {
-            Icon::Search => include_bytes!("../assets/icons/phosphor/magnifying-glass.svg"),
-            Icon::Plus => include_bytes!("../assets/icons/phosphor/plus.svg"),
-            Icon::Ellipsis => include_bytes!("../assets/icons/phosphor/dots-three.svg"),
-            Icon::Settings => include_bytes!("../assets/icons/phosphor/gear.svg"),
-            Icon::X => include_bytes!("../assets/icons/phosphor/x.svg"),
-            Icon::Check => include_bytes!("../assets/icons/phosphor/check.svg"),
-            Icon::ArrowUp => include_bytes!("../assets/icons/phosphor/arrow-up.svg"),
-            Icon::Stop => include_bytes!("../assets/icons/phosphor/square.svg"),
-            Icon::ChevronLeft => include_bytes!("../assets/icons/phosphor/caret-left.svg"),
-            Icon::ChevronRight => include_bytes!("../assets/icons/phosphor/caret-right.svg"),
-            Icon::Paperclip => include_bytes!("../assets/icons/phosphor/paperclip.svg"),
-            Icon::Minus => include_bytes!("../assets/icons/phosphor/minus.svg"),
-            Icon::WindowMaximize => include_bytes!("../assets/icons/phosphor/square.svg"),
-            Icon::WindowRestore => include_bytes!("../assets/icons/phosphor/copy.svg"),
-            Icon::PanelRight => include_bytes!("../assets/icons/phosphor/sidebar-simple.svg"),
-            Icon::Hash => include_bytes!("../assets/icons/phosphor/hash.svg"),
-            Icon::Pin => include_bytes!("../assets/icons/phosphor/push-pin.svg"),
-            Icon::Star => include_bytes!("../assets/icons/phosphor/star.svg"),
-            Icon::Crown => include_bytes!("../assets/icons/phosphor/crown.svg"),
-            Icon::Pencil => include_bytes!("../assets/icons/phosphor/pencil-simple.svg"),
-            Icon::Trash => include_bytes!("../assets/icons/phosphor/trash.svg"),
-            Icon::EyeOff => include_bytes!("../assets/icons/phosphor/eye-slash.svg"),
-            Icon::Archive => include_bytes!("../assets/icons/phosphor/archive.svg"),
-            Icon::Chart => include_bytes!("../assets/icons/phosphor/chart-line.svg"),
-            Icon::Cpu => include_bytes!("../assets/icons/phosphor/cpu.svg"),
-            Icon::Plug => include_bytes!("../assets/icons/phosphor/plug.svg"),
-            Icon::Calendar => include_bytes!("../assets/icons/phosphor/calendar-blank.svg"),
-            Icon::Refresh => include_bytes!("../assets/icons/phosphor/arrows-clockwise.svg"),
-            Icon::Download => include_bytes!("../assets/icons/phosphor/download-simple.svg"),
-            Icon::MessageCircle => include_bytes!("../assets/icons/phosphor/chat-circle.svg"),
-            Icon::Bot => include_bytes!("../assets/icons/phosphor/robot.svg"),
-            Icon::ListChecks => include_bytes!("../assets/icons/phosphor/list-checks.svg"),
-            Icon::Building => include_bytes!("../assets/icons/phosphor/buildings.svg"),
-            Icon::Smile => include_bytes!("../assets/icons/phosphor/smiley.svg"),
-            Icon::Shield => include_bytes!("../assets/icons/phosphor/shield.svg"),
-            Icon::Terminal => include_bytes!("../assets/icons/phosphor/terminal-window.svg"),
-            Icon::Folder => include_bytes!("../assets/icons/phosphor/folder.svg"),
-            Icon::Scissors => include_bytes!("../assets/icons/phosphor/scissors.svg"),
-            Icon::Mic => include_bytes!("../assets/icons/phosphor/microphone.svg"),
-            Icon::BellOff => include_bytes!("../assets/icons/phosphor/bell-slash.svg"),
-            Icon::Key => include_bytes!("../assets/icons/phosphor/key.svg"),
-            Icon::Info => include_bytes!("../assets/icons/phosphor/info.svg"),
-            Icon::MessageSquare => include_bytes!("../assets/icons/phosphor/chat.svg"),
-            Icon::Sparkles => include_bytes!("../assets/icons/phosphor/sparkle.svg"),
-            Icon::Contacts => include_bytes!("../assets/icons/phosphor/users.svg"),
-            Icon::MessageCircleFilled => {
-                include_bytes!("../assets/icons/phosphor/chat-circle-fill.svg")
-            }
-            Icon::Brain => include_bytes!("../assets/icons/phosphor/brain.svg"),
-            Icon::Pushpin => include_bytes!("../assets/icons/phosphor/push-pin.svg"),
-            Icon::Sun => include_bytes!("../assets/icons/phosphor/sun.svg"),
-            Icon::Moon => include_bytes!("../assets/icons/phosphor/moon.svg"),
-            Icon::Monitor => include_bytes!("../assets/icons/phosphor/desktop.svg"),
-            Icon::ChevronDown => include_bytes!("../assets/icons/phosphor/caret-down.svg"),
-            Icon::SidebarExpand => {
-                include_bytes!("../assets/icons/phosphor/sidebar-simple.svg")
-            }
-            Icon::PaneCollapse => {
-                include_bytes!("../assets/icons/phosphor/caret-double-right.svg")
-            }
-            Icon::PaneExpand => {
-                include_bytes!("../assets/icons/phosphor/caret-double-left.svg")
-            }
+            Icon::Search => include_bytes!("../assets/icons/ui/search-line.svg"),
+            Icon::Plus => include_bytes!("../assets/icons/ui/add-line.svg"),
+            Icon::Ellipsis => include_bytes!("../assets/icons/ui/more-line.svg"),
+            Icon::Settings => include_bytes!("../assets/icons/ui/settings-3-line.svg"),
+            Icon::X => include_bytes!("../assets/icons/ui/close-line.svg"),
+            Icon::Check => include_bytes!("../assets/icons/ui/check-line.svg"),
+            Icon::ArrowUp => include_bytes!("../assets/icons/ui/arrow-up-line.svg"),
+            Icon::Stop => include_bytes!("../assets/icons/ui/stop-line.svg"),
+            Icon::ChevronLeft => include_bytes!("../assets/icons/ui/arrow-left-s-line.svg"),
+            Icon::ChevronRight => include_bytes!("../assets/icons/ui/arrow-right-s-line.svg"),
+            Icon::ChevronDown => include_bytes!("../assets/icons/ui/arrow-down-s-line.svg"),
+            Icon::Paperclip => include_bytes!("../assets/icons/ui/attachment-line.svg"),
+            Icon::Minus => include_bytes!("../assets/icons/ui/subtract-line.svg"),
+            Icon::WindowMaximize => include_bytes!("../assets/icons/ui/checkbox-blank-line.svg"),
+            Icon::WindowRestore => include_bytes!("../assets/icons/ui/file-copy-line.svg"),
+            Icon::PanelRight => include_bytes!("../assets/icons/ui/layout-right-line.svg"),
+            Icon::Hash => include_bytes!("../assets/icons/ui/hashtag.svg"),
+            Icon::Pin => include_bytes!("../assets/icons/ui/pushpin-line.svg"),
+            Icon::Star => include_bytes!("../assets/icons/ui/star-line.svg"),
+            Icon::Crown => include_bytes!("../assets/icons/ui/vip-crown-line.svg"),
+            Icon::Pencil => include_bytes!("../assets/icons/ui/edit-line.svg"),
+            Icon::Trash => include_bytes!("../assets/icons/ui/delete-bin-line.svg"),
+            Icon::EyeOff => include_bytes!("../assets/icons/ui/eye-off-line.svg"),
+            Icon::Archive => include_bytes!("../assets/icons/ui/archive-line.svg"),
+            Icon::Chart => include_bytes!("../assets/icons/ui/line-chart-line.svg"),
+            Icon::Cpu => include_bytes!("../assets/icons/ui/cpu-line.svg"),
+            Icon::Plug => include_bytes!("../assets/icons/ui/plug-line.svg"),
+            Icon::Calendar => include_bytes!("../assets/icons/ui/calendar-line.svg"),
+            Icon::Refresh => include_bytes!("../assets/icons/ui/refresh-line.svg"),
+            Icon::Download => include_bytes!("../assets/icons/ui/download-line.svg"),
+            Icon::MessageCircle => include_bytes!("../assets/icons/ui/chat-3-line.svg"),
+            Icon::Bot => include_bytes!("../assets/icons/ui/robot-line.svg"),
+            Icon::ListChecks => include_bytes!("../assets/icons/ui/list-check-2.svg"),
+            Icon::Building => include_bytes!("../assets/icons/ui/building-line.svg"),
+            Icon::Smile => include_bytes!("../assets/icons/ui/emotion-happy-line.svg"),
+            Icon::Shield => include_bytes!("../assets/icons/ui/shield-check-line.svg"),
+            Icon::Terminal => include_bytes!("../assets/icons/ui/terminal-box-line.svg"),
+            Icon::Folder => include_bytes!("../assets/icons/ui/folder-line.svg"),
+            Icon::Scissors => include_bytes!("../assets/icons/ui/scissors-line.svg"),
+            Icon::Mic => include_bytes!("../assets/icons/ui/mic-line.svg"),
+            Icon::BellOff => include_bytes!("../assets/icons/ui/notification-off-line.svg"),
+            Icon::Key => include_bytes!("../assets/icons/ui/key-2-line.svg"),
+            Icon::Info => include_bytes!("../assets/icons/ui/information-line.svg"),
+            Icon::MessageSquare => include_bytes!("../assets/icons/ui/message-2-line.svg"),
+            Icon::Sparkles => include_bytes!("../assets/icons/ui/sparkling-line.svg"),
+            Icon::Contacts => include_bytes!("../assets/icons/ui/contacts-line.svg"),
+            Icon::MessageCircleFilled => include_bytes!("../assets/icons/ui/chat-3-fill.svg"),
+            Icon::Brain => include_bytes!("../assets/icons/ui/brain-line.svg"),
+            Icon::Pushpin => include_bytes!("../assets/icons/ui/pushpin-line.svg"),
+            Icon::Sun => include_bytes!("../assets/icons/ui/sun-line.svg"),
+            Icon::Moon => include_bytes!("../assets/icons/ui/moon-line.svg"),
+            Icon::Monitor => include_bytes!("../assets/icons/ui/computer-line.svg"),
+            Icon::SidebarExpand => include_bytes!("../assets/icons/ui/layout-left-line.svg"),
+            Icon::PaneCollapse => include_bytes!("../assets/icons/ui/arrow-right-double-line.svg"),
+            Icon::PaneExpand => include_bytes!("../assets/icons/ui/arrow-left-double-line.svg"),
         }
     }
 
+    /// 细线变体。Remix 没有 light 字重，`-line` 本身已是线框，
+    /// 因此这里与 regular 相同；保留接口是为了不动调用方。
     fn light_svg(self) -> &'static [u8] {
-        match self {
-            Icon::Search => include_bytes!("../assets/icons/phosphor/magnifying-glass-light.svg"),
-            Icon::Plus => include_bytes!("../assets/icons/phosphor/plus-light.svg"),
-            Icon::Ellipsis => include_bytes!("../assets/icons/phosphor/dots-three-light.svg"),
-            Icon::Settings => include_bytes!("../assets/icons/phosphor/gear-light.svg"),
-            Icon::X => include_bytes!("../assets/icons/phosphor/x-light.svg"),
-            Icon::Check => include_bytes!("../assets/icons/phosphor/check-light.svg"),
-            Icon::ArrowUp => include_bytes!("../assets/icons/phosphor/arrow-up-light.svg"),
-            Icon::Stop => include_bytes!("../assets/icons/phosphor/square-light.svg"),
-            Icon::ChevronLeft => include_bytes!("../assets/icons/phosphor/caret-left-light.svg"),
-            Icon::ChevronRight => include_bytes!("../assets/icons/phosphor/caret-right-light.svg"),
-            Icon::Paperclip => include_bytes!("../assets/icons/phosphor/paperclip-light.svg"),
-            Icon::Minus => include_bytes!("../assets/icons/phosphor/minus-light.svg"),
-            Icon::WindowMaximize => include_bytes!("../assets/icons/phosphor/square-light.svg"),
-            Icon::WindowRestore => include_bytes!("../assets/icons/phosphor/copy-light.svg"),
-            Icon::PanelRight => {
-                include_bytes!("../assets/icons/phosphor/sidebar-simple-light.svg")
-            }
-            Icon::Hash => include_bytes!("../assets/icons/phosphor/hash-light.svg"),
-            Icon::Pin => include_bytes!("../assets/icons/phosphor/push-pin-light.svg"),
-            Icon::Star => include_bytes!("../assets/icons/phosphor/star-light.svg"),
-            Icon::Crown => include_bytes!("../assets/icons/phosphor/crown-light.svg"),
-            Icon::Pencil => include_bytes!("../assets/icons/phosphor/pencil-simple-light.svg"),
-            Icon::Trash => include_bytes!("../assets/icons/phosphor/trash-light.svg"),
-            Icon::EyeOff => include_bytes!("../assets/icons/phosphor/eye-slash-light.svg"),
-            Icon::Archive => include_bytes!("../assets/icons/phosphor/archive-light.svg"),
-            Icon::Chart => include_bytes!("../assets/icons/phosphor/chart-line-light.svg"),
-            Icon::Cpu => include_bytes!("../assets/icons/phosphor/cpu-light.svg"),
-            Icon::Plug => include_bytes!("../assets/icons/phosphor/plug-light.svg"),
-            Icon::Calendar => include_bytes!("../assets/icons/phosphor/calendar-blank-light.svg"),
-            Icon::Refresh => {
-                include_bytes!("../assets/icons/phosphor/arrows-clockwise-light.svg")
-            }
-            Icon::Download => include_bytes!("../assets/icons/phosphor/download-simple-light.svg"),
-            Icon::MessageCircle => {
-                include_bytes!("../assets/icons/phosphor/chat-circle-light.svg")
-            }
-            Icon::Bot => include_bytes!("../assets/icons/phosphor/robot-light.svg"),
-            Icon::ListChecks => include_bytes!("../assets/icons/phosphor/list-checks-light.svg"),
-            Icon::Building => include_bytes!("../assets/icons/phosphor/buildings-light.svg"),
-            Icon::Smile => include_bytes!("../assets/icons/phosphor/smiley-light.svg"),
-            Icon::Shield => include_bytes!("../assets/icons/phosphor/shield-light.svg"),
-            Icon::Terminal => {
-                include_bytes!("../assets/icons/phosphor/terminal-window-light.svg")
-            }
-            Icon::Folder => include_bytes!("../assets/icons/phosphor/folder-light.svg"),
-            Icon::Scissors => include_bytes!("../assets/icons/phosphor/scissors-light.svg"),
-            Icon::Mic => include_bytes!("../assets/icons/phosphor/microphone-light.svg"),
-            Icon::BellOff => include_bytes!("../assets/icons/phosphor/bell-slash-light.svg"),
-            Icon::Key => include_bytes!("../assets/icons/phosphor/key-light.svg"),
-            Icon::Info => include_bytes!("../assets/icons/phosphor/info-light.svg"),
-            Icon::MessageSquare => include_bytes!("../assets/icons/phosphor/chat-light.svg"),
-            Icon::Sparkles => include_bytes!("../assets/icons/phosphor/sparkle-light.svg"),
-            Icon::Contacts => include_bytes!("../assets/icons/phosphor/users-light.svg"),
-            // 只有 fill 变体，light 回落 regular
-            Icon::MessageCircleFilled => {
-                include_bytes!("../assets/icons/phosphor/chat-circle-fill.svg")
-            }
-            Icon::Brain => include_bytes!("../assets/icons/phosphor/brain-light.svg"),
-            Icon::Pushpin => include_bytes!("../assets/icons/phosphor/push-pin-light.svg"),
-            Icon::Sun => include_bytes!("../assets/icons/phosphor/sun-light.svg"),
-            Icon::Moon => include_bytes!("../assets/icons/phosphor/moon-light.svg"),
-            Icon::Monitor => include_bytes!("../assets/icons/phosphor/desktop-light.svg"),
-            Icon::ChevronDown => include_bytes!("../assets/icons/phosphor/caret-down-light.svg"),
-            Icon::SidebarExpand => {
-                include_bytes!("../assets/icons/phosphor/sidebar-simple-light.svg")
-            }
-            Icon::PaneCollapse => {
-                include_bytes!("../assets/icons/phosphor/caret-double-right-light.svg")
-            }
-            Icon::PaneExpand => {
-                include_bytes!("../assets/icons/phosphor/caret-double-left-light.svg")
-            }
-        }
+        self.regular_svg()
     }
 }
+
 
 /// 画一个图标（regular 字重）。`size` 是边长，颜色由调用方给（`currentColor`）。
 pub fn icon(kind: Icon, size: f32, color: Rgba) -> impl IntoElement {
@@ -320,10 +242,11 @@ pub fn icon(kind: Icon, size: f32, color: Rgba) -> impl IntoElement {
         .text_color(Hsla::from(color))
 }
 
-/// 细线版（Phosphor light 字重）。
+/// 细线版。
 ///
-/// 旧接口 `icon_with_stroke(.., stroke_width)` 是替换 SVG 里的 `stroke-width` 字符串；
-/// Phosphor 是纯填充路径、没有这个属性，那种做法会静默失效。要更细就用这个函数。
+/// 旧接口 `icon_with_stroke(.., stroke_width)` 靠替换 SVG 里的 `stroke-width` 字符串；
+/// Remix 的 `-line` 是填充路径、同样没有这个属性，那种做法会静默失效。
+/// 现在该函数与 [`icon`] 等价（Remix 没有 light 字重），保留只为不动调用方。
 pub fn icon_light(kind: Icon, size: f32, color: Rgba) -> impl IntoElement {
     svg()
         .data(kind.svg_at(Weight::Light))
@@ -343,8 +266,8 @@ mod tests {
                 assert!(bytes.starts_with(b"<svg"), "{icon:?}/{weight:?} 不是 svg");
                 let text = std::str::from_utf8(bytes).unwrap();
                 assert!(
-                    text.contains("viewBox=\"0 0 256 256\""),
-                    "{icon:?}/{weight:?} 缺 256 画布"
+                    text.contains("viewBox=\"0 0 24 24\""),
+                    "{icon:?}/{weight:?} 缺 24 画布"
                 );
                 assert!(
                     text.contains("currentColor"),
@@ -361,16 +284,13 @@ mod tests {
     }
 
     #[test]
-    fn light_weight_differs_from_regular_where_available() {
-        // 除了只有 fill 变体的那个，light 与 regular 必须是不同资产
+    fn light_weight_falls_back_to_regular() {
+        // Remix 没有 light 字重：`-line` 本身就是线框，light 与 regular 同源。
         for icon in Icon::ALL {
-            if icon == Icon::MessageCircleFilled {
-                continue;
-            }
-            assert_ne!(
-                icon.svg(),
+            assert_eq!(
+                icon.svg_at(Weight::Regular),
                 icon.svg_at(Weight::Light),
-                "{icon:?} 的 light 变体与 regular 相同"
+                "{icon:?} 的 light 应与 regular 同源"
             );
         }
     }
