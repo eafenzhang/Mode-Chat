@@ -582,6 +582,9 @@ pub const RADIUS_COMPOSER_MULTI: f32 = 18.0;
 /// 分段控件里的项（DS：8；保留旧名）。
 pub const RADIUS_SEGMENT: f32 = 8.0;
 
+/// 全圆角（胶囊 / 头像 / 开关）。999 足够大，等价于 50%。
+pub const RADIUS_PILL: f32 = 999.0;
+
 // ---- 动效 ----
 pub const DUR_FAST: Duration = Duration::from_millis(120);
 pub const DUR_BASE: Duration = Duration::from_millis(160);
