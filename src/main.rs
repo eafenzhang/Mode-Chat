@@ -2572,12 +2572,6 @@ struct AutomationDeleteTarget {
     title: String,
 }
 
-/// 定时任务运行历史弹层状态。
-struct AutomationHistoryState {
-    title: String,
-    runs: Vec<automation_repo::AutomationRun>,
-}
-
 /// 设置页下拉框种类（语言/字号/动效/消息布局）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsSelectKind {
@@ -2676,7 +2670,6 @@ struct PilotApp {
     /// 浏览器最近 URL（按 Bot，懒加载 prefs.json）。
     browser_recents: HashMap<String, Vec<String>>,
     search_open: bool,
-    pending_bot_dialog: Option<BotFormRequest>,
     settings_open: bool,
     /// 设置窗口当前页（`SETTINGS_PAGES` 下标）。
     settings_tab: usize,
@@ -2708,7 +2701,6 @@ struct PilotApp {
     /// ⋯ 菜单展开时持有焦点：落在 TextInput 上的话 ↑/↓ 会被输入框吃掉。
     menu_focus: gpui::FocusHandle,
     /// 新建/编辑群聊对话框。
-    pending_group_dialog: Option<GroupFormRequest>,
     /// 删除群聊确认：待删 group id。
     /// 删除定时任务确认：任务 id + workspace_key + 标题。
     /// 定时任务运行历史弹层。
@@ -2743,9 +2735,7 @@ struct PilotApp {
     /// 模型选择对话框。
     /// 审批白名单编辑对话框。
     /// 群目标编辑对话框（group id）。
-    pending_group_goal_dialog: Option<String>,
     /// 群任务台账对话框（group id）。
-    pending_group_tasks_dialog: Option<String>,
     /// 设置页右侧详情面板（替代 Provider Key/URL、模型选择等弹窗）。
     settings_detail: Option<SettingsDetail>,
     /// 会话右栏的二级详情（运行状态等）。
@@ -2760,6 +2750,12 @@ struct PilotApp {
     settings_detail_extra: Vec<Entity<SimpleInput>>,
     /// 详情面板里的开关状态（Bot 表单的同步/隐私/管理员）。
     settings_detail_flags: Vec<bool>,
+    /// 详情面板里嵌入的实体视图（群目标 / 群任务这类已有 Render 的表单）。
+    settings_detail_view: Option<gpui::AnyView>,
+    /// Bot 表单实体（面板保存时要读它的字段）。
+    settings_detail_bot: Option<Entity<BotFormState>>,
+    /// 群聊表单实体。
+    settings_detail_group: Option<Entity<GroupFormState>>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
     /// 每个群在当前用户回合里已发生的 Bot 交接次数（上限 4，防止互相 @ 无限循环）。
@@ -3181,7 +3177,6 @@ impl PilotApp {
             connector_category: None,
             _connector_search_sub: connector_search_sub,
             search_open: false,
-            pending_bot_dialog: None,
             settings_open: false,
             settings_tab: 0,
             settings_focus: cx.focus_handle(),
@@ -3212,11 +3207,8 @@ impl PilotApp {
             me_card_open: false,
             menu_selected: 0,
             menu_focus: cx.focus_handle(),
-            pending_group_dialog: None,
             automations_view: None,
             usage_totals_view: None,
-            pending_group_goal_dialog: None,
-            pending_group_tasks_dialog: None,
             settings_detail: None,
             chat_detail: None,
             settings_detail_input: None,
@@ -3224,6 +3216,9 @@ impl PilotApp {
             settings_detail_entries: Vec::new(),
             settings_detail_extra: Vec::new(),
             settings_detail_flags: Vec::new(),
+            settings_detail_view: None,
+            settings_detail_bot: None,
+            settings_detail_group: None,
             question_free_active: None,
             question_free_input,
             group_task_turns: HashMap::new(),
@@ -3476,7 +3471,11 @@ impl PilotApp {
                         .cursor_pointer()
                         .hover(move |style| style.bg(hover))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.pending_group_tasks_dialog = Some(open.clone());
+                            this.settings_detail = Some(SettingsDetail::GroupTasks {
+                                group_id: open.clone(),
+                            });
+                            this.settings_detail_view = None;
+                            this.settings_open = true;
                             cx.notify();
                         }))
                         .child(
@@ -3535,7 +3534,11 @@ impl PilotApp {
                     .cursor_pointer()
                     .hover(move |style| style.bg(hover))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.pending_group_tasks_dialog = Some(open_id.clone());
+                        this.settings_detail = Some(SettingsDetail::GroupTasks {
+                            group_id: open_id.clone(),
+                        });
+                        this.settings_detail_view = None;
+                        this.settings_open = true;
                         cx.notify();
                     }))
                     .child(
@@ -3619,566 +3622,42 @@ impl PilotApp {
     /// 新建/编辑群聊：只置 pending，下一帧由 render 打开 kit AlertDialog。
     fn open_new_group_dialog(&mut self, cx: &mut Context<Self>) {
         self.detail_menu_open = false;
-        self.pending_bot_dialog = None;
-        self.pending_group_dialog = Some(GroupFormRequest::New);
+        self.settings_detail = Some(SettingsDetail::GroupForm {
+            request: GroupFormRequest::New,
+        });
+        self.settings_detail_group = None;
+        self.settings_open = true;
         cx.notify();
     }
 
     fn open_edit_group_dialog(&mut self, group_id: String, cx: &mut Context<Self>) {
         self.detail_menu_open = false;
-        self.pending_group_dialog = Some(GroupFormRequest::Edit(group_id));
+        self.settings_detail = Some(SettingsDetail::GroupForm {
+            request: GroupFormRequest::Edit(group_id),
+        });
+        self.settings_detail_group = None;
+        self.settings_open = true;
         cx.notify();
-    }
-
-    fn open_group_form_dialog(
-        &mut self,
-        request: GroupFormRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let bots: Vec<(String, String, String)> = self
-            .roster
-            .bots
-            .iter()
-            .filter(|bot| !bot.is_private)
-            .map(|bot| (bot.id.clone(), bot.name.clone(), bot.role.clone()))
-            .collect();
-        let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id, policy, title, ok_text) =
-            match request {
-                GroupFormRequest::New => {
-                    let member_ids: Vec<String> = self
-                        .roster
-                        .bots
-                        .iter()
-                        .filter(|bot| !bot.is_private)
-                        .map(|bot| bot.id.clone())
-                        .collect();
-                    let admin_id = self
-                        .roster
-                        .bots
-                        .iter()
-                        .filter(|bot| !bot.is_private)
-                        .find(|bot| bot.is_chief)
-                        .or_else(|| self.roster.bots.first())
-                        .map(|bot| bot.id.clone())
-                        .unwrap_or_default();
-                    (
-                        None,
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        member_ids,
-                        admin_id,
-                        "mentions-first".to_string(),
-                        i18n::t("新建群聊"),
-                        i18n::t("创建"),
-                    )
-                }
-                GroupFormRequest::Edit(id) => {
-                    let Some(group) = self.roster.groups.iter().find(|group| group.id == id) else {
-                        return;
-                    };
-                    // 隐私 Bot 永远不进入群聊：编辑旧群时顺手清掉。
-                    let member_ids: Vec<String> = group
-                        .member_ids
-                        .iter()
-                        .filter(|id| {
-                            self.roster
-                                .bot_by_id(id)
-                                .is_some_and(|bot| !bot.is_private)
-                        })
-                        .cloned()
-                        .collect();
-                    let admin_id = group
-                        .admin_id
-                        .clone()
-                        .filter(|id| member_ids.iter().any(|member| member == id))
-                        .or_else(|| member_ids.first().cloned())
-                        .unwrap_or_default();
-                    (
-                        Some(group.id.clone()),
-                        group.name.clone(),
-                        group.instructions.clone(),
-                        group.memory.clone(),
-                        member_ids,
-                        admin_id,
-                        if group.responder_policy.trim().is_empty() {
-                            "mentions-first".to_string()
-                        } else {
-                            group.responder_policy.clone()
-                        },
-                        i18n::t("编辑群聊"),
-                        i18n::t("保存"),
-                    )
-                }
-            };
-        let name = cx.new(|cx| SimpleInput::new(i18n::t("群聊名（必填）"), theme::ink_tertiary, cx));
-        let instructions = cx.new(|cx| {
-            SimpleInput::new(i18n::t("群聊规则（可选，注入每个成员）"), theme::ink_tertiary, cx)
-        });
-        let memory =
-            cx.new(|cx| SimpleInput::new(i18n::t("团队记忆（可选，长期事实）"), theme::ink_tertiary, cx));
-        name.update(cx, |input, cx| input.set_content(name_text, cx));
-        instructions.update(cx, |input, cx| input.set_content(instructions_text, cx));
-        memory.update(cx, |input, cx| input.set_content(memory_text, cx));
-        let form = cx.new(|_| GroupFormState {
-            editing_id,
-            name,
-            instructions,
-            memory,
-            member_ids,
-            admin_id,
-            policy,
-            bots,
-            error: None,
-        });
-        let handle = form.read(cx).name.read(cx).focus_handle(cx);
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(title)
-                .width(px(500.))
-                .centered()
-                .ok_text(ok_text)
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let (name, instructions, memory, member_ids, admin_id, policy, editing_id) = {
-                        let form = form_ok.read(cx);
-                        (
-                            form.name.read(cx).content().trim().to_string(),
-                            form.instructions.read(cx).content().to_string(),
-                            form.memory.read(cx).content().to_string(),
-                            form.member_ids.clone(),
-                            form.admin_id.clone(),
-                            form.policy.clone(),
-                            form.editing_id.clone(),
-                        )
-                    };
-                    let draft = data::GroupDraft {
-                        name,
-                        admin_id,
-                        member_ids,
-                        instructions,
-                        memory,
-                        responder_policy: policy,
-                    };
-                    let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
-                        let result = match &editing_id {
-                            Some(id) => data::update_group(id, draft),
-                            None => data::create_group(draft),
-                        };
-                        match result {
-                            Ok(group) => {
-                                let group_id = group.id.clone();
-                                this.roster = Roster::load();
-                                if let Some(index) =
-                                    this.roster.groups.iter().position(|item| item.id == group_id)
-                                {
-                                    this.selection = Some(Selection::Group(index));
-                                    this.active_tab = 0;
-                                    this.ensure_group(index);
-                                }
-                                cx.notify();
-                                Ok(())
-                            }
-                            Err(message) => Err(message),
-                        }
-                    });
-                    match outcome {
-                        Ok(Ok(())) => true,
-                        Ok(Err(message)) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                        Err(_) => false,
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
-    /// 群目标：kit AlertDialog + 实体表单（阶段推进/暂停/完成/清除）。
-    fn open_group_goal_dialog(
-        &mut self,
-        group_id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let group_name = self
-            .roster
-            .groups
-            .iter()
-            .find(|group| group.id == group_id)
-            .map(|group| group.name.clone())
-            .unwrap_or_else(|| short_id(&group_id));
-        let goal = group_goal::read(&data::data_root(), &group_id);
-        let (title_text, description_text) = goal
-            .as_ref()
-            .map(|goal| (goal.title.clone(), goal.description.clone()))
-            .unwrap_or_default();
-        let title = cx.new(|cx| SimpleInput::new(i18n::t("目标标题（必填）"), theme::ink_tertiary, cx));
-        let description =
-            cx.new(|cx| SimpleInput::new(i18n::t("目标说明（可选）"), theme::ink_tertiary, cx));
-        let stage = cx.new(|cx| SimpleInput::new(i18n::t("阶段标题"), theme::ink_tertiary, cx));
-        title.update(cx, |input, cx| input.set_content(title_text, cx));
-        description.update(cx, |input, cx| input.set_content(description_text, cx));
-        let handle = title.read(cx).focus_handle(cx);
-        let form = cx.new(|_| GroupGoalState {
-            group_id,
-            goal,
-            title,
-            description,
-            stage,
-            new_stages: Vec::new(),
-            error: None,
-        });
-        let viewport_height = f32::from(window.viewport_size().height);
-        let form_content = form.clone();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let restore = restore.clone();
-            alert
-                .title(tri!("群目标 · {group_name}", "Group goal · {group_name}"))
-                .width(px(560.))
-                .centered()
-                .ok_text(i18n::t("关闭"))
-                .show_cancel(false)
-                .content(move |content, _, _| {
-                    content.child(
-                        div()
-                            .id("group-goal-body")
-                            .max_h(px((viewport_height - 200.).max(240.)))
-                            .overflow_y_scroll()
-                            .scrollbar_width(px(6.))
-                            .child(form_content.clone()),
-                    )
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
-    /// 群任务台账：kit AlertDialog + 只读列表（停止/取消直接写 JSONL）。
-    fn open_group_tasks_dialog(
-        &mut self,
-        group_id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let group_name = self
-            .roster
-            .groups
-            .iter()
-            .find(|group| group.id == group_id)
-            .map(|group| group.name.clone())
-            .unwrap_or_else(|| short_id(&group_id));
-        let member_names: HashMap<String, String> = self
-            .roster
-            .groups
-            .iter()
-            .find(|group| group.id == group_id)
-            .map(|group| {
-                group
-                    .member_ids
-                    .iter()
-                    .filter_map(|member_id| self.roster.bot_by_id(member_id))
-                    .map(|bot| (bot.id.clone(), bot.name.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let (tasks, error) = match group_tasks::list(&data::data_root(), &group_id) {
-            Ok(tasks) => (tasks, None),
-            Err(message) => (Vec::new(), Some(message)),
-        };
-        let group_key_value = group_key(&group_id);
-        let weak = cx.weak_entity();
-        let state = cx.new(|_| GroupTasksState {
-            group_id,
-            group_key: group_key_value,
-            tasks,
-            member_names,
-            reassign_task: None,
-            error,
-            weak,
-        });
-        let viewport_height = f32::from(window.viewport_size().height);
-        self.group_tasks_view = Some(state.downgrade());
-        let content = state.clone();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let content = content.clone();
-            let restore = restore.clone();
-            alert
-                .title(tri!("群任务 · {group_name}", "Group tasks · {group_name}"))
-                .width(px(560.))
-                .centered()
-                .ok_text(i18n::t("关闭"))
-                .show_cancel(false)
-                .content(move |content_box, _, _| {
-                    content_box.child(
-                        div()
-                            .id("group-tasks-body")
-                            // 右侧滚动条占 6px：左内边距补上，卡片左右留白一致。
-                            .pl(px(6.))
-                            .max_h(px((viewport_height - 200.).max(240.)))
-                            .overflow_y_scroll()
-                            .scrollbar_width(px(6.))
-                            .child(content.clone()),
-                    )
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
     }
 
     fn open_new_dialog(&mut self, cx: &mut Context<Self>) {
         // 从设置页打开时保留设置背景；对话框关闭后回到原页。
-        self.pending_bot_dialog = Some(BotFormRequest::New);
+        self.settings_detail = Some(SettingsDetail::BotForm {
+            request: BotFormRequest::New,
+        });
+        self.settings_detail_bot = None;
+        self.settings_open = true;
         cx.notify();
     }
 
     /// 编辑已有 Bot：下一帧由 render 打开 kit AlertDialog。
     fn open_edit_dialog(&mut self, bot_id: String, cx: &mut Context<Self>) {
-        self.pending_bot_dialog = Some(BotFormRequest::Edit(bot_id));
+        self.settings_detail = Some(SettingsDetail::BotForm {
+            request: BotFormRequest::Edit(bot_id),
+        });
+        self.settings_detail_bot = None;
+        self.settings_open = true;
         cx.notify();
-    }
-
-    fn open_bot_form_dialog(
-        &mut self,
-        request: BotFormRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (
-            editing_id,
-            name_text,
-            role_text,
-            directory_text,
-            identity_on,
-            private_on,
-            chief_on,
-            title,
-            ok_text,
-        ) = match request {
-            BotFormRequest::New => {
-                let directory = self
-                    .roster
-                    .bots
-                    .first()
-                    .map(|bot| bot.directory.clone())
-                    .filter(|directory| !directory.trim().is_empty())
-                    .unwrap_or_else(|| {
-                        backend::fallback_workspace().to_string_lossy().into_owned()
-                    });
-                (
-                    None,
-                    String::new(),
-                    String::new(),
-                    directory,
-                    false,
-                    false,
-                    self.roster.bots.iter().all(|bot| !bot.is_chief),
-                    i18n::t("新建 Bot"),
-                    i18n::t("创建"),
-                )
-            }
-            BotFormRequest::Edit(id) => {
-                let Some(bot) = self.roster.bot_by_id(&id) else {
-                    return;
-                };
-                let directory = if bot.directory.trim().is_empty() {
-                    backend::fallback_workspace().to_string_lossy().into_owned()
-                } else {
-                    bot.directory.clone()
-                };
-                (
-                    Some(id),
-                    bot.name.clone(),
-                    bot.role.clone(),
-                    directory,
-                    bot.identity_sync,
-                    bot.is_private,
-                    bot.is_chief,
-                    i18n::t("编辑 Bot"),
-                    i18n::t("保存"),
-                )
-            }
-        };
-        let name = cx.new(|cx| SimpleInput::new(i18n::t("名字（必填）"), theme::ink_tertiary, cx));
-        let role = cx.new(|cx| SimpleInput::new(i18n::t("角色（可选）"), theme::ink_tertiary, cx));
-        let directory = cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx));
-        name.update(cx, |input, cx| input.set_content(name_text, cx));
-        role.update(cx, |input, cx| input.set_content(role_text, cx));
-        directory.update(cx, |input, cx| input.set_content(directory_text, cx));
-        // 图标只剩一套：旧 Bot 存的 k1..k9 归一成新图标，颜色沿用。
-        let (appearance_icon, appearance_color) = editing_id
-            .as_deref()
-            .and_then(bot_icon::get)
-            .map(|appearance| {
-                (
-                    bot_icon::DEFAULT_ICON.to_string(),
-                    appearance.color,
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    bot_icon::DEFAULT_ICON.to_string(),
-                    bot_icon::DEFAULT_COLOR.to_string(),
-                )
-            });
-        let form = cx.new(|_| BotFormState {
-            editing_id,
-            name,
-            role,
-            directory,
-            identity_on,
-            private_on,
-            chief_on,
-            icon: appearance_icon,
-            color: appearance_color,
-            error: None,
-        });
-        let handle = form.read(cx).name.read(cx).focus_handle(cx);
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(title)
-                .width(px(460.))
-                .centered()
-                .ok_text(ok_text)
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let (
-                        name,
-                        role,
-                        directory,
-                        identity_on,
-                        private_on,
-                        chief_on,
-                        editing_id,
-                        icon,
-                        color,
-                    ) = {
-                        let form = form_ok.read(cx);
-                        (
-                            form.name.read(cx).content().trim().to_string(),
-                            form.role.read(cx).content().trim().to_string(),
-                            form.directory.read(cx).content().trim().to_string(),
-                            form.identity_on,
-                            form.private_on,
-                            form.chief_on,
-                            form.editing_id.clone(),
-                            form.icon.clone(),
-                            form.color.clone(),
-                        )
-                    };
-                    let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
-                        let model_template = this.new_bot_model.clone().or_else(|| {
-                            this.roster.bots.first().and_then(|bot| bot.model.clone())
-                        });
-                        // 隐私开关切换会换会话落盘根，必须丢掉旧会话上下文。
-                        let privacy_changed = editing_id
-                            .as_deref()
-                            .and_then(|id| this.roster.bot_by_id(id))
-                            .is_some_and(|bot| bot.is_private != private_on);
-                        let chief_changed = editing_id
-                            .as_deref()
-                            .and_then(|id| this.roster.bot_by_id(id))
-                            .is_some_and(|bot| bot.is_chief != chief_on);
-                        let result = match &editing_id {
-                            Some(id) => data::update_bot(
-                                id,
-                                &name,
-                                &role,
-                                &directory,
-                                identity_on,
-                                private_on,
-                                chief_on,
-                            ),
-                            None => data::create_bot(
-                                &name,
-                                &role,
-                                &directory,
-                                model_template.as_ref(),
-                                private_on,
-                                chief_on,
-                            ),
-                        };
-                        match result {
-                            Ok(bot) => {
-                                // 新建/编辑都落图标/颜色。
-                                if let Err(message) = bot_icon::set(&bot.id, &icon, &color) {
-                                    this.toast(message, cx);
-                                }
-                                if privacy_changed || chief_changed {
-                                    let key = bot_key(&bot.id);
-                                    this.backend.reset_session(key.clone());
-                                    this.chats.remove(&key);
-                                    // 群成员集合/工具集也要按新的身份重建。
-                                    let group_keys: Vec<String> = this
-                                        .roster
-                                        .groups
-                                        .iter()
-                                        .filter(|group| group.member_ids.contains(&bot.id))
-                                        .map(|group| group_key(&group.id))
-                                        .collect();
-                                    for group in group_keys {
-                                        this.backend.reset_session(group.clone());
-                                        this.chats.remove(&group);
-                                    }
-                                }
-                                this.roster = Roster::load();
-                                let index = this
-                                    .roster
-                                    .bots
-                                    .iter()
-                                    .position(|item| item.id == bot.id)
-                                    .unwrap_or(0);
-                                this.selection = Some(Selection::Bot(index));
-                                this.ensure_bot(index);
-                                cx.notify();
-                                Ok(())
-                            }
-                            Err(message) => Err(message),
-                        }
-                    });
-                    match outcome {
-                        Ok(Ok(())) => true,
-                        Ok(Err(message)) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                        Err(_) => false,
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
     /// 群聊成员会话懒建：身份 `mode-bot:group:<gid>:member:<tid>`，
@@ -6730,7 +6209,6 @@ impl PilotApp {
         self.settings_open = true;
         self.automations_view = None;
         self.usage_totals_view = None;
-        self.pending_bot_dialog = None;
         self.detail_menu_open = false;
         self.settings_focus.clone().focus(window, cx);
         cx.notify();
@@ -9679,6 +9157,310 @@ impl PilotApp {
                 );
                 (i18n::t("新建 Bot 默认模型").to_string(), None, panel)
             }
+            SettingsDetail::GroupGoal { group_id } => {
+                let group_id = group_id.clone();
+                let group_name = self
+                    .roster
+                    .groups
+                    .iter()
+                    .find(|group| group.id == group_id)
+                    .map(|group| group.name.clone())
+                    .unwrap_or_else(|| short_id(&group_id));
+                // 目标表单是已有的 Render 实体，直接嵌进面板
+                if self.settings_detail_view.is_none() {
+                    let goal = group_goal::read(&data::data_root(), &group_id);
+                    let (title_text, description_text) = goal
+                        .as_ref()
+                        .map(|goal| (goal.title.clone(), goal.description.clone()))
+                        .unwrap_or_default();
+                    let title = cx.new(|cx| {
+                        SimpleInput::new(i18n::t("目标标题（必填）"), theme::ink_tertiary, cx)
+                    });
+                    let description = cx.new(|cx| {
+                        SimpleInput::new(i18n::t("目标说明（可选）"), theme::ink_tertiary, cx)
+                    });
+                    let stage =
+                        cx.new(|cx| SimpleInput::new(i18n::t("阶段标题"), theme::ink_tertiary, cx));
+                    title.update(cx, |input, cx| input.set_content(title_text, cx));
+                    description.update(cx, |input, cx| input.set_content(description_text, cx));
+                    let view = cx.new(|_| GroupGoalState {
+                        group_id: group_id.clone(),
+                        goal,
+                        title,
+                        description,
+                        stage,
+                        new_stages: Vec::new(),
+                        error: None,
+                    });
+                    self.settings_detail_view = Some(view.into());
+                }
+                let mut panel = ui::DetailPanel::new(i18n::t("群目标"))
+                    .subtitle(format!("{} · {}", group_name, i18n::t("群共享目标与阶段")));
+                if let Some(view) = self.settings_detail_view.clone() {
+                    panel = panel.body(view);
+                }
+                let panel = panel.action(
+                    ui::button("detail-close", i18n::t("关闭")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_view = None;
+                            cx.notify();
+                        },
+                    )),
+                );
+                (i18n::t("群目标").to_string(), None, panel)
+            }
+            SettingsDetail::GroupTasks { group_id } => {
+                let group_id = group_id.clone();
+                let group_name = self
+                    .roster
+                    .groups
+                    .iter()
+                    .find(|group| group.id == group_id)
+                    .map(|group| group.name.clone())
+                    .unwrap_or_else(|| short_id(&group_id));
+                if self.settings_detail_view.is_none() {
+                    let member_names: HashMap<String, String> = self
+                        .roster
+                        .groups
+                        .iter()
+                        .find(|group| group.id == group_id)
+                        .map(|group| {
+                            group
+                                .member_ids
+                                .iter()
+                                .filter_map(|member_id| self.roster.bot_by_id(member_id))
+                                .map(|bot| (bot.id.clone(), bot.name.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let (tasks, error) = match group_tasks::list(&data::data_root(), &group_id) {
+                        Ok(tasks) => (tasks, None),
+                        Err(message) => (Vec::new(), Some(message)),
+                    };
+                    let group_key_value = group_key(&group_id);
+                    let weak = cx.weak_entity();
+                    let view = cx.new(|_| GroupTasksState {
+                        group_id: group_id.clone(),
+                        group_key: group_key_value,
+                        tasks,
+                        member_names,
+                        reassign_task: None,
+                        error,
+                        weak,
+                    });
+                    self.group_tasks_view = Some(view.downgrade());
+                    self.settings_detail_view = Some(view.into());
+                }
+                let mut panel = ui::DetailPanel::new(i18n::t("群任务"))
+                    .subtitle(format!("{} · {}", group_name, i18n::t("任务台账")));
+                if let Some(view) = self.settings_detail_view.clone() {
+                    panel = panel.body(view);
+                }
+                let panel = panel.action(
+                    ui::button("detail-close", i18n::t("关闭")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_view = None;
+                            cx.notify();
+                        },
+                    )),
+                );
+                (i18n::t("群任务").to_string(), None, panel)
+            }
+            SettingsDetail::AutomationHistory { title, runs } => {
+                let mut panel = ui::DetailPanel::new(tri!(
+                    "运行历史 · {title}",
+                    "Run history · {title}"
+                ))
+                .subtitle(i18n::t("最近 10 条运行记录；「已排队」表示等待调度器认领。"));
+                if runs.is_empty() {
+                    panel = panel.body(ui::note(i18n::t("还没有运行记录")));
+                }
+                let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                for run in runs {
+                    let at = run.scheduled_at.unwrap_or(run.created_at).max(0) as u64;
+                    let trigger = match run.trigger.as_str() {
+                        "manual" => i18n::t("手动"),
+                        "scheduled" => i18n::t("定时"),
+                        other => other,
+                    };
+                    let dispatch = match run.dispatch_status.as_str() {
+                        "claimed" => i18n::t("已排队").to_string(),
+                        "dispatched" => i18n::t("已派发").to_string(),
+                        "failed" | "failed_to_dispatch" => i18n::t("派发失败").to_string(),
+                        "skipped" => i18n::t("已跳过").to_string(),
+                        other => other.to_string(),
+                    };
+                    let outcome = run.outcome.as_deref().map(|outcome| match outcome {
+                        "succeeded" => i18n::t("成功").to_string(),
+                        "failed" => i18n::t("失败").to_string(),
+                        "stopped" => i18n::t("已停止").to_string(),
+                        "running" => i18n::t("运行中").to_string(),
+                        other => other.to_string(),
+                    });
+                    let mut detail = format!("{trigger} · {dispatch}");
+                    if let Some(outcome) = &outcome {
+                        detail.push_str(&format!(" · {outcome}"));
+                    }
+                    if let Some(error) = run.error.as_deref().map(str::trim)
+                        && !error.is_empty()
+                    {
+                        detail.push_str(&format!(" · {error}"));
+                    }
+                    let tone = match run.outcome.as_deref() {
+                        Some("succeeded") => ui::Tone::Success,
+                        Some("failed" | "stopped") => ui::Tone::Danger,
+                        _ if run.dispatch_status == "skipped" => ui::Tone::Neutral,
+                        _ => ui::Tone::Accent,
+                    };
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(ui::S1))
+                                    .child(
+                                        div()
+                                            .font_family(wecom_theme::FONT_FAMILY)
+                                            .text_size(px(11.))
+                                            .text_color(wecom_theme::list_preview())
+                                            .child(SharedString::from(format!(
+                                                "{} {}",
+                                                time::day_label(at),
+                                                time::format_hm(at)
+                                            ))),
+                                    )
+                                    .child(div().flex_1())
+                                    .child(ui::badge(
+                                        outcome.clone().unwrap_or_else(|| dispatch.clone()),
+                                        tone,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .text_color(wecom_theme::time_label())
+                                    .child(SharedString::from(detail)),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                if !rows.is_empty() {
+                    let count = rows.len();
+                    let mut card = ui::card(vec![]);
+                    for (index, row) in rows.into_iter().enumerate() {
+                        card = card.child(ui::card_row(row, index + 1 == count));
+                    }
+                    panel = panel.body(card);
+                }
+                let panel = panel.action(
+                    ui::button("detail-close", i18n::t("关闭")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            cx.notify();
+                        },
+                    )),
+                );
+                (i18n::t("运行历史").to_string(), None, panel)
+            }
+            SettingsDetail::BotForm { request } => {
+                if self.settings_detail_bot.is_none() {
+                    self.settings_detail_bot = self.build_bot_form(request, cx);
+                }
+                let form = self.settings_detail_bot.clone()?;
+                let editing = matches!(request, BotFormRequest::Edit(_));
+                let focus = form.read(cx).name.read(cx).focus_handle(cx);
+                let handle = focus.clone();
+                let mut panel = ui::DetailPanel::new(if editing {
+                    i18n::t("编辑 Bot")
+                } else {
+                    i18n::t("新建 Bot")
+                })
+                .subtitle(i18n::t("名字必填；隐私 Bot 不进群聊、不参与全局搜索。"))
+                .body(form);
+                panel = panel
+                    .action(
+                        ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_bot = None;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .action(
+                        ui::button(
+                            "detail-save-bot",
+                            if editing {
+                                i18n::t("保存")
+                            } else {
+                                i18n::t("创建")
+                            },
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let Some(form) = this.settings_detail_bot.clone() else {
+                                return;
+                            };
+                            if this.save_bot_form(&form, cx) {
+                                this.settings_detail = None;
+                                this.settings_detail_bot = None;
+                                this.settings_detail_error = None;
+                            }
+                            cx.notify();
+                        })),
+                    );
+                let _ = handle;
+                (i18n::t("Bot").to_string(), None, panel)
+            }
+            SettingsDetail::GroupForm { request } => {
+                if self.settings_detail_group.is_none() {
+                    self.settings_detail_group = self.build_group_form(request, cx);
+                }
+                let form = self.settings_detail_group.clone()?;
+                let editing = matches!(request, GroupFormRequest::Edit(_));
+                let mut panel = ui::DetailPanel::new(if editing {
+                    i18n::t("编辑群聊")
+                } else {
+                    i18n::t("新建群聊")
+                })
+                .subtitle(i18n::t("点选成员加入；群聊按成员分别建会话。"))
+                .body(form);
+                panel = panel
+                    .action(
+                        ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_group = None;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .action(ui::button("detail-save-group", i18n::t("保存")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            let Some(form) = this.settings_detail_group.clone() else {
+                                return;
+                            };
+                            if this.save_group_form(&form, cx) {
+                                this.settings_detail = None;
+                                this.settings_detail_group = None;
+                                this.settings_detail_error = None;
+                            }
+                            cx.notify();
+                        }),
+                    ));
+                (i18n::t("群聊").to_string(), None, panel)
+            }
             SettingsDetail::Allowlist { bot_id } => {
                 let bot_id = bot_id.clone();
                 if self.settings_detail_entries.is_empty()
@@ -9816,8 +9598,55 @@ impl PilotApp {
                     .bot_by_id(&bot_id)
                     .and_then(|bot| bot.model.clone());
                 let options = data::available_models();
+                let current_engine = self
+                    .sessions
+                    .engine_of(&bot_id)
+                    .unwrap_or("mode")
+                    .to_string();
+                let mut engines = vec![(
+                    "mode".to_string(),
+                    i18n::t("内嵌引擎（Pi-Rust）").to_string(),
+                    true,
+                )];
+                for agent in data::local_agents() {
+                    let adapter = agent.wired
+                        || matches!(
+                            agent.command,
+                            "pi-acp" | "deepseek-acp" | "zcode-acp-server" | "hermes"
+                        );
+                    engines.push((
+                        agent.command.to_string(),
+                        agent.name.to_string(),
+                        adapter && agent.path.is_some(),
+                    ));
+                }
+                let is_default = current.is_none();
                 let mut panel = ui::DetailPanel::new(i18n::t("选择运行时"))
-                    .subtitle(i18n::t("点条目立即生效并收起面板"));
+                    .subtitle(i18n::t("点条目立即生效并收起面板"))
+                    // 「跟随默认」置顶：清掉 Bot 上的模型覆盖
+                    .body(
+                        ui::button_ghost("detail-model-default", "")
+                            .on_click(cx.listener({
+                                let bot_id = bot_id.clone();
+                                move |this, _event, _window, cx| {
+                                    this.apply_model_choice(&bot_id, None, cx);
+                                    this.settings_detail = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .child(ui::list_row(
+                                i18n::t("跟随 Agent 默认"),
+                                Some(
+                                    if is_default {
+                                        i18n::t("当前")
+                                    } else {
+                                        ""
+                                    }
+                                    .to_string()
+                                    .into(),
+                                ),
+                            )),
+                    );
                 if options.is_empty() {
                     panel = panel.body(ui::note(i18n::t(
                         "没读到 provider_config.json；先在数据根 v2 下配置 provider",
@@ -9879,6 +9708,70 @@ impl PilotApp {
                         .child(row),
                     );
                 }
+                // 本地引擎：切换后要重置会话
+                panel = panel.body(ui::section(i18n::t("本地引擎")));
+                for (engine_id, label, available) in &engines {
+                    let selected = current_engine == *engine_id;
+                    let available = *available;
+                    let engine_id = engine_id.clone();
+                    let label = label.clone();
+                    let tone = if selected {
+                        ui::Tone::Accent
+                    } else {
+                        ui::Tone::Neutral
+                    };
+                    let row = ui::list_row(
+                        if available {
+                            label.clone()
+                        } else {
+                            format!("{label} · {}", i18n::t("未安装"))
+                        },
+                        Some(
+                            if selected {
+                                i18n::t("当前")
+                            } else {
+                                ""
+                            }
+                            .to_string()
+                            .into(),
+                        ),
+                    )
+                    .child(ui::badge(
+                        if selected { i18n::t("使用中") } else { "" },
+                        tone,
+                    ));
+                    panel = panel.body(
+                        ui::button_ghost(
+                            SharedString::from(format!("detail-runtime-{engine_id}")),
+                            "",
+                        )
+                        .on_click(cx.listener({
+                            let bot_id = bot_id.clone();
+                            let engine_id = engine_id.clone();
+                            let label = label.clone();
+                            move |this, _event, _window, cx| {
+                                if !available {
+                                    return;
+                                }
+                                if this.sessions.set_engine(&bot_id, &engine_id) {
+                                    this.sessions.save();
+                                }
+                                let key = bot_key(&bot_id);
+                                this.backend.reset_session(&key);
+                                this.chats.remove(&key);
+                                if let Some(index) =
+                                    this.roster.bots.iter().position(|bot| bot.id == bot_id)
+                                {
+                                    this.ensure_bot(index);
+                                }
+                                this.toast(format!("已切换到 {label}"), cx);
+                                this.settings_detail = None;
+                                cx.notify();
+                            }
+                        }))
+                        .child(row),
+                    );
+                }
                 (
                     i18n::t("选择运行时").to_string(),
                     None,
@@ -9904,6 +9797,329 @@ impl PilotApp {
             cx,
         );
         Some(rendered)
+    }
+
+    /// 构造 Bot 表单实体（新建或编辑）。面板与旧弹窗共用。
+    fn build_bot_form(
+        &self,
+        request: &BotFormRequest,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<BotFormState>> {
+        let (
+            editing_id,
+            name_text,
+            role_text,
+            directory_text,
+            identity_on,
+            private_on,
+            chief_on,
+        ) = match request {
+            BotFormRequest::New => {
+                let directory = self
+                    .roster
+                    .bots
+                    .first()
+                    .map(|bot| bot.directory.clone())
+                    .filter(|directory| !directory.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        backend::fallback_workspace().to_string_lossy().into_owned()
+                    });
+                (
+                    None,
+                    String::new(),
+                    String::new(),
+                    directory,
+                    false,
+                    false,
+                    self.roster.bots.iter().all(|bot| !bot.is_chief),
+                )
+            }
+            BotFormRequest::Edit(id) => {
+                let bot = self.roster.bot_by_id(id)?;
+                let directory = if bot.directory.trim().is_empty() {
+                    backend::fallback_workspace().to_string_lossy().into_owned()
+                } else {
+                    bot.directory.clone()
+                };
+                (
+                    Some(id.clone()),
+                    bot.name.clone(),
+                    bot.role.clone(),
+                    directory,
+                    bot.identity_sync,
+                    bot.is_private,
+                    bot.is_chief,
+                )
+            }
+        };
+        let name = cx.new(|cx| SimpleInput::new(i18n::t("名字（必填）"), theme::ink_tertiary, cx));
+        let role = cx.new(|cx| SimpleInput::new(i18n::t("角色（可选）"), theme::ink_tertiary, cx));
+        let directory = cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx));
+        name.update(cx, |input, cx| input.set_content(name_text, cx));
+        role.update(cx, |input, cx| input.set_content(role_text, cx));
+        directory.update(cx, |input, cx| input.set_content(directory_text, cx));
+        let (appearance_icon, appearance_color) = editing_id
+            .as_deref()
+            .and_then(bot_icon::get)
+            .map(|appearance| (bot_icon::DEFAULT_ICON.to_string(), appearance.color))
+            .unwrap_or_else(|| {
+                (
+                    bot_icon::DEFAULT_ICON.to_string(),
+                    bot_icon::DEFAULT_COLOR.to_string(),
+                )
+            });
+        Some(cx.new(|_| BotFormState {
+            editing_id,
+            name,
+            role,
+            directory,
+            identity_on,
+            private_on,
+            chief_on,
+            icon: appearance_icon,
+            color: appearance_color,
+            error: None,
+        }))
+    }
+
+    /// 保存 Bot 表单（新建或更新），返回是否成功。
+    fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>) -> bool {
+        let (name, role, directory, identity_on, private_on, chief_on, editing_id, icon, color) = {
+            let form = form.read(cx);
+            (
+                form.name.read(cx).content().trim().to_string(),
+                form.role.read(cx).content().trim().to_string(),
+                form.directory.read(cx).content().trim().to_string(),
+                form.identity_on,
+                form.private_on,
+                form.chief_on,
+                form.editing_id.clone(),
+                form.icon.clone(),
+                form.color.clone(),
+            )
+        };
+        let model_template = self
+            .new_bot_model
+            .clone()
+            .or_else(|| self.roster.bots.first().and_then(|bot| bot.model.clone()));
+        let privacy_changed = editing_id
+            .as_deref()
+            .and_then(|id| self.roster.bot_by_id(id))
+            .is_some_and(|bot| bot.is_private != private_on);
+        let chief_changed = editing_id
+            .as_deref()
+            .and_then(|id| self.roster.bot_by_id(id))
+            .is_some_and(|bot| bot.is_chief != chief_on);
+        let result = match &editing_id {
+            Some(id) => data::update_bot(
+                id,
+                &name,
+                &role,
+                &directory,
+                identity_on,
+                private_on,
+                chief_on,
+            ),
+            None => data::create_bot(
+                &name,
+                &role,
+                &directory,
+                model_template.as_ref(),
+                private_on,
+                chief_on,
+            ),
+        };
+        let bot = match result {
+            Ok(bot) => bot,
+            Err(message) => {
+                form.update(cx, |form, cx| {
+                    form.error = Some(message);
+                    cx.notify();
+                });
+                return false;
+            }
+        };
+        if let Err(message) = bot_icon::set(&bot.id, &icon, &color) {
+            self.toast(message, cx);
+        }
+        if privacy_changed || chief_changed {
+            let key = bot_key(&bot.id);
+            self.backend.reset_session(key.clone());
+            self.chats.remove(&key);
+            let group_keys: Vec<String> = self
+                .roster
+                .groups
+                .iter()
+                .filter(|group| group.member_ids.contains(&bot.id))
+                .map(|group| group_key(&group.id))
+                .collect();
+            for group in group_keys {
+                self.backend.reset_session(group.clone());
+                self.chats.remove(&group);
+            }
+        }
+        self.roster = Roster::load();
+        let index = self
+            .roster
+            .bots
+            .iter()
+            .position(|item| item.id == bot.id)
+            .unwrap_or(0);
+        self.selection = Some(Selection::Bot(index));
+        self.ensure_bot(index);
+        cx.notify();
+        true
+    }
+
+    /// 构造群聊表单实体。
+    fn build_group_form(
+        &self,
+        request: &GroupFormRequest,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<GroupFormState>> {
+        let bots: Vec<(String, String, String)> = self
+            .roster
+            .bots
+            .iter()
+            .filter(|bot| !bot.is_private)
+            .map(|bot| (bot.id.clone(), bot.name.clone(), bot.role.clone()))
+            .collect();
+        let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id, policy) =
+            match request {
+                GroupFormRequest::New => {
+                    let member_ids: Vec<String> = self
+                        .roster
+                        .bots
+                        .iter()
+                        .filter(|bot| !bot.is_private)
+                        .map(|bot| bot.id.clone())
+                        .collect();
+                    let admin_id = self
+                        .roster
+                        .bots
+                        .iter()
+                        .filter(|bot| !bot.is_private)
+                        .find(|bot| bot.is_chief)
+                        .or_else(|| self.roster.bots.first())
+                        .map(|bot| bot.id.clone())
+                        .unwrap_or_default();
+                    (
+                        None,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        member_ids,
+                        admin_id,
+                        "mentions-first".to_string(),
+                    )
+                }
+                GroupFormRequest::Edit(id) => {
+                    let group = self.roster.groups.iter().find(|group| group.id == *id)?;
+                    let member_ids: Vec<String> = group
+                        .member_ids
+                        .iter()
+                        .filter(|id| {
+                            self.roster
+                                .bot_by_id(id)
+                                .is_some_and(|bot| !bot.is_private)
+                        })
+                        .cloned()
+                        .collect();
+                    let admin_id = group
+                        .admin_id
+                        .clone()
+                        .filter(|id| member_ids.iter().any(|member| member.as_str() == id.as_str()))
+                        .or_else(|| member_ids.first().cloned())
+                        .unwrap_or_default();
+                    (
+                        Some(group.id.clone()),
+                        group.name.clone(),
+                        group.instructions.clone(),
+                        group.memory.clone(),
+                        member_ids,
+                        admin_id,
+                        if group.responder_policy.trim().is_empty() {
+                            "mentions-first".to_string()
+                        } else {
+                            group.responder_policy.clone()
+                        },
+                    )
+                }
+            };
+        let name = cx.new(|cx| SimpleInput::new(i18n::t("群聊名（必填）"), theme::ink_tertiary, cx));
+        let instructions = cx.new(|cx| {
+            SimpleInput::new(i18n::t("群聊规则（可选，注入每个成员）"), theme::ink_tertiary, cx)
+        });
+        let memory = cx.new(|cx| {
+            SimpleInput::new(i18n::t("团队记忆（可选，长期事实）"), theme::ink_tertiary, cx)
+        });
+        name.update(cx, |input, cx| input.set_content(name_text, cx));
+        instructions.update(cx, |input, cx| input.set_content(instructions_text, cx));
+        memory.update(cx, |input, cx| input.set_content(memory_text, cx));
+        Some(cx.new(|_| GroupFormState {
+            editing_id,
+            name,
+            instructions,
+            memory,
+            member_ids,
+            admin_id,
+            policy,
+            bots,
+            error: None,
+        }))
+    }
+
+    /// 保存群聊表单，返回是否成功。
+    fn save_group_form(
+        &mut self,
+        form: &Entity<GroupFormState>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (name, instructions, memory, member_ids, admin_id, policy, editing_id) = {
+            let form = form.read(cx);
+            (
+                form.name.read(cx).content().trim().to_string(),
+                form.instructions.read(cx).content().to_string(),
+                form.memory.read(cx).content().to_string(),
+                form.member_ids.clone(),
+                form.admin_id.clone(),
+                form.policy.clone(),
+                form.editing_id.clone(),
+            )
+        };
+        let draft = data::GroupDraft {
+            name,
+            admin_id,
+            member_ids,
+            instructions,
+            memory,
+            responder_policy: policy,
+        };
+        let result = match &editing_id {
+            Some(id) => data::update_group(id, draft),
+            None => data::create_group(draft),
+        };
+        match result {
+            Ok(group) => {
+                let group_id = group.id.clone();
+                self.roster = Roster::load();
+                if let Some(index) = self.roster.groups.iter().position(|item| item.id == group_id)
+                {
+                    self.selection = Some(Selection::Group(index));
+                    self.active_tab = 0;
+                    self.ensure_group(index);
+                }
+                cx.notify();
+                true
+            }
+            Err(message) => {
+                form.update(cx, |form, cx| {
+                    form.error = Some(message);
+                    cx.notify();
+                });
+                false
+            }
+        }
     }
 
     /// 详情面板的多字段表单：首次进入时按 `specs` 创建，已有则原样返回。
@@ -13486,14 +13702,13 @@ impl PilotApp {
                 .on_click(cx.listener(move |this, _event, window, cx| {
                     match automations::runs(&history_db, &history_id, &history_key, 10) {
                         Ok(runs) => {
-                            this.open_automation_history_dialog(
-                                AutomationHistoryState {
+                            let _ = window;
+                            this.settings_detail =
+                                Some(SettingsDetail::AutomationHistory {
                                     title: history_title.clone(),
                                     runs,
-                                },
-                                window,
-                                cx,
-                            );
+                                });
+                            this.settings_open = true;
                         }
                         Err(message) => this.toast(message, cx),
                     }
@@ -14803,11 +15018,19 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             }
             DetailMenuAction::EditGroup(id) => self.open_edit_group_dialog(id, cx),
             DetailMenuAction::GroupGoal(id) => {
-                self.pending_group_goal_dialog = Some(id);
+                self.settings_detail = Some(SettingsDetail::GroupGoal {
+                    group_id: id.clone(),
+                });
+                self.settings_detail_view = None;
+                self.settings_open = true;
                 cx.notify();
             }
             DetailMenuAction::GroupTasks(id) => {
-                self.pending_group_tasks_dialog = Some(id);
+                self.settings_detail = Some(SettingsDetail::GroupTasks {
+                    group_id: id.clone(),
+                });
+                self.settings_detail_view = None;
+                self.settings_open = true;
                 cx.notify();
             }
             DetailMenuAction::AssignSection(member_key, section_id) => {
@@ -15026,10 +15249,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
     fn close_detail_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.detail_menu_open = false;
         self.menu_selected = 0;
-        if self.pending_bot_dialog.is_none()
-            && self.pending_group_dialog.is_none()
-            && self.pending_group_goal_dialog.is_none()
-            && self.pending_group_tasks_dialog.is_none()
         {
             let handle = self.input.read(cx).focus_handle(cx);
             handle.focus(window, cx);
@@ -15046,7 +15265,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         self.im_qr_page = None;
         self.automations_view = None;
         self.usage_totals_view = None;
-        self.pending_bot_dialog = None;
         self.detail_menu_open = false;
         self.footer_menu_open = false;
         // 菜单/导轨打开设置时也要把焦点交给设置页：否则焦点还在会话输入框上，
@@ -16051,251 +16269,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         Some(overlay_center(card))
     }
 
-    /// 模型选择：列出已配置 provider 下的模型 + 「跟随默认」。
-    /// 选择模型：kit AlertDialog + 列表；点条目立即落盘并关闭。
-    fn open_model_dialog(
-        &mut self,
-        bot_id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let current = self
-            .roster
-            .bot_by_id(&bot_id)
-            .and_then(|bot| bot.model.clone());
-        let options = data::available_models();
-        let current_engine = self
-            .sessions
-            .engine_of(&bot_id)
-            .unwrap_or("mode")
-            .to_string();
-        let mut engines = vec![(
-            "mode".to_string(),
-            i18n::t("内嵌引擎（Pi-Rust）").to_string(),
-            true,
-        )];
-        for agent in data::local_agents() {
-            let adapter = agent.wired
-                || matches!(
-                    agent.command,
-                    "pi-acp" | "deepseek-acp" | "zcode-acp-server" | "hermes"
-                );
-            engines.push((
-                agent.command.to_string(),
-                agent.name.to_string(),
-                adapter && agent.path.is_some(),
-            ));
-        }
-        let viewport_height = f32::from(window.viewport_size().height);
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let weak = weak.clone();
-            let restore = restore.clone();
-            let bot_id = bot_id.clone();
-            let current = current.clone();
-            let current_engine = current_engine.clone();
-            let options = options.clone();
-            let engines = engines.clone();
-            alert
-                .title(i18n::t("选择运行时"))
-                .width(px(420.))
-                .centered()
-                .ok_text(i18n::t("关闭"))
-                .show_cancel(false)
-                .content(move |content, _, _| {
-                    let is_default = current.is_none();
-                    let default_click = {
-                        let weak = weak.clone();
-                        let bot_id = bot_id.clone();
-                        move |_event: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.apply_model_choice(&bot_id, None, cx);
-                            });
-                            window.close_dialog(cx);
-                            Self::defer_focus_restore(weak.clone(), window, cx);
-                        }
-                    };
-                    let mut body = div().w_full().flex().flex_col().gap(px(10.)).child(
-                        div()
-                            .id("model-default")
-                            .h(px(30.))
-                            .rounded(px(6.))
-                            .px(px(8.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(theme::hover()))
-                            .on_click(default_click)
-                            .child(
-                                div()
-                                    .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(12.))
-                                    .text_color(theme::ink())
-                                    .child(i18n::t("跟随 Agent 默认")),
-                            )
-                            .children(is_default.then(current_marker)),
-                    );
-                    if options.is_empty() {
-                        body = body.child(hint_row(
-                            i18n::t("没读到 provider_config.json；先在数据根 v2 下配置 provider，或保持跟随默认"),
-                        ));
-                    } else {
-                        let mut last_provider = String::new();
-                        for option in &options {
-                            if option.provider_id != last_provider {
-                                last_provider = option.provider_id.clone();
-                                // 分组标题带厂商 logo（没有官方标的回落首字母方块）
-                                let logo = brand_icons::provider_color(&option.provider_id, 16.)
-                                    .unwrap_or_else(|| {
-                                        provider_initial_tile(&option.provider_name, 16.)
-                                    });
-                                body = body.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .pt(px(4.))
-                                        .child(logo)
-                                        .child(section_label(&option.provider_name)),
-                                );
-                            }
-                            let selected = current.as_ref().is_some_and(|model| {
-                                model.provider_id == option.provider_id
-                                    && model.model_id == option.model_id
-                            });
-                            let model = data::ModelSpec {
-                                provider_id: option.provider_id.clone(),
-                                model_id: option.model_id.clone(),
-                                reasoning_level: None,
-                            };
-                            let click = {
-                                let weak = weak.clone();
-                                let bot_id = bot_id.clone();
-                                let model = model.clone();
-                                move |_event: &gpui::ClickEvent,
-                                      window: &mut Window,
-                                      cx: &mut App| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.apply_model_choice(
-                                            &bot_id,
-                                            Some(model.clone()),
-                                            cx,
-                                        );
-                                    });
-                                    window.close_dialog(cx);
-                                    Self::defer_focus_restore(weak.clone(), window, cx);
-                                }
-                            };
-                            body = body.child(
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "model-{}-{}",
-                                        option.provider_id, option.model_id
-                                    )))
-                                    .h(px(30.))
-                                    .rounded(px(6.))
-                                    .px(px(8.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(theme::hover()))
-                                    .on_click(click)
-                                    .child(
-                                        div()
-                                            .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(12.))
-                                            .text_color(theme::ink())
-                                            .child(SharedString::from(option.model_id.clone())),
-                                    )
-                                    .children(selected.then(current_marker)),
-                            );
-                        }
-                    }
-                    body = body.child(section_label(i18n::t("本地引擎")));
-                    for (engine_id, label, available) in &engines {
-                        let selected = current_engine == *engine_id;
-                        let engine_id = engine_id.clone();
-                        let label = label.clone();
-                        let available = *available;
-                        let weak_for_click = weak.clone();
-                        let weak_for_restore = weak.clone();
-                        let bot_id = bot_id.clone();
-                        let engine_for_click = engine_id.clone();
-                        let label_for_click = label.clone();
-                        let click = move |_event: &gpui::ClickEvent,
-                                          window: &mut Window,
-                                          cx: &mut App| {
-                            if !available {
-                                return;
-                            }
-                            let engine_id = engine_for_click.clone();
-                            let label = label_for_click.clone();
-                            let bot_id_for_update = bot_id.clone();
-                            let weak = weak_for_click.clone();
-                            let _ = weak.update(cx, move |this, cx| {
-                                if this.sessions.set_engine(&bot_id_for_update, &engine_id) {
-                                    this.sessions.save();
-                                }
-                                let key = bot_key(&bot_id_for_update);
-                                this.backend.reset_session(&key);
-                                this.chats.remove(&key);
-                                if let Some(index) = this
-                                    .roster
-                                    .bots
-                                    .iter()
-                                    .position(|bot| bot.id == bot_id_for_update)
-                                {
-                                    this.ensure_bot(index);
-                                }
-                                this.toast(format!("已切换到 {label}"), cx);
-                                cx.notify();
-                            });
-                            window.close_dialog(cx);
-                            Self::defer_focus_restore(weak_for_restore.clone(), window, cx);
-                        };
-                        body = body.child(
-                            div()
-                                .id(SharedString::from(format!("runtime-{engine_id}")))
-                                .h(px(30.))
-                                .rounded(px(6.))
-                                .px(px(8.))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .cursor_pointer()
-                                .opacity(if available { 1.0 } else { 0.55 })
-                                .hover(|style| style.bg(theme::hover()))
-                                .on_click(click)
-                                .child(
-                                    div()
-                                        .font_family(theme::FONT_FAMILY)
-                                        .text_size(px(12.))
-                                        .text_color(theme::ink())
-                                        .child(if available {
-                                            label
-                                        } else {
-                                            format!("{label} · {}", i18n::t("未安装"))
-                                        }),
-                                )
-                                .children(selected.then(current_marker)),
-                        );
-                    }
-                    content.child(
-                        div()
-                            .id("model-dialog-body")
-                            .max_h(px((viewport_height - 200.).max(240.)))
-                            .overflow_y_scroll()
-                            .scrollbar_width(px(6.))
-                            .child(body),
-                    )
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-    }
-
     /// 落模型选择并刷新名册（`None` = 跟随默认）。新会话才生效，旧会话保持原模型。
     fn apply_model_choice(
         &mut self,
@@ -16414,102 +16387,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         this.delete_group_and_reselect(&group_id, cx);
                     });
                     true
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-    }
-
-    /// 运行历史：kit AlertDialog + 只读列表（打开时已取好快照）。
-    fn open_automation_history_dialog(
-        &mut self,
-        state: AutomationHistoryState,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let viewport_height = f32::from(window.viewport_size().height);
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let restore = restore.clone();
-            let title = state.title.clone();
-            let runs = state.runs.clone();
-            alert
-                .title(tri!("运行历史 · {title}", "Run history · {title}"))
-                .width(px(560.))
-                .centered()
-                .ok_text(i18n::t("关闭"))
-                .show_cancel(false)
-                .content(move |content, _, _| {
-                    let mut body = div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(settings_note(
-                            i18n::t("最近 10 条运行记录；「已排队」表示等待调度器认领。"),
-                        ));
-                    if runs.is_empty() {
-                        body = body.child(hint_row(i18n::t("还没有运行记录")));
-                    }
-                    for run in &runs {
-                        let at = run.scheduled_at.unwrap_or(run.created_at).max(0) as u64;
-                        let trigger = match run.trigger.as_str() {
-                            "manual" => i18n::t("手动"),
-                            "scheduled" => i18n::t("定时"),
-                            other => other,
-                        };
-                        let dispatch = match run.dispatch_status.as_str() {
-                            "claimed" => i18n::t("已排队").to_string(),
-                            "dispatched" => i18n::t("已派发").to_string(),
-                            "failed" | "failed_to_dispatch" => i18n::t("派发失败").to_string(),
-                            "skipped" => i18n::t("已跳过").to_string(),
-                            other => other.to_string(),
-                        };
-                        let outcome = run.outcome.as_deref().map(|outcome| match outcome {
-                            "succeeded" => i18n::t("成功").to_string(),
-                            "failed" => i18n::t("失败").to_string(),
-                            "stopped" => i18n::t("已停止").to_string(),
-                            "running" => i18n::t("运行中").to_string(),
-                            other => other.to_string(),
-                        });
-                        let mut detail = format!("{trigger} · {dispatch}");
-                        if let Some(outcome) = &outcome {
-                            detail.push_str(&format!(" · {outcome}"));
-                        }
-                        if let Some(error) = run.error.as_deref().map(str::trim)
-                            && !error.is_empty()
-                        {
-                            detail.push_str(&format!(" · {error}"));
-                        }
-                        let color = match run.outcome.as_deref() {
-                            Some("succeeded") => theme::success(),
-                            Some("failed" | "stopped") => theme::danger(),
-                            Some("running") => theme::ink_secondary(),
-                            _ if run.dispatch_status == "skipped" => theme::ink_tertiary(),
-                            _ => theme::ink_secondary(),
-                        };
-                        let status_text = outcome.unwrap_or(dispatch);
-                        body = body.child(
-                            settings_row(
-                                format!("{} {}", time::day_label(at), time::format_hm(at)),
-                                Some(detail),
-                            )
-                            .child(
-                                div()
-                                    .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(11.))
-                                    .text_color(color)
-                                    .child(status_text),
-                            ),
-                        );
-                    }
-                    content.child(
-                        div()
-                            .id("automation-history-body")
-                            .max_h(px((viewport_height - 200.).max(240.)))
-                            .overflow_y_scroll()
-                            .scrollbar_width(px(6.))
-                            .child(body),
-                    )
                 })
                 .on_close(move |event, window, cx| restore(event, window, cx))
         });
@@ -18494,7 +18371,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 this.settings_open = true;
                                 this.automations_view = None;
                                 this.usage_totals_view = None;
-                                this.pending_bot_dialog = None;
                                 this.settings_focus.clone().focus(window, cx);
                                 cx.notify();
                             }))
@@ -18502,7 +18378,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 this.settings_open = true;
                                 this.automations_view = None;
                                 this.usage_totals_view = None;
-                                this.pending_bot_dialog = None;
                                 this.settings_focus.clone().focus(window, cx);
                                 cx.notify();
                             })),
@@ -21010,7 +20885,7 @@ const SETTINGS_PAGES: [&str; 18] = [
 /// 设置页的二级详情面板（替代原先的弹窗）。
 ///
 /// 规范 §8：选择类与表单类走侧栏，破坏性删除仍用居中确认框。
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone)]
 enum SettingsDetail {
     ProviderKey {
         provider_id: String,
@@ -21059,6 +20934,27 @@ enum SettingsDetail {
     AddProvider,
     /// 新建 Bot 默认模型（列表选择）。
     NewBotModel,
+    /// 群目标（复用 GroupGoalState 视图，挂在侧栏里）。
+    GroupGoal {
+        group_id: String,
+    },
+    /// 群任务台账（复用 GroupTasksState 视图）。
+    GroupTasks {
+        group_id: String,
+    },
+    /// 定时任务运行历史（只读列表）。
+    AutomationHistory {
+        title: String,
+        runs: Vec<automation_repo::AutomationRun>,
+    },
+    /// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
+    BotForm {
+        request: BotFormRequest,
+    },
+    /// 新建/编辑群聊（成员多选 + 3 字段 + 策略）。
+    GroupForm {
+        request: GroupFormRequest,
+    },
 }
 
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
@@ -21854,15 +21750,6 @@ fn hint_row(text: impl Into<SharedString>) -> impl IntoElement {
             theme::ink_tertiary()
         })
         .child(text.into())
-}
-
-/// 「当前」标记（模型等列表里的选中项）。
-fn current_marker() -> impl IntoElement {
-    div()
-        .font_family(theme::FONT_FAMILY)
-        .text_size(px(11.))
-        .text_color(theme::accent())
-        .child(i18n::t("当前"))
 }
 
 /// IM 运行态文案（`WeixinRuntimeStatus::status`）。
@@ -24664,8 +24551,13 @@ impl PilotApp {
                     .gap(px(ui::S1))
                     .child(
                         ui::button("info-model", i18n::t("切换模型"))
-                            .on_click(cx.listener(move |this, _event, window, cx| {
-                                this.open_model_dialog(bot_id.clone(), window, cx);
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.settings_detail = Some(SettingsDetail::Model {
+                                    bot_id: bot_id.clone(),
+                                });
+                                this.settings_detail_input = None;
+                                this.settings_open = true;
+                                cx.notify();
                             })),
                     ),
             );
@@ -26023,18 +25915,6 @@ impl Render for PilotApp {
                     .text_color(wecom_theme::chat_title()),
                 cx,
             );
-        }
-        if let Some(request) = self.pending_bot_dialog.take() {
-            self.open_bot_form_dialog(request, window, cx);
-        }
-        if let Some(request) = self.pending_group_dialog.take() {
-            self.open_group_form_dialog(request, window, cx);
-        }
-        if let Some(group_id) = self.pending_group_goal_dialog.take() {
-            self.open_group_goal_dialog(group_id, window, cx);
-        }
-        if let Some(group_id) = self.pending_group_tasks_dialog.take() {
-            self.open_group_tasks_dialog(group_id, window, cx);
         }
         let mut root = div();
         root.text_style().font_fallbacks = Some(theme::font_fallbacks());
