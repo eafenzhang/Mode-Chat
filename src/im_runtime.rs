@@ -1354,6 +1354,7 @@ impl RpiTurnOps {
             allowlist,
             bot_id: crate::rpi_engine::bot_id_from_identity(identity),
             extra_tools,
+            private_bot: crate::rpi_engine::private_bot_id(identity),
         };
         let session = Arc::new(crate::rpi_engine::RpiSession::open(options).await?);
         let state = Arc::new(Mutex::new(RpiTurnState::default()));

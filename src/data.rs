@@ -35,6 +35,8 @@ pub struct Bot {
     pub directory: String,
     pub is_chief: bool,
     pub is_main: bool,
+    /// 隐私 Bot：会话独立存放、不参与全局搜索，也不能加入群聊。
+    pub is_private: bool,
     pub pinned: bool,
     pub model: Option<ModelSpec>,
     pub last_session_id: Option<String>,
@@ -82,6 +84,31 @@ pub struct Roster {
     pub error: Option<String>,
 }
 
+/// 隐私 Bot 与 Chief 互斥：私有 Bot 不能进群、不能当管理员（与 `bot_team` 口径一致）。
+fn check_chief_private(is_private: bool, is_chief: bool) -> Result<(), String> {
+    if is_private && is_chief {
+        return Err("隐私 Bot 不能同时是团队管理员（Chief）".to_string());
+    }
+    Ok(())
+}
+
+/// 团队管理员唯一：`keep_id` 当 Chief 时清掉其他人，避免群聊默认管理员歧义。
+fn demote_other_chiefs(file: &mut bot_team::teammate::TeammatesFile, keep_id: &str) {
+    let keep_is_chief = file
+        .teammates
+        .iter()
+        .find(|record| record.id == keep_id)
+        .is_some_and(|record| record.is_chief);
+    if !keep_is_chief {
+        return;
+    }
+    for other in &mut file.teammates {
+        if other.id != keep_id {
+            other.is_chief = false;
+        }
+    }
+}
+
 /// 新建 Bot：追加进 teammates.json（原子写，复用产品的记录模型与校验）。
 /// `model_template` 来自名册首个 Bot（缺省则交给 Agent 默认）。
 pub fn create_bot(
@@ -89,6 +116,8 @@ pub fn create_bot(
     role: &str,
     directory: &str,
     model_template: Option<&ModelSpec>,
+    is_private: bool,
+    is_chief: bool,
 ) -> Result<Bot, String> {
     let name = name.trim();
     let directory = directory.trim();
@@ -98,6 +127,7 @@ pub fn create_bot(
     if directory.is_empty() {
         return Err("工作目录不能为空".to_string());
     }
+    check_chief_private(is_private, is_chief)?;
     let path = data_root().join("v2").join("teammates.json");
     let mut file = match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice::<bot_team::teammate::TeammatesFile>(&bytes)
@@ -129,8 +159,8 @@ pub fn create_bot(
         pinned: false,
         instructions: String::new(),
         identity_sync: false,
-        is_chief: false,
-        is_private: false,
+        is_chief,
+        is_private,
         model_selection,
         approval_policy: Some(bot_team::teammate::ApprovalPolicy {
             level: "ask".to_string(),
@@ -140,7 +170,9 @@ pub fn create_bot(
         hidden: false,
         is_main: false,
     };
+    let new_id = record.id.clone();
     file.teammates.push(record);
+    demote_other_chiefs(&mut file, &new_id);
     let file = bot_team::teammate::validate_teammates_file(file)?;
     let value = serde_json::to_value(&file)
         .map_err(|error| format!("teammates.json 序列化失败（{error}）"))?;
@@ -266,6 +298,23 @@ fn cli_storage_dir() -> Option<String> {
         .join(".mode")
         .join("cli");
     path.is_dir().then(|| path.to_string_lossy().into_owned())
+}
+
+/// 隐私 Bot 的工作目录集合（全局搜索按 cwd 排除旧会话文件）。
+pub fn private_workspace_dirs() -> Vec<String> {
+    let path = data_root().join("v2").join("teammates.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    let Ok(file) = serde_json::from_slice::<TeammatesFile>(&bytes) else {
+        return Vec::new();
+    };
+    file.teammates
+        .into_iter()
+        .filter(|bot| bot.is_private)
+        .map(|bot| bot.directory.trim().to_string())
+        .filter(|directory| !directory.is_empty())
+        .collect()
 }
 
 /// 团队记忆根（`mode-bot:team` 身份；与壳 orchestrator 同口径）。
@@ -508,6 +557,8 @@ pub fn update_bot(
     role: &str,
     directory: &str,
     identity_sync: bool,
+    is_private: bool,
+    is_chief: bool,
 ) -> Result<Bot, String> {
     let name = name.trim();
     let directory = directory.trim();
@@ -517,6 +568,7 @@ pub fn update_bot(
     if directory.is_empty() {
         return Err("工作目录不能为空".to_string());
     }
+    check_chief_private(is_private, is_chief)?;
     let path = data_root().join("v2").join("teammates.json");
     let bytes = std::fs::read(&path)
         .map_err(|error| format!("teammates.json 读取失败（{error}）"))?;
@@ -533,6 +585,9 @@ pub fn update_bot(
     record.role = role.trim().to_string();
     record.directory = directory.to_string();
     record.identity_sync = identity_sync;
+    record.is_private = is_private;
+    record.is_chief = is_chief;
+    demote_other_chiefs(&mut file, id);
     // 身份同步先行：AGENTS.md 受管块 + persona.json（名字压过 system 的「You are Mode」）。
     sync_identity_fields(id, directory, name, role, identity_sync, None)?;
     let file = bot_team::teammate::validate_teammates_file(file)?;
@@ -1887,6 +1942,8 @@ struct TeammateJson {
     #[serde(default)]
     is_chief: bool,
     #[serde(default)]
+    is_private: bool,
+    #[serde(default)]
     is_main: bool,
     #[serde(default)]
     hidden: bool,
@@ -1956,6 +2013,7 @@ impl TeammateJson {
             description: self.description.trim().to_string(),
             directory: self.directory.trim().to_string(),
             is_chief: self.is_chief,
+            is_private: self.is_private,
             is_main: self.is_main,
             pinned: self.pinned,
             identity_sync: self.identity_sync,
@@ -2237,6 +2295,61 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod chief_private_tests {
+    use super::*;
+
+    #[test]
+    fn private_bot_cannot_be_chief() {
+        assert!(check_chief_private(true, true).is_err());
+        assert!(check_chief_private(true, false).is_ok());
+        assert!(check_chief_private(false, true).is_ok());
+    }
+
+    #[test]
+    fn only_one_chief_survives() {
+        let mut file = bot_team::teammate::TeammatesFile::empty();
+        for (id, is_chief) in [("a", true), ("b", true), ("c", false)] {
+            let mut record = base_record();
+            record.id = id.to_string();
+            record.name = id.to_string();
+            record.directory = format!("D:\\ws\\{id}");
+            record.is_chief = is_chief;
+            file.teammates.push(record);
+        }
+        demote_other_chiefs(&mut file, "b");
+        let chiefs: Vec<&str> = file
+            .teammates
+            .iter()
+            .filter(|record| record.is_chief)
+            .map(|record| record.id.as_str())
+            .collect();
+        assert_eq!(chiefs, vec!["b"]);
+    }
+
+    fn base_record() -> bot_team::teammate::TeammateRecord {
+        bot_team::teammate::TeammateRecord {
+            id: String::new(),
+            name: String::new(),
+            role: String::new(),
+            description: String::new(),
+            directory: String::new(),
+            created_at: String::new(),
+            last_session_id: None,
+            pinned: false,
+            instructions: String::new(),
+            identity_sync: false,
+            is_chief: false,
+            is_private: false,
+            model_selection: None,
+            approval_policy: None,
+            plugin_ids: Vec::new(),
+            hidden: false,
+            is_main: false,
+        }
     }
 }
 

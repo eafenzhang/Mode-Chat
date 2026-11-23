@@ -386,6 +386,14 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "旁路会话暂不支持提问卡：{}" => Some("Side chat does not support question cards yet: {}"),
         "旁路会话暂不支持表单：{}" => Some("Side chat does not support forms yet: {}"),
         "需要审批" => Some("Needs approval"),
+        "团队管理员（Chief）" => Some("Team admin (Chief)"),
+        "群里默认接话，可查看名册/目标/任务并派活" => {
+            Some("Replies by default in groups; can read roster/goals/tasks and assign work")
+        }
+        "隐私 Bot" => Some("Private bot"),
+        "会话单独存放，不参与全局搜索，也不能加入群聊" => {
+            Some("Sessions are stored separately, excluded from search, and cannot join groups")
+        }
         "已停止，排队消息已清空" => Some("Stopped; queued messages were cleared"),
         "其他（自行输入）" => Some("Other (type your own)"),
         "输入你的回答…" => Some("Type your answer…"),

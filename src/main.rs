@@ -52,6 +52,7 @@ mod computer_tools;
 mod cua_tree;
 mod tool_scope;
 mod tool_render;
+mod team_tools;
 mod update;
 // 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
 #[allow(dead_code)]
@@ -2674,6 +2675,10 @@ struct BotFormState {
     role: Entity<SimpleInput>,
     directory: Entity<SimpleInput>,
     identity_on: bool,
+    /// 隐私 Bot：会话单独落盘、不参与全局搜索、不能加入群聊。
+    private_on: bool,
+    /// 团队管理员：群里默认接话，并装载团队工具（名册/目标/任务/派活）。
+    chief_on: bool,
     /// 新建时的图标表情（k1..k9）与染色；编辑旧 Bot 不展示。
     icon: String,
     color: String,
@@ -2823,6 +2828,78 @@ impl Render for BotFormState {
                     ),
             );
         }
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    switch("dialog-chief", self.chief_on).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            this.chief_on = !this.chief_on;
+                            this.error = None;
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .text_color(theme::ink_secondary())
+                                .child(i18n::t("团队管理员（Chief）")),
+                        )
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(theme::ink_tertiary())
+                                .child(i18n::t("群里默认接话，可查看名册/目标/任务并派活")),
+                        ),
+                ),
+        );
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    switch("dialog-private", self.private_on).on_click(cx.listener(
+                        |this, _event, _window, cx| {
+                            this.private_on = !this.private_on;
+                            this.error = None;
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(12.))
+                                .text_color(theme::ink_secondary())
+                                .child(i18n::t("隐私 Bot")),
+                        )
+                        .child(
+                            div()
+                                .font_family(theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(theme::ink_tertiary())
+                                .child(i18n::t(
+                                    "会话单独存放，不参与全局搜索，也不能加入群聊",
+                                )),
+                        ),
+                ),
+        );
         if let Some(message) = &self.error {
             body = body.child(
                 div()
@@ -3929,17 +4006,24 @@ impl PilotApp {
             .roster
             .bots
             .iter()
+            .filter(|bot| !bot.is_private)
             .map(|bot| (bot.id.clone(), bot.name.clone(), bot.role.clone()))
             .collect();
         let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id, policy, title, ok_text) =
             match request {
                 GroupFormRequest::New => {
-                    let member_ids: Vec<String> =
-                        self.roster.bots.iter().map(|bot| bot.id.clone()).collect();
+                    let member_ids: Vec<String> = self
+                        .roster
+                        .bots
+                        .iter()
+                        .filter(|bot| !bot.is_private)
+                        .map(|bot| bot.id.clone())
+                        .collect();
                     let admin_id = self
                         .roster
                         .bots
                         .iter()
+                        .filter(|bot| !bot.is_private)
                         .find(|bot| bot.is_chief)
                         .or_else(|| self.roster.bots.first())
                         .map(|bot| bot.id.clone())
@@ -3960,10 +4044,21 @@ impl PilotApp {
                     let Some(group) = self.roster.groups.iter().find(|group| group.id == id) else {
                         return;
                     };
-                    let member_ids = group.member_ids.clone();
+                    // 隐私 Bot 永远不进入群聊：编辑旧群时顺手清掉。
+                    let member_ids: Vec<String> = group
+                        .member_ids
+                        .iter()
+                        .filter(|id| {
+                            self.roster
+                                .bot_by_id(id)
+                                .is_some_and(|bot| !bot.is_private)
+                        })
+                        .cloned()
+                        .collect();
                     let admin_id = group
                         .admin_id
                         .clone()
+                        .filter(|id| member_ids.iter().any(|member| member == id))
                         .or_else(|| member_ids.first().cloned())
                         .unwrap_or_default();
                     (
@@ -4233,40 +4328,61 @@ impl PilotApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (editing_id, name_text, role_text, directory_text, identity_on, title, ok_text) =
-            match request {
-                BotFormRequest::New => {
-                    let directory = self
-                        .roster
-                        .bots
-                        .first()
-                        .map(|bot| bot.directory.clone())
-                        .filter(|directory| !directory.trim().is_empty())
-                        .unwrap_or_else(|| {
-                            backend::fallback_workspace().to_string_lossy().into_owned()
-                        });
-                    (None, String::new(), String::new(), directory, false, i18n::t("新建 Bot"), i18n::t("创建"))
-                }
-                BotFormRequest::Edit(id) => {
-                    let Some(bot) = self.roster.bot_by_id(&id) else {
-                        return;
-                    };
-                    let directory = if bot.directory.trim().is_empty() {
+        let (
+            editing_id,
+            name_text,
+            role_text,
+            directory_text,
+            identity_on,
+            private_on,
+            chief_on,
+            title,
+            ok_text,
+        ) = match request {
+            BotFormRequest::New => {
+                let directory = self
+                    .roster
+                    .bots
+                    .first()
+                    .map(|bot| bot.directory.clone())
+                    .filter(|directory| !directory.trim().is_empty())
+                    .unwrap_or_else(|| {
                         backend::fallback_workspace().to_string_lossy().into_owned()
-                    } else {
-                        bot.directory.clone()
-                    };
-                    (
-                        Some(id),
-                        bot.name.clone(),
-                        bot.role.clone(),
-                        directory,
-                        bot.identity_sync,
-                        i18n::t("编辑 Bot"),
-                        i18n::t("保存"),
-                    )
-                }
-            };
+                    });
+                (
+                    None,
+                    String::new(),
+                    String::new(),
+                    directory,
+                    false,
+                    false,
+                    self.roster.bots.iter().all(|bot| !bot.is_chief),
+                    i18n::t("新建 Bot"),
+                    i18n::t("创建"),
+                )
+            }
+            BotFormRequest::Edit(id) => {
+                let Some(bot) = self.roster.bot_by_id(&id) else {
+                    return;
+                };
+                let directory = if bot.directory.trim().is_empty() {
+                    backend::fallback_workspace().to_string_lossy().into_owned()
+                } else {
+                    bot.directory.clone()
+                };
+                (
+                    Some(id),
+                    bot.name.clone(),
+                    bot.role.clone(),
+                    directory,
+                    bot.identity_sync,
+                    bot.is_private,
+                    bot.is_chief,
+                    i18n::t("编辑 Bot"),
+                    i18n::t("保存"),
+                )
+            }
+        };
         let name = cx.new(|cx| SimpleInput::new(i18n::t("名字（必填）"), theme::ink_tertiary, cx));
         let role = cx.new(|cx| SimpleInput::new(i18n::t("角色（可选）"), theme::ink_tertiary, cx));
         let directory = cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx));
@@ -4295,6 +4411,8 @@ impl PilotApp {
             role,
             directory,
             identity_on,
+            private_on,
+            chief_on,
             icon: appearance_icon,
             color: appearance_color,
             error: None,
@@ -4318,13 +4436,25 @@ impl PilotApp {
                 .show_cancel(true)
                 .content(move |content, _, _| content.child(form_content.clone()))
                 .on_ok(move |_, _, cx| {
-                    let (name, role, directory, identity_on, editing_id, icon, color) = {
+                    let (
+                        name,
+                        role,
+                        directory,
+                        identity_on,
+                        private_on,
+                        chief_on,
+                        editing_id,
+                        icon,
+                        color,
+                    ) = {
                         let form = form_ok.read(cx);
                         (
                             form.name.read(cx).content().trim().to_string(),
                             form.role.read(cx).content().trim().to_string(),
                             form.directory.read(cx).content().trim().to_string(),
                             form.identity_on,
+                            form.private_on,
+                            form.chief_on,
                             form.editing_id.clone(),
                             form.icon.clone(),
                             form.color.clone(),
@@ -4334,6 +4464,15 @@ impl PilotApp {
                         let model_template = this.new_bot_model.clone().or_else(|| {
                             this.roster.bots.first().and_then(|bot| bot.model.clone())
                         });
+                        // 隐私开关切换会换会话落盘根，必须丢掉旧会话上下文。
+                        let privacy_changed = editing_id
+                            .as_deref()
+                            .and_then(|id| this.roster.bot_by_id(id))
+                            .is_some_and(|bot| bot.is_private != private_on);
+                        let chief_changed = editing_id
+                            .as_deref()
+                            .and_then(|id| this.roster.bot_by_id(id))
+                            .is_some_and(|bot| bot.is_chief != chief_on);
                         let result = match &editing_id {
                             Some(id) => data::update_bot(
                                 id,
@@ -4341,12 +4480,16 @@ impl PilotApp {
                                 &role,
                                 &directory,
                                 identity_on,
+                                private_on,
+                                chief_on,
                             ),
                             None => data::create_bot(
                                 &name,
                                 &role,
                                 &directory,
                                 model_template.as_ref(),
+                                private_on,
+                                chief_on,
                             ),
                         };
                         match result {
@@ -4354,6 +4497,23 @@ impl PilotApp {
                                 // 新建/编辑都落图标/颜色。
                                 if let Err(message) = bot_icon::set(&bot.id, &icon, &color) {
                                     this.toast(message, cx);
+                                }
+                                if privacy_changed || chief_changed {
+                                    let key = bot_key(&bot.id);
+                                    this.backend.reset_session(key.clone());
+                                    this.chats.remove(&key);
+                                    // 群成员集合/工具集也要按新的身份重建。
+                                    let group_keys: Vec<String> = this
+                                        .roster
+                                        .groups
+                                        .iter()
+                                        .filter(|group| group.member_ids.contains(&bot.id))
+                                        .map(|group| group_key(&group.id))
+                                        .collect();
+                                    for group in group_keys {
+                                        this.backend.reset_session(group.clone());
+                                        this.chats.remove(&group);
+                                    }
                                 }
                                 this.roster = Roster::load();
                                 let index = this
@@ -4401,6 +4561,7 @@ impl PilotApp {
             .member_ids
             .iter()
             .filter_map(|member_id| self.roster.bot_by_id(member_id))
+            .filter(|bot| !bot.is_private)
             .map(|bot| {
                 let workspace = match &group.directory {
                     Some(directory) => directory.clone(),
@@ -4560,6 +4721,90 @@ impl PilotApp {
                     (_, Some(error)) => self.toast(tri!("图片加载失败：{error}", "Failed to load the image: {error}"), cx),
                     _ => {}
                 }
+            }
+            BackendEvent::TeamDispatch {
+                key,
+                member_id,
+                member_name,
+                text,
+                task_id,
+                root_task_id,
+                root_message_id,
+            } => {
+                let Some(group_id) = key.strip_prefix("group:").map(str::to_string) else {
+                    return;
+                };
+                let already_active = self
+                    .group_task_turns
+                    .get(&key)
+                    .is_some_and(|turn| turn.members.contains_key(&member_name))
+                    || self
+                        .chats
+                        .get(&key)
+                        .is_some_and(|chat| chat.member_stream.contains_key(&member_name));
+                let used = self
+                    .group_handoff_count
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(0);
+                if already_active || used >= 4 {
+                    // 目标已经在跑（或本回合派活次数到顶）：把刚建的子任务收成
+                    // 失败，避免根任务永远等一个不会执行的任务。
+                    let _ = group_tasks::settle(
+                        &data::data_root(),
+                        &group_id,
+                        &task_id,
+                        false,
+                        Some(&root_task_id),
+                    );
+                    self.toast(
+                        if already_active {
+                            tri!(
+                                "{member_name} 已在本回合执行，未重复派活",
+                                "{member_name} is already running in this turn"
+                            )
+                        } else {
+                            tri!("本回合派活次数已到上限（4 次）", "This turn already dispatched 4 tasks")
+                        },
+                        cx,
+                    );
+                    self.refresh_group_task_bar(&group_id);
+                    cx.notify();
+                    return;
+                }
+                *self
+                    .group_handoff_count
+                    .entry(key.clone())
+                    .or_insert(0) += 1;
+                if let Some(turn) = self.group_task_turns.get_mut(&key) {
+                    turn.members.insert(member_name.clone(), task_id);
+                } else {
+                    let mut members = HashMap::new();
+                    members.insert(member_name.clone(), task_id);
+                    self.group_task_turns.insert(
+                        key.clone(),
+                        GroupTaskTurn {
+                            root_id: root_task_id.clone(),
+                            members,
+                        },
+                    );
+                }
+                if let Some(chat) = self.chats.get_mut(&key) {
+                    chat.streaming = true;
+                    if chat.turn_started.is_none() {
+                        chat.turn_started = Some(time::now_ms());
+                    }
+                    chat.status = i18n::t("交接中…").to_string();
+                }
+                self.backend.continue_task_in_turn(
+                    key,
+                    member_id,
+                    text,
+                    Some(root_task_id),
+                    Some(root_message_id),
+                );
+                self.refresh_group_task_bar(&group_id);
+                cx.notify();
             }
             BackendEvent::Session { key, event } => {
                 if key.starts_with("side:") {
@@ -4908,10 +5153,12 @@ impl PilotApp {
                                                     "【群内交接】{name} 把下面的任务交给你：\n\n{reply}\n\n请接手执行，完成后直接在群里回复；需要继续交接可以 @ 其他成员。"
                                                 )
                                             };
-                                            self.backend.continue_task(
+                                            self.backend.continue_task_in_turn(
                                                 task_key.clone(),
                                                 target_id.clone(),
                                                 handoff,
+                                                Some(root_id.clone()),
+                                                None,
                                             );
                                             chat.streaming = true;
                                             if chat.turn_started.is_none() {
@@ -5424,6 +5671,7 @@ impl PilotApp {
             .member_ids
             .iter()
             .filter_map(|member_id| self.roster.bot_by_id(member_id))
+            .filter(|bot| !bot.is_private)
             .map(|bot| (bot.id.clone(), bot.name.clone()))
             .collect();
         // 新的用户回合：重置 Bot 交接预算。
@@ -5441,6 +5689,7 @@ impl PilotApp {
             &group.responder_policy,
             group.admin_id.as_deref(),
         );
+        let mut root_ids: Option<(String, String)> = None;
         match group_tasks::create_turn(
             &data::data_root(),
             &group.id,
@@ -5452,6 +5701,7 @@ impl PilotApp {
                 if self.group_task_turns.contains_key(key) {
                     fail_group_task_turn(&mut self.group_task_turns, key);
                 }
+                root_ids = Some((root.id.clone(), root.root_message_id.clone()));
                 self.group_task_turns.insert(
                     key.to_string(),
                     GroupTaskTurn {
@@ -5463,8 +5713,17 @@ impl PilotApp {
             Err(message) => eprintln!("[tasks] 创建群任务失败：{message}"),
         }
         self.refresh_group_task_bar(&group.id);
-        self.backend
-            .send_group(key.to_string(), payload, attachments);
+        let (root_task_id, root_message_id) = match root_ids {
+            Some((task, message)) => (Some(task), Some(message)),
+            None => (None, None),
+        };
+        self.backend.send_group_in_turn(
+            key.to_string(),
+            payload,
+            attachments,
+            root_task_id,
+            root_message_id,
+        );
         self.scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -5646,7 +5905,13 @@ impl PilotApp {
         } else {
             format!("继续任务：{}", expected.trim())
         };
-        self.backend.continue_task(group_key, owner_id, text);
+        self.backend.continue_task_in_turn(
+            group_key,
+            owner_id,
+            text,
+            Some(root_id.to_string()),
+            None,
+        );
         if let Some(turn) = self.group_task_turns.get_mut(group_key) {
             turn.members
                 .insert(owner_name.to_string(), task_id.to_string());
@@ -7045,6 +7310,10 @@ impl PilotApp {
                     })
                     .await;
                 let _ = this.update(cx, |this, cx| {
+                    let results: Vec<_> = results
+                        .into_iter()
+                        .filter(|hit| !this.is_private_session(&hit.session_id))
+                        .collect();
                     if this.find_seq == seq
                         && let Some(dialog) = this.find_dialog.as_mut()
                     {
@@ -7136,6 +7405,18 @@ impl PilotApp {
         find.current = ((find.current as isize + delta).rem_euclid(len)) as usize;
         self.pending_find_scroll = true;
         cx.notify();
+    }
+
+    /// 隐私 Bot 的当前/历史会话：全局搜索不展示。
+    fn is_private_session(&self, session_id: &str) -> bool {
+        self.roster.bots.iter().filter(|bot| bot.is_private).any(|bot| {
+            self.sessions.get(&bot.id).as_deref() == Some(session_id)
+                || self
+                    .sessions
+                    .history_of(&bot.id)
+                    .iter()
+                    .any(|id| id == session_id)
+        })
     }
 
     /// 搜索命中属于谁（私聊 Bot / 群聊成员）。
@@ -8208,7 +8489,9 @@ impl PilotApp {
         let mut names: Vec<String> = group
             .member_ids
             .iter()
-            .filter_map(|id| self.roster.bot_by_id(id).map(|bot| bot.name.clone()))
+            .filter_map(|id| self.roster.bot_by_id(id))
+            .filter(|bot| !bot.is_private)
+            .map(|bot| bot.name.clone())
             .filter(|name| name.to_lowercase().contains(&needle))
             .collect();
         if ALL_MENTION.to_lowercase().contains(&needle) {
@@ -10605,7 +10888,7 @@ impl PilotApp {
             group_rows.push(
                 settings_row(
                     group.name.clone(),
-                    Some(count_members(group.member_ids.len())),
+                    Some(count_members(visible_group_members(group, &self.roster).len())),
                 )
                 .child(
                     div()
@@ -18227,7 +18510,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         } else if let Some(group) = &group {
             (
                 group.name.clone(),
-                count_members(group.member_ids.len()),
+                count_members(visible_group_members(group, &self.roster).len()),
                 group.id.clone(),
                 true,
             )
@@ -19111,20 +19394,24 @@ fn group_details(group: &Group, roster: &Roster) -> impl IntoElement {
 }
 
 fn group_placeholder(group: &Group, roster: &Roster) -> impl IntoElement {
-    let members = group
-        .member_ids
-        .iter()
-        .map(|id| {
-            roster
-                .bot_by_id(id)
-                .map(|bot| bot.name.clone())
-                .unwrap_or_else(|| short_id(id))
-        })
-        .collect::<Vec<_>>()
-        .join("、");
+    let visible = visible_group_members(group, roster);
+    let members = if visible.is_empty() {
+        group
+            .member_ids
+            .iter()
+            .map(|id| short_id(id))
+            .collect::<Vec<_>>()
+            .join("、")
+    } else {
+        visible
+            .iter()
+            .map(|bot| bot.name.clone())
+            .collect::<Vec<_>>()
+            .join("、")
+    };
     empty_state_badged(
         Some(avatar::channel_avatar(&group.id, 44.).into_any_element()),
-        format!("{} · {}", group.name, count_members(group.member_ids.len())),
+        format!("{} · {}", group.name, count_members(visible.len())),
         tri!("成员：{members}。发消息开始群聊对话；用 @成员名 点名。", "Members: {members}. Send a message to start the group chat; @mention someone to call on them."),
     )
 }
@@ -19184,6 +19471,16 @@ fn count_members(n: usize) -> String {
     } else {
         format!("{n} 位成员")
     }
+}
+
+/// 群成员计数排除隐私 Bot（它们在群聊里永远不可见/不可派活）。
+fn visible_group_members<'a>(group: &'a Group, roster: &'a Roster) -> Vec<&'a Bot> {
+    group
+        .member_ids
+        .iter()
+        .filter_map(|id| roster.bot_by_id(id))
+        .filter(|bot| !bot.is_private)
+        .collect()
 }
 
 fn count_bots(n: usize) -> String {
@@ -23648,7 +23945,7 @@ impl PilotApp {
                     index,
                     group.id.clone(),
                     group.name.clone(),
-                    count_members(group.member_ids.len()),
+                    count_members(visible_group_members(group, &self.roster).len()),
                     at,
                     group.pinned,
                     chat.map(|chat| chat.unread).unwrap_or(0),

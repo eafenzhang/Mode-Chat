@@ -238,6 +238,16 @@ pub enum BackendEvent {
         path: Option<String>,
         error: Option<String>,
     },
+    /// Chief 用 `team_assign` 派活：任务已落台账，UI 负责触发目标成员回合。
+    TeamDispatch {
+        key: String,
+        member_id: String,
+        member_name: String,
+        text: String,
+        task_id: String,
+        root_task_id: String,
+        root_message_id: String,
+    },
 }
 
 /// 待上传附件：UI 已读入内存（上限 20MiB 双侧校验）。
@@ -281,6 +291,7 @@ pub fn engine_is_mode(selected: Option<&str>) -> bool {
 }
 
 /// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
+#[allow(clippy::too_many_arguments)]
 async fn open_rpi_session(
     key: &str,
     workspace: &str,
@@ -289,6 +300,7 @@ async fn open_rpi_session(
     resume: Option<String>,
     member: Option<String>,
     events: &UnboundedSender<BackendEvent>,
+    session_tools: Vec<rpi_harness::types::HarnessTool>,
 ) -> Result<(crate::rpi_engine::RpiSession, ModelSpec), String> {
     let spec = model
         .or_else(env_model)
@@ -314,9 +326,15 @@ async fn open_rpi_session(
         extra_tools.extend(crate::computer_tools::tools(identity));
         extra_tools.extend(crate::cua_tree::tools(identity));
     }
+    extra_tools.extend(session_tools);
+    let private_bot = crate::rpi_engine::private_bot_id(identity);
+    // 标记为隐私后不再续用主目录里的旧会话；新会话落到 `.private/<id>`。
+    let resume = resume.filter(|path| std::path::Path::new(path).is_file()).filter(|path| {
+        private_bot.is_none() || path.to_ascii_lowercase().contains(".private")
+    });
     let options = crate::rpi_engine::OpenOptions {
         workspace: workspace.into(),
-        resume_path: resume.filter(|path| std::path::Path::new(path).is_file()),
+        resume_path: resume,
         model: engine_model,
         thinking: crate::rpi_engine::thinking_level_for(&spec),
         system_prompt,
@@ -327,6 +345,7 @@ async fn open_rpi_session(
         allowlist,
         bot_id: crate::rpi_engine::bot_id_from_identity(identity),
         extra_tools,
+        private_bot,
     };
     let session = crate::rpi_engine::RpiSession::open(options).await?;
     Ok((session, spec))
@@ -463,6 +482,9 @@ enum Command {
         key: String,
         text: String,
         attachments: Vec<AttachmentUpload>,
+        /// 本轮根任务（Chief 工具派活要用；旧调用方可以不带）。
+        root_task_id: Option<String>,
+        root_message_id: Option<String>,
     },
     /// 停止该 UI key（私聊/群聊）下所有进行中的成员回合。
     Stop { key: String },
@@ -473,6 +495,8 @@ enum Command {
         key: String,
         member_id: String,
         text: String,
+        root_task_id: Option<String>,
+        root_message_id: Option<String>,
     },
     /// 群记忆自动回顾（UI 在群回合结束后入队；5s 内新回合到达会作废旧任务）。
     MemoryReview {
@@ -573,16 +597,21 @@ impl BackendHandle {
     }
 
     /// 群任务重试/改派：给成员重新派发一个回合（文本由调用方拼好）。
-    pub fn continue_task(
+    /// 带根任务信息时，目标成员里的 Chief 工具可以继续派活。
+    pub fn continue_task_in_turn(
         &self,
         key: impl Into<String>,
         member_id: impl Into<String>,
         text: impl Into<String>,
+        root_task_id: Option<String>,
+        root_message_id: Option<String>,
     ) {
         let _ = self.tx.send(Command::ContinueTask {
             key: key.into(),
             member_id: member_id.into(),
             text: text.into(),
+            root_task_id,
+            root_message_id,
         });
     }
 
@@ -655,16 +684,21 @@ impl BackendHandle {
     }
 
     /// 群聊发言：按 @点名 / 回应策略选成员，逐成员组 prompt 后发送。
-    pub fn send_group(
+    /// 带根任务信息时，群里的 Chief 工具可以按当前根任务派活。
+    pub fn send_group_in_turn(
         &self,
         key: impl Into<String>,
         text: impl Into<String>,
         attachments: Vec<AttachmentUpload>,
+        root_task_id: Option<String>,
+        root_message_id: Option<String>,
     ) {
         let _ = self.tx.send(Command::SendGroup {
             key: key.into(),
             text: text.into(),
             attachments,
+            root_task_id,
+            root_message_id,
         });
     }
 
@@ -816,6 +850,8 @@ async fn run_agent(
 
     let mut sessions: HashMap<String, SessionCtx> = HashMap::new();
     let mut groups: HashMap<String, GroupSpec> = HashMap::new();
+    // 每个群一份 Chief 工具上下文（根任务 + 本回合活跃成员）。
+    let mut team_turns: HashMap<String, crate::team_tools::TeamTurn> = HashMap::new();
     let mut member_talked: HashSet<String> = HashSet::new();
     let mut auto_sent = false;
     // UI key → 当前活跃会话的 internal key（新会话/切换会话后 Send 路由到新会话）。
@@ -902,9 +938,14 @@ async fn run_agent(
                         let system_prompt = crate::rpi_engine::system_prompt_for(
                             std::path::Path::new(&workspace),
                         );
+                        let private_bot = crate::rpi_engine::private_bot_id(&identity);
                         let resume_path = resume_id
                             .clone()
-                            .filter(|path| std::path::Path::new(path).is_file());
+                            .filter(|path| std::path::Path::new(path).is_file())
+                            .filter(|path| {
+                                private_bot.is_none()
+                                    || path.to_ascii_lowercase().contains(".private")
+                            });
                         let mut extra_tools = crate::mcp_host::for_workspace(&workspace)
                             .await
                             .harness_tools();
@@ -939,6 +980,7 @@ async fn run_agent(
                             allowlist,
                             bot_id: crate::rpi_engine::bot_id_from_identity(&identity),
                             extra_tools,
+                            private_bot,
                         };
                         match crate::rpi_engine::RpiSession::open(options).await {
                             Ok(session) => {
@@ -1029,6 +1071,7 @@ async fn run_agent(
                             None,
                             None,
                             events,
+                            Vec::new(),
                         )
                         .await
                         {
@@ -1109,6 +1152,7 @@ async fn run_agent(
                             Some(session_id.clone()),
                             None,
                             events,
+                            Vec::new(),
                         )
                         .await
                         {
@@ -1232,12 +1276,41 @@ async fn run_agent(
             }
             Command::EnsureGroup { spec } => {
                 groups.insert(spec.group_key.clone(), spec.clone());
+                let team_turn = crate::team_tools::turn_context();
+                team_turns.insert(spec.group_key.clone(), Arc::clone(&team_turn));
+                let member_infos: Vec<(String, String, String, bool)> = spec
+                    .members
+                    .iter()
+                    .map(|member| {
+                        (
+                            member.member_id.clone(),
+                            member.name.clone(),
+                            member.role.clone(),
+                            member.is_admin,
+                        )
+                    })
+                    .collect();
                 let mut merged_history: Vec<HistoryEntry> = Vec::new();
                 for member in &spec.members {
                     let internal = member_session_key(&spec.group_key, &member.member_id);
                     if sessions.contains_key(&internal) {
                         continue;
                     }
+                    // 只有 Chief 拿到团队管理工具；普通成员看不到目标/派活入口。
+                    let session_tools = if member.is_chief {
+                        crate::team_tools::tools(
+                            &crate::data::data_root(),
+                            &spec.info.group_id,
+                            &spec.group_key,
+                            &member.member_id,
+                            &member.name,
+                            member_infos.clone(),
+                            Arc::clone(&team_turn),
+                            events.clone(),
+                        )
+                    } else {
+                        Vec::new()
+                    };
                     let opened = open_rpi_session(
                         &spec.group_key,
                         &member.workspace,
@@ -1246,6 +1319,7 @@ async fn run_agent(
                         member.session_id.clone(),
                         Some(member.name.clone()),
                         events,
+                        session_tools,
                     )
                     .await;
                     match opened {
@@ -1303,6 +1377,8 @@ async fn run_agent(
                 key,
                 text,
                 attachments,
+                root_task_id,
+                root_message_id,
             } => {
                 let Some(spec) = groups.get(&key).cloned() else {
                     let _ = events.send(BackendEvent::Session {
@@ -1341,6 +1417,18 @@ async fn run_agent(
                         .into_iter()
                         .collect()
                 };
+                if let Some(turn) = team_turns.get(&key) {
+                    let active: Vec<String> = chosen
+                        .iter()
+                        .map(|index| spec.members[*index].member_id.clone())
+                        .collect();
+                    crate::team_tools::begin_turn(
+                        turn,
+                        root_task_id.as_deref().unwrap_or(""),
+                        root_message_id.as_deref().unwrap_or(""),
+                        active,
+                    );
+                }
                 for index in chosen {
                     let member = &spec.members[index];
                     let internal = member_session_key(&key, &member.member_id);
@@ -1489,6 +1577,8 @@ async fn run_agent(
                 key,
                 member_id,
                 text,
+                root_task_id,
+                root_message_id,
             } => {
                 let Some(spec) = groups.get(&key).cloned() else {
                     let _ = events.send(BackendEvent::Session {
@@ -1526,6 +1616,14 @@ async fn run_agent(
                     });
                     continue;
                 };
+                if let Some(turn) = team_turns.get(&key) {
+                    crate::team_tools::note_dispatch(
+                        turn,
+                        root_task_id.as_deref(),
+                        root_message_id.as_deref(),
+                        &member.member_id,
+                    );
+                }
                 let prompt = bot_team::prompt::build_group_prompt(
                     &bot_team::prompt::GroupPromptInput {
                         group_name: spec.info.group_name.clone(),
@@ -1826,6 +1924,7 @@ async fn run_memory_review(
         stored.session_id.clone(),
         None,
         &tx,
+        Vec::new(),
     )
     .await?;
     if let Some(path) = state_path.as_deref() {

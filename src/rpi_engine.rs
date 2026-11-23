@@ -219,6 +219,30 @@ pub fn bot_id_from_identity(identity: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 隐私 Bot 的 id（只有 `mode-bot:teammate:<id>` 且记录了 isPrivate=true 才算）。
+pub fn private_bot_id(identity: &str) -> Option<String> {
+    let id = bot_id_from_identity(identity)?;
+    let record = teammate_record(identity, "")?;
+    record
+        .get("isPrivate")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        .then_some(id)
+}
+
+fn safe_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 pub fn approval_policy(identity: &str, workspace: &str) -> (bot_team::approval::ApprovalLevel, Vec<String>) {
     use bot_team::approval::{parse_level, ApprovalLevel};
 
@@ -419,6 +443,10 @@ impl ApprovalGate {
                 } else if lowered == "write"
                     || lowered == "edit"
                     || lowered.starts_with("automation_")
+                    || matches!(
+                        lowered.as_str(),
+                        "team_assign" | "team_goal_create" | "team_goal_stage"
+                    )
                     || lowered.starts_with("mcp__")
                 {
                     "write"
@@ -848,6 +876,8 @@ pub struct OpenOptions {
     pub bot_id: Option<String>,
     /// 额外工具（MCP / 浏览器 / 电脑控制等宿主能力）。
     pub extra_tools: Vec<HarnessTool>,
+    /// 隐私 Bot id：非空时会话落到 `.private/<id>/`，全局搜索会跳过。
+    pub private_bot: Option<String>,
 }
 
 pub struct RpiSession {
@@ -870,7 +900,12 @@ impl RpiSession {
                 options.resume_path
             );
         }
-        let root = sessions_root();
+        let root = match options.private_bot.as_deref() {
+            Some(bot_id) => sessions_root().join(".private").join(safe_segment(bot_id)),
+            // 旁路会话单独落盘：可以恢复/审计，但不进历史列表和全局搜索。
+            None if options.key.starts_with("side:") => sessions_root().join(".side"),
+            None => sessions_root(),
+        };
         std::fs::create_dir_all(&root)
             .map_err(|error| format!("会话目录创建失败（{}）：{error}", root.display()))?;
         let workspace = options.workspace;
@@ -1284,7 +1319,14 @@ pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
         return Vec::new();
     }
     let mut hits = Vec::new();
-    collect_search(&sessions_root(), &needle, limit, &mut hits);
+    let private_workspaces = crate::data::private_workspace_dirs();
+    collect_search(
+        &sessions_root(),
+        &needle,
+        limit,
+        &private_workspaces,
+        &mut hits,
+    );
     hits.sort_by_key(|hit| std::cmp::Reverse(hit.at));
     hits.truncate(limit);
     hits
@@ -1294,6 +1336,7 @@ fn collect_search(
     dir: &std::path::Path,
     needle: &str,
     limit: usize,
+    private_workspaces: &[String],
     out: &mut Vec<crate::session_db::SearchHit>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1302,7 +1345,14 @@ fn collect_search(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_search(&path, needle, limit, out);
+            // 隐私 Bot / 旁路会话的根：不从全局搜索里出现。
+            if matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(".private") | Some(".side")
+            ) {
+                continue;
+            }
+            collect_search(&path, needle, limit, private_workspaces, out);
             if out.len() >= limit * 4 {
                 return;
             }
@@ -1315,6 +1365,27 @@ fn collect_search(
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
+        // 旧版隐私 Bot 会话可能还在主目录：按 header cwd 排除。
+        if !private_workspaces.is_empty()
+            && text.lines().take(8).any(|line| {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                    return false;
+                };
+                if value.get("kind").and_then(|item| item.as_str()) != Some("header") {
+                    return false;
+                }
+                value
+                    .get("cwd")
+                    .and_then(|item| item.as_str())
+                    .is_some_and(|cwd| {
+                        private_workspaces
+                            .iter()
+                            .any(|dir| cwd.eq_ignore_ascii_case(dir))
+                    })
+            })
+        {
+            continue;
+        }
         let mut title = String::new();
         let mut best: Option<(u64, String)> = None;
         for line in text.lines() {
