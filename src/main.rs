@@ -18837,6 +18837,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 cx.notify();
                             })),
                     )
+                    .child(
+                        icon_button("panel-collapse", icons::Icon::PaneCollapse).on_click(
+                            cx.listener(|this, _event, _window, cx| {
+                                this.right_panel_open = false;
+                                cx.notify();
+                            }),
+                        ),
+                    )
             )
             .child(
                 div()
@@ -24780,6 +24788,183 @@ impl PilotApp {
             }
         }
 
+        // 5) 本轮改动：按文件聚合的新增/删除行（与回合尾同一份数据）
+        if let Some(chat) = chat {
+            let edits = turn_edit_details(&chat.messages);
+            if !edits.is_empty() {
+                let added: usize = edits.iter().map(|(_, added, _)| *added).sum();
+                let removed: usize = edits.iter().map(|(_, _, removed)| *removed).sum();
+                let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                for (path, added_lines, removed_lines) in edits.iter().take(8) {
+                    let name = workspace_tail(path);
+                    let label = tri!(
+                        "{name} +{added_lines} −{removed_lines}",
+                        "{name} +{added_lines} −{removed_lines}"
+                    );
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S1))
+                            .child(
+                                icons::icon(icons::Icon::Folder, 13., wecom_theme::icon()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(SharedString::from(name)),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .text_color(wecom_theme::time_label())
+                                    .child(SharedString::from(label)),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                let overflow = edits.len().saturating_sub(8);
+                if overflow > 0 {
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .child(
+                                div()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .text_color(wecom_theme::time_label())
+                                    .child(SharedString::from(format!("还有 {overflow} 个文件"))),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                let count = rows.len();
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body
+                    .child(ui::section_action(
+                        tri!("本轮改动 · {}", "This turn · {}", edits.len()),
+                        ui::badge(
+                            format!("+{added} / −{removed}"),
+                            ui::Tone::Neutral,
+                        ),
+                    ))
+                    .child(card);
+            }
+        }
+
+        // 6) 会话用量
+        if let Some(usage) = chat.and_then(|chat| chat.usage) {
+            {
+                let count = 4;
+                let rows = [
+                    ui::stat_row(i18n::t("回合"), usage.turns.to_string()).into_any_element(),
+                    ui::stat_row(
+                        i18n::t("总 tokens"),
+                        session_db::format_tokens(usage.total_tokens),
+                    )
+                    .into_any_element(),
+                    ui::stat_row(
+                        i18n::t("输入"),
+                        session_db::format_tokens(usage.input_tokens),
+                    )
+                    .into_any_element(),
+                    ui::stat_row(
+                        i18n::t("输出"),
+                        session_db::format_tokens(usage.output_tokens),
+                    )
+                    .into_any_element(),
+                ];
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body.child(ui::section(i18n::t("会话用量"))).child(card);
+            }
+        }
+
+        // 7) 最近会话历史（最多 3 条，可点切换）
+        if let Some(bot) = &bot {
+            let live = chat.and_then(|chat| chat.session_id.clone());
+            let histories: Vec<String> = self
+                .sessions
+                .history_of(&bot.id)
+                .into_iter()
+                .filter(|id| live.as_deref() != Some(id.as_str()))
+                .take(3)
+                .collect();
+            if !histories.is_empty() {
+                let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                for session_id in histories {
+                    let label = self
+                        .sessions
+                        .title(&session_id)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| display_session_id(&session_id));
+                    let bot_id = bot.id.clone();
+                    let target = session_id.clone();
+                    rows.push(
+                        div()
+                            .id(SharedString::from(format!(
+                                "panel-history-{target}"
+                            )))
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S1))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                this.switch_to_history_session(
+                                    bot_id.clone(),
+                                    target.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(SharedString::from(label)),
+                            )
+                            .child(icons::icon(
+                                icons::Icon::ChevronRight,
+                                12.,
+                                wecom_theme::time_label(),
+                            ))
+                            .into_any_element(),
+                    );
+                }
+                let count = rows.len();
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body.child(ui::section(i18n::t("最近会话"))).child(card);
+            }
+        }
+
         // 快捷动作：与「⋯」菜单里的常用项对齐
         if let Some(bot_id) = bot.as_ref().map(|bot| bot.id.clone()) {
             body = body.child(
@@ -24814,6 +24999,58 @@ impl PilotApp {
                     .scrollbar_width(px(6.))
                     .child(body),
             )
+    }
+
+    /// 从右栏历史列表切到指定会话（与右栏「最近会话」点击同一条路径）。
+    fn switch_to_history_session(
+        &mut self,
+        bot_id: String,
+        session_id: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = bot_key(&bot_id);
+        if let Some(chat) = self.chats.get(&key)
+            && let Some(current) = chat.session_id.clone()
+            && current != session_id
+        {
+            self.sessions.push_history(&bot_id, &current);
+            self.sessions.save();
+        }
+        let Some(bot) = self.roster.bot_by_id(&bot_id).cloned() else {
+            return;
+        };
+        let workspace = if bot.directory.trim().is_empty() {
+            backend::fallback_workspace().to_string_lossy().into_owned()
+        } else {
+            bot.directory.clone()
+        };
+        let identity = bot.identity();
+        let model = bot.model.clone();
+        if let Some(chat) = self.chats.get_mut(&key) {
+            chat.messages.clear();
+            chat.streaming_index = None;
+            chat.tool_index.clear();
+            chat.member_stream.clear();
+            chat.streaming = false;
+            chat.permissions.clear();
+            chat.questions.clear();
+            chat.elicitations.clear();
+            chat.session_id = None;
+            chat.ready = false;
+            chat.status = i18n::t("切换会话…").to_string();
+        }
+        self.backend.switch_session(
+            key,
+            workspace,
+            identity,
+            model,
+            bot_id.clone(),
+            session_id,
+            self.sessions.engine_of(&bot_id).map(str::to_string),
+        );
+        self.scroll.scroll_to_bottom();
+        cx.notify();
     }
 
     fn wecom_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
