@@ -13220,6 +13220,8 @@ impl PilotApp {
         content_width: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        use crate::ui_kit as ui;
+
         let data_root = self.roster.data_root.clone();
         let workspace = self
             .selected_bot()
@@ -13489,69 +13491,21 @@ impl PilotApp {
                         .detach();
                     })),
                 );
+                // 统一走 ui_kit::icon_card：图标 + 标题 + 说明 + 右上动作，
+                // 下方一行状态与快捷链接。外层只负责固定宽度（网格按列宽均分）。
                 cards.push(
                     div()
                         .w(px(card_width))
                         .flex_shrink_0()
-                        .rounded(px(theme::RADIUS_MENU))
-                        .border_1()
-                        .border_color(if wechat {
-                            wecom_theme::panel_divider()
-                        } else {
-                            theme::edge()
-                        })
-                        .bg(if wechat {
-                            wecom_theme::panel_bg()
-                        } else {
-                            theme::card()
-                        })
-                        .p(px(12.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
                         .child(
-                            div()
-                                .flex()
-                                .items_start()
-                                .gap(px(8.))
-                                .child(connector_icon(spec.id, spec.category))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.))
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.))
-                                        .child(
-                                            div()
-                                                .font_family(theme::FONT_FAMILY)
-                                                .text_size(px(13.))
-                                                .line_height(px(18.))
-                                                .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(if wechat {
-                                                    wecom_theme::chat_title()
-                                                } else {
-                                                    theme::ink()
-                                                })
-                                                .child(spec.name),
-                                        )
-                                        .child(
-                                            div()
-                                                .truncate()
-                                                .font_family(theme::FONT_FAMILY)
-                                                .text_size(px(11.))
-                                                .line_height(px(16.))
-                                                .text_color(if wechat {
-                                                    wecom_theme::list_preview()
-                                                } else {
-                                                    theme::ink_secondary()
-                                                })
-                                                .child(spec.about),
-                                        ),
-                                )
-                                .child(action),
+                            ui::icon_card(
+                                connector_icon(spec.id, spec.category),
+                                spec.name,
+                                Some(SharedString::from(spec.about)),
+                                Some(action.into_any_element()),
+                            )
+                            .child(bottom),
                         )
-                        .child(bottom)
                         .into_any_element(),
                 );
             }
@@ -13840,31 +13794,66 @@ impl PilotApp {
 
     /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
     fn settings_page_capabilities(&self) -> gpui::AnyElement {
-        let mut body = settings_page_body("能力");
-        let mut capability_rows: Vec<gpui::AnyElement> = Vec::new();
-        for row in capabilities::rows() {
-            let color = if row.wired {
-                theme::success()
-            } else {
-                theme::ink_tertiary()
-            };
-            capability_rows.push(
-                settings_row(i18n::owned(row.title.to_string()), Some(i18n::owned(row.hint.to_string())))
+        use crate::ui_kit as ui;
+
+        let rows = capabilities::rows();
+        let wired = rows.iter().filter(|row| row.wired).count();
+        let mut body = ui::page()
+            .child(ui::section_action(
+                i18n::t("能力"),
+                ui::badge(
+                    format!("{wired} / {}", rows.len()),
+                    if wired == rows.len() {
+                        ui::Tone::Success
+                    } else {
+                        ui::Tone::Neutral
+                    },
+                ),
+            ));
+        if rows.is_empty() {
+            body = body.child(ui::empty(i18n::t("没有可用的能力")));
+            return body.into_any_element();
+        }
+        let count = rows.len();
+        let mut card = ui::card(vec![]);
+        for (index, row) in rows.into_iter().enumerate() {
+            let badge = ui::badge(
+                if row.wired {
+                    i18n::t("已接线")
+                } else {
+                    i18n::t("未接线")
+                },
+                if row.wired {
+                    ui::Tone::Success
+                } else {
+                    ui::Tone::Neutral
+                },
+            );
+            card = card.child(ui::card_row(
+                div()
                     .id(SharedString::from(format!("capability-{}", row.id)))
+                    .w_full()
+                    .px(px(ui::S3))
+                    .py(px(ui::S2))
+                    .flex()
+                    .items_center()
+                    .gap(px(ui::S2))
                     .child(
                         div()
-                            .font_family(theme::FONT_FAMILY)
-                            .text_size(px(11.))
-                            .text_color(color)
-                            .child(if row.wired { i18n::t("已接线") } else { i18n::t("未接线") }),
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(ui::body(row.title.to_string()))
+                            .child(ui::body_muted(row.hint.to_string())),
                     )
+                    .child(badge)
                     .into_any_element(),
-            );
+                index + 1 == count,
+            ));
         }
-        if !capability_rows.is_empty() {
-            body = body.child(settings_group(capability_rows));
-        }
-        body.into_any_element()
+        body.child(card).into_any_element()
     }
 
     /// 全库用量快照（懒加载；打开设置/切页时清空重读）。
