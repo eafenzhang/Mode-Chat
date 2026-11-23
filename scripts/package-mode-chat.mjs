@@ -172,12 +172,41 @@ SectionEnd
   }
 }
 
+/**
+ * 发布包必须是 GUI 子系统（PE Subsystem = 2）。
+ *
+ * 控制台子系统（3）双击启动会先开一个黑框窗口，关掉那个窗口等于关掉程序
+ * （2026-11-23 用户反馈）。这里读 PE 头做发布门禁，防止 `windows_subsystem`
+ * 属性被误删后又发出带黑框的包。
+ */
+function assertGuiSubsystem(exePath) {
+  const buffer = readFileSync(exePath);
+  if (buffer.toString("latin1", 0, 2) !== "MZ") {
+    throw new Error(`${exePath} 不是 PE 文件`);
+  }
+  const peOffset = buffer.readUInt32LE(0x3c);
+  const subsystem = buffer.readUInt16LE(peOffset + 24 + 68);
+  if (subsystem !== 2) {
+    throw new Error(
+      `发布包是控制台子系统（PE Subsystem=${subsystem}）：启动会弹黑框窗口。` +
+        "检查 src/main.rs 顶部的 windows_subsystem 属性（release 必须是 GUI 子系统）",
+    );
+  }
+}
+
 if (!skipBuild) build();
 const sourceExe = join(repoRoot, "target", "release", `${cargoBin}.exe`);
 if (!existsSync(sourceExe)) {
   console.error(`[package] 找不到产物：${sourceExe}（先去掉 --skip-build）`);
   process.exit(1);
 }
+try {
+  assertGuiSubsystem(sourceExe);
+} catch (error) {
+  console.error(`[package] ${error.message}`);
+  process.exit(1);
+}
+console.log("[package] 子系统校验通过：GUI（双击不弹控制台）");
 const versionProbe = spawnSync(sourceExe, ["--version"], {
   encoding: "utf8",
   windowsHide: true,

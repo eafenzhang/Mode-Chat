@@ -7,6 +7,10 @@
 //!
 //! 群聊消息流（v4 群聊编排）尚未接入，中栏先显示群聊资料占位。
 
+// 所有构建都用 GUI 子系统：控制台子系统双击启动会先开一个黑框窗口，关掉那个窗口
+// 等于关掉程序（2026-11-23 用户反馈）。需要日志时从终端启动并重定向 stdout/stderr。
+#![windows_subsystem = "windows"]
+
 macro_rules! im_log {
     ($($arg:tt)*) => {
         crate::im_service::log_line(format!($($arg)*))
@@ -35,6 +39,7 @@ mod im_heartbeat;
 mod im_runtime;
 mod im_service;
 mod instance;
+mod process_console;
 mod rpi_engine;
 mod mcp_host;
 mod memory_review;
@@ -404,14 +409,16 @@ fn load_theme_pref() -> String {
 fn system_prefers_light() -> bool {
     #[cfg(windows)]
     {
-        let output = std::process::Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-                "/v",
-                "AppsUseLightTheme",
-            ])
-            .output();
+        let mut query = std::process::Command::new("reg");
+        query.args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "/v",
+            "AppsUseLightTheme",
+        ]);
+        // GUI 发布包没有控制台，控制台子进程不加这个标志会各开一个黑框窗口。
+        crate::process_console::no_console(&mut query);
+        let output = query.output();
         if let Ok(output) = output {
             let text = String::from_utf8_lossy(&output.stdout);
             return text.contains("0x1");
@@ -24926,9 +24933,47 @@ fn configure_kit_theme(cx: &mut App) {
     });
 }
 
+/// 发布包是 GUI 子系统：从 cmd/PowerShell 里直接跑 `--version` 时，先挂到父进程
+/// 控制台并接回 `CONOUT$`，否则 println! 没有输出；父进程没有控制台（资源管理器
+/// 双击）时什么都不做。标准句柄已经有效（管道/文件重定向）时不碰它们——挂控制台
+/// 会把标准句柄换成控制台句柄，重定向的输出就丢了（2026-11-23 实测）。
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_parent_console() {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+        SetStdHandle,
+    };
+
+    let handle_ready = |kind: u32| {
+        let handle = unsafe { GetStdHandle(kind) };
+        !handle.is_null() && handle != INVALID_HANDLE_VALUE
+    };
+    if handle_ready(STD_OUTPUT_HANDLE) || handle_ready(STD_ERROR_HANDLE) {
+        return;
+    }
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for kind in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            if let Ok(console) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+                SetStdHandle(kind, console.as_raw_handle() as _);
+                // 句柄要活到进程退出；--version 随后就 return，泄漏一个句柄无妨。
+                std::mem::forget(console);
+            }
+        }
+    }
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+fn attach_parent_console() {}
+
 fn main() {
     // 发布打包脚本用它核对构建期注入的版本（MODE_BOT_VERSION）是否真的进了二进制。
     if std::env::args_os().any(|arg| matches!(arg.to_str(), Some("--version" | "-V"))) {
+        attach_parent_console();
         println!("Mode Chat {}", update::current_version());
         return;
     }

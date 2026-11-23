@@ -67,10 +67,14 @@ fn node_exe_name() -> &'static str {
 
 /// 系统 Node 或已下载的 Node 是否可用。
 pub fn node_available() -> bool {
-    let system = std::process::Command::new("node")
+    let mut probe = std::process::Command::new("node");
+    probe
         .arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // GUI 发布包没有控制台：控制台子进程不加这个标志会闪一个黑框窗口。
+    crate::process_console::no_console(&mut probe);
+    let system = probe
         .status()
         .map(|status| status.success())
         .unwrap_or(false);
@@ -140,11 +144,10 @@ pub async fn ensure_node() -> Result<(), String> {
         .map_err(|error| format!("读取 Node 安装包失败：{error}"))?;
     std::fs::write(&zip_path, &bytes)
         .map_err(|error| format!("写入 Node 安装包失败：{error}"))?;
-    let status = std::process::Command::new("tar")
-        .arg("-xf")
-        .arg(&zip_path)
-        .arg("-C")
-        .arg(&dir)
+    let mut extract = std::process::Command::new("tar");
+    extract.arg("-xf").arg(&zip_path).arg("-C").arg(&dir);
+    crate::process_console::no_console(&mut extract);
+    let status = extract
         .status()
         .map_err(|error| format!("解压 Node 失败：{error}"))?;
     if !status.success() {
@@ -240,6 +243,8 @@ fn spawn_server(
     for (key, value) in env {
         cmd.env(key, value);
     }
+    // 服务端只走 stdin/stdout 管道；GUI 发布包没有控制台，不加这个标志会弹出黑框。
+    crate::process_console::no_console_async(&mut cmd);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

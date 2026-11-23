@@ -92,21 +92,24 @@ const NO_RELEASE: &str = "__no_release__";
 fn fetch_manifest(timeout: Duration) -> Result<Manifest, String> {
     let seconds = timeout.as_secs().max(1).to_string();
     let url = manifest_url();
-    let output = Command::new("curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--location",
-            "--max-time",
-            &seconds,
-            "--header",
-            "Accept: application/json",
-            "--write-out",
-            "|HTTP:%{http_code}",
-            &url,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
+    let mut curl = Command::new("curl");
+    curl.args([
+        "--silent",
+        "--show-error",
+        "--location",
+        "--max-time",
+        &seconds,
+        "--header",
+        "Accept: application/json",
+        "--write-out",
+        "|HTTP:%{http_code}",
+        &url,
+    ])
+    .stdin(Stdio::null())
+    .stderr(Stdio::piped());
+    // GUI 发布包没有控制台：控制台子进程不加这个标志会弹黑框。
+    crate::process_console::no_console(&mut curl);
+    let output = curl
         .output()
         .map_err(|error| format!("调用 curl 失败：{error}"))?;
     if !output.status.success() {
@@ -212,20 +215,22 @@ pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
         .map_err(|error| format!("创建更新目录失败：{error}"))?;
     let zip_path = work_dir.join("update.zip");
     let seconds = "600";
-    let output = Command::new("curl")
-        .args([
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--location",
-            "--max-time",
-            seconds,
-            "--output",
-        ])
-        .arg(&zip_path)
-        .arg(&target.url)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
+    let mut curl = Command::new("curl");
+    curl.args([
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--max-time",
+        seconds,
+        "--output",
+    ])
+    .arg(&zip_path)
+    .arg(&target.url)
+    .stdin(Stdio::null())
+    .stderr(Stdio::piped());
+    crate::process_console::no_console(&mut curl);
+    let output = curl
         .output()
         .map_err(|error| format!("调用 curl 失败：{error}"))?;
     if !output.status.success() {
@@ -254,13 +259,16 @@ pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
             target.sha256
         ));
     }
-    let extract = Command::new("tar")
+    let mut extract_cmd = Command::new("tar");
+    extract_cmd
         .args(["-xf"])
         .arg(&zip_path)
         .arg("-C")
         .arg(&work_dir)
         .stdin(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::process_console::no_console(&mut extract_cmd);
+    let extract = extract_cmd
         .output()
         .map_err(|error| format!("调用 tar 失败：{error}"))?;
     if !extract.status.success() {
@@ -338,11 +346,8 @@ pub fn spawn_swap_and_restart(current_exe: &Path, staged: &StagedUpdate) -> Resu
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    // 更新脚本必须无窗口运行（发布包是 GUI 子系统，多一个黑框会挡住替换流程）。
+    crate::process_console::no_console(&mut command);
     command
         .spawn()
         .map_err(|error| format!("启动更新脚本失败：{error}"))?;

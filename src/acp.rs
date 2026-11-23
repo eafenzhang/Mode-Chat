@@ -171,13 +171,17 @@ async fn run(
     mut commands: UnboundedReceiver<AcpCommand>,
 ) -> Result<(), String> {
     // Windows 上这些是 .cmd/.exe：统一经 cmd /C 启动，避免 PATHEXT 解析问题。
-    let mut child = tokio::process::Command::new("cmd")
+    let mut engine = tokio::process::Command::new("cmd");
+    engine
         .arg("/C")
         .args(launch_args(&engine_command))
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    // 引擎只走管道；GUI 发布包没有控制台，不加这个标志会弹出 cmd 黑框。
+    crate::process_console::no_console_async(&mut engine);
+    let mut child = engine
         .spawn()
         .map_err(|error| format!("启动 {engine_command} 失败：{error}"))?;
     let mut stdin = BufWriter::new(child.stdin.take().ok_or("ACP 没有 stdin")?);

@@ -22,7 +22,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 publish = false
 
 [workspace.dependencies]
@@ -37,7 +37,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [package]
 name = "bot-gpui-pilot"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 publish = false
 description = "Mode Chat desktop client (Rust + GPUI)"
@@ -97,7 +97,7 @@ rpi-tools = { git = "https://github.com/bigfish1913/pi-rust", rev = "29d86869e3e
 futures = "0.3"
 async-trait = "0.1"
 tokio-tungstenite = "0.24"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_DataExchange", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Console"] }
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
 # pi-rust 的 Provider 构造器接收 reqwest 0.12 的 Client；应用其它网络代码用 0.13。
 reqwest012 = { package = "reqwest", version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
