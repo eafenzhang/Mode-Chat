@@ -681,6 +681,7 @@ pub struct DetailPanel {
     subtitle: Option<SharedString>,
     body: Vec<AnyElement>,
     actions: Vec<AnyElement>,
+    error: Option<SharedString>,
 }
 
 
@@ -710,7 +711,14 @@ impl DetailPanel {
             subtitle: None,
             body: Vec::new(),
             actions: Vec::new(),
+            error: None,
         }
+    }
+
+    /// 校验失败的红字提示（贴在底部动作之上）。
+    pub fn error(mut self, text: impl Into<SharedString>) -> Self {
+        self.error = Some(text.into());
+        self
     }
 
     pub fn subtitle(mut self, text: impl Into<SharedString>) -> Self {
@@ -807,6 +815,27 @@ impl DetailPanel {
             .flex_col()
             .child(head);
         panel = panel.child(body);
+        if let Some(error) = self.error.clone() {
+            panel = panel.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(S3))
+                    .pb(px(S2))
+                    .child(
+                        div()
+                            .w_full()
+                            .rounded(px(theme::RADIUS_CHIP))
+                            .bg(theme::danger_soft())
+                            .px(px(S2))
+                            .py(px(S1))
+                            .font_family(font())
+                            .text_size(px(T_LABEL))
+                            .line_height(px(T_LABEL_LH))
+                            .text_color(theme::danger())
+                            .child(error),
+                    ),
+            );
+        }
         if !self.actions.is_empty() {
             let mut actions = div()
                 .flex_shrink_0()
@@ -829,6 +858,19 @@ impl DetailPanel {
 
 /// 表单字段：标签 + 输入框（详情栏内用）。
 pub fn form_field(id: &'static str, label_text: &'static str, input: &Entity<SimpleInput>) -> Div {
+    form_field_tall(id, label_text, input, 34.)
+}
+
+/// 多行/大输入框版本（正文、JSON 这类）。
+///
+/// 输入框容器要自己画边框和底色：`SimpleInput` 本身透明，
+/// 弹窗版是靠 `dialog_field` 的容器兜的，这里同理。
+pub fn form_field_tall(
+    id: &'static str,
+    label_text: &'static str,
+    input: &Entity<SimpleInput>,
+    height: f32,
+) -> Div {
     div()
         .flex()
         .flex_col()
@@ -841,7 +883,19 @@ pub fn form_field(id: &'static str, label_text: &'static str, input: &Entity<Sim
                 .text_color(ink_secondary())
                 .child(i18n::t(label_text)),
         )
-        .child(div().id(id).h(px(34.)).child(input.clone()))
+        .child(
+            div()
+                .id(id)
+                .w_full()
+                .h(px(height))
+                .rounded(px(theme::RADIUS_FIELD))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::composer())
+                .px(px(S2))
+                .py(px(S1))
+                .child(input.clone()),
+        )
 }
 
 #[cfg(test)]

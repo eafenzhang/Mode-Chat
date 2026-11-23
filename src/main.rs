@@ -2899,6 +2899,8 @@ struct PilotApp {
     settings_detail_error: Option<String>,
     /// 详情面板里的列表项（白名单这类可增删的集合）。
     settings_detail_entries: Vec<String>,
+    /// 详情面板里的附加输入框（记忆表单的描述/正文）。
+    settings_detail_extra: Vec<Entity<SimpleInput>>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
     /// 每个群在当前用户回合里已发生的 Bot 交接次数（上限 4，防止互相 @ 无限循环）。
@@ -3062,7 +3064,7 @@ enum DetailMenuAction {
 }
 
 /// 记忆面板作用域：团队共享 / 某个群聊的文件记忆。
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum MemoryScope {
     Team,
     Group(String),
@@ -3383,6 +3385,7 @@ impl PilotApp {
             settings_detail_input: None,
             settings_detail_error: None,
             settings_detail_entries: Vec::new(),
+            settings_detail_extra: Vec::new(),
             question_free_active: None,
             question_free_input,
             group_task_turns: HashMap::new(),
@@ -9322,6 +9325,107 @@ impl PilotApp {
                     }))),
                 )
             }
+            SettingsDetail::Memory { file, scope } => {
+                let file = file.clone();
+                let scope = scope.clone();
+                let label = scope.label();
+                let editing = file.is_some();
+
+                // 三个输入框：标题 / 描述 / 正文。切面板时由调用方清空 extra。
+                let title_input = self.ensure_detail_input(cx, "标题（必填）", "", "");
+                if self.settings_detail_extra.is_empty() {
+                    let existing = file.as_deref().and_then(|file| scope.read(file));
+                    let (title_text, desc_text, body_text) = match existing {
+                        Some(entry) => (entry.title, entry.description, entry.body),
+                        None => (String::new(), String::new(), String::new()),
+                    };
+                    title_input.update(cx, |input, cx| input.set_content(title_text, cx));
+                    let desc =
+                        cx.new(|cx| SimpleInput::new(i18n::t("一句话描述（可选）"), theme::ink_tertiary, cx));
+                    let body = cx.new(|cx| SimpleInput::new(i18n::t("正文"), theme::ink_tertiary, cx));
+                    desc.update(cx, |input, cx| input.set_content(desc_text, cx));
+                    body.update(cx, |input, cx| input.set_content(body_text, cx));
+                    self.settings_detail_extra = vec![desc, body];
+                }
+                let desc_input = self
+                    .settings_detail_extra
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx)));
+                let body_input = self
+                    .settings_detail_extra
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx)));
+
+                let panel = ui::DetailPanel::new(format!(
+                    "{}{}",
+                    if editing {
+                        i18n::t("编辑")
+                    } else {
+                        i18n::t("新增")
+                    },
+                    label
+                ))
+                .subtitle(i18n::t(
+                    "保存后会重建记忆索引并记一条可撤销的历史；下一次对话即按新内容注入。",
+                ))
+                .body(ui::form_field("detail-memory-title", i18n::t("标题"), &title_input))
+                .body(ui::form_field("detail-memory-desc", i18n::t("描述"), &desc_input))
+                .body(ui::form_field_tall(
+                    "detail-memory-body",
+                    i18n::t("正文"),
+                    &body_input,
+                    220.,
+                ))
+                .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                    cx.listener(move |this, _event, _window, cx| {
+                        this.settings_detail = None;
+                        this.settings_detail_input = None;
+                        this.settings_detail_extra.clear();
+                        cx.notify();
+                    }),
+                ))
+                .action(ui::button("detail-save", i18n::t("保存")).on_click(cx.listener({
+                    let file = file.clone();
+                    let scope = scope.clone();
+                    move |this, _event, _window, cx| {
+                        let Some(title_input) = this.settings_detail_input.clone() else {
+                            return;
+                        };
+                        let title = title_input.read(cx).content().trim().to_string();
+                        let description = this
+                            .settings_detail_extra
+                            .first()
+                            .map(|input| input.read(cx).content().trim().to_string())
+                            .unwrap_or_default();
+                        let body = this
+                            .settings_detail_extra
+                            .get(1)
+                            .map(|input| input.read(cx).content().to_string())
+                            .unwrap_or_default();
+                        if title.is_empty() {
+                            this.settings_detail_error =
+                                Some(i18n::t("标题不能为空").to_string());
+                            cx.notify();
+                            return;
+                        }
+                        match scope.save(file.as_deref(), &title, &description, &body) {
+                            Ok(()) => {
+                                this.toast(tri!("已保存{label}", "Saved {label}"), cx);
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_error = None;
+                            }
+                            Err(message) => this.settings_detail_error = Some(message),
+                        }
+                        cx.notify();
+                    }
+                })));
+
+                (format!("{}记忆", label), Some(label.to_string()), panel)
+            }
             SettingsDetail::Allowlist { bot_id } => {
                 let bot_id = bot_id.clone();
                 if self.settings_detail_entries.is_empty()
@@ -9536,31 +9640,17 @@ impl PilotApp {
         };
 
         let _ = (title, subtitle);
+        // 校验错误的红字挂在面板内部，Esc / 返回都能一起收掉。
+        let body = if let Some(error) = self.settings_detail_error.clone() {
+            body.error(error)
+        } else {
+            body
+        };
         let rendered = body.render(
             move |_window: &mut Window, _cx: &mut App| {},
             cx,
         );
-        // 错误提示追加到面板底部。
-        if let Some(error) = self.settings_detail_error.clone() {
-            Some(
-                div()
-                    .w_full()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(rendered)
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .px(px(ui::S3))
-                            .pb(px(ui::S2))
-                            .child(ui::error(error)),
-                    )
-                    .into_any_element(),
-            )
-        } else {
-            Some(rendered)
-        }
+        Some(rendered)
     }
 
     /// 详情面板的输入框：首次进入时创建，切面板时重建。
@@ -13919,87 +14009,6 @@ impl PilotApp {
     }
     // ---- 团队记忆（S2：列表 + 新增/编辑/删除/撤销） ----
 
-    fn open_memory_dialog(
-        &mut self,
-        file: Option<String>,
-        scope: MemoryScope,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let existing = file.as_deref().and_then(|file| scope.read(file));
-        let (title_text, desc_text, body_text) = match existing {
-            Some(entry) => (entry.title, entry.description, entry.body),
-            None => (String::new(), String::new(), String::new()),
-        };
-        let title = cx.new(|cx| SimpleInput::new(i18n::t("标题（必填）"), theme::ink_tertiary, cx));
-        let description =
-            cx.new(|cx| SimpleInput::new(i18n::t("一句话描述（可选）"), theme::ink_tertiary, cx));
-        let body = cx.new(|cx| SimpleInput::new(i18n::t("正文"), theme::ink_tertiary, cx));
-        title.update(cx, |input, cx| input.set_content(title_text, cx));
-        description.update(cx, |input, cx| input.set_content(desc_text, cx));
-        body.update(cx, |input, cx| input.set_content(body_text, cx));
-        let handle = title.read(cx).focus_handle(cx);
-        let editing = file.is_some();
-        let label = scope.label();
-        let dialog_title = format!(
-            "{}{}",
-            if editing { i18n::t("编辑") } else { i18n::t("新增") },
-            label
-        );
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let title_field = title.clone();
-            let desc_field = description.clone();
-            let body_field = body.clone();
-            let title_ok = title.clone();
-            let desc_ok = description.clone();
-            let body_ok = body.clone();
-            let file = file.clone();
-            let scope = scope.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(dialog_title.clone())
-                .description(
-                    i18n::t("保存后会重建记忆索引并记录一条可撤销的历史；下一次对话即按新内容注入。"),
-                )
-                .width(px(500.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| {
-                    content.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.))
-                            .child(dialog_field("memory-title", i18n::t("标题"), &title_field))
-                            .child(dialog_field("memory-desc", i18n::t("描述"), &desc_field))
-                            .child(dialog_field_tall("memory-body", i18n::t("正文"), &body_field, 132.)),
-                    )
-                })
-                .on_ok(move |_, _, cx| {
-                    let title = title_ok.read(cx).content().trim().to_string();
-                    let description = desc_ok.read(cx).content().trim().to_string();
-                    let body = body_ok.read(cx).content().to_string();
-                    if title.is_empty() {
-                        let _ = weak.update(cx, |this, cx| this.toast(i18n::t("标题不能为空"), cx));
-                        return false;
-                    }
-                    let result = scope.save(file.as_deref(), &title, &description, &body);
-                    let _ = weak.update(cx, |this, cx| match result {
-                        Ok(()) => this.toast(tri!("已保存{label}", "Saved {label}"), cx),
-                        Err(message) => this.toast(message, cx),
-                    });
-                    true
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
     /// 通用页的团队记忆区（列表 + 新增/撤销/编辑/删除）。
     fn open_delete_memory_dialog(
         &mut self,
@@ -14067,8 +14076,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             },
                         )))
                         .child(settings_button("memory-new", i18n::t("新增")).on_click(cx.listener(
-                            |this, _event, window, cx| {
-                                this.open_memory_dialog(None, MemoryScope::Team, window, cx);
+                            |this, _event, _window, cx| {
+                                this.settings_detail = Some(SettingsDetail::Memory {
+                                    file: None,
+                                    scope: MemoryScope::Team,
+                                });
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                cx.notify();
                             },
                         ))),
                 ),
@@ -14111,13 +14126,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             SharedString::from(format!("memory-edit-{}", entry.file)),
                             i18n::t("编辑"),
                         )
-                        .on_click(cx.listener(move |this, _event, window, cx| {
-                            this.open_memory_dialog(
-                                Some(file_for_edit.clone()),
-                                MemoryScope::Team,
-                                window,
-                                cx,
-                            );
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = Some(SettingsDetail::Memory {
+                                file: Some(file_for_edit.clone()),
+                                scope: MemoryScope::Team,
+                            });
+                            this.settings_detail_input = None;
+                            this.settings_detail_extra.clear();
+                            cx.notify();
                         })),
                     )
                     .child(
@@ -14176,8 +14192,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .child(settings_button("group-memory-new", i18n::t("新增")).on_click(
                             cx.listener({
                                 let scope = scope.clone();
-                                move |this, _event, window, cx| {
-                                    this.open_memory_dialog(None, scope.clone(), window, cx);
+                                move |this, _event, _window, cx| {
+                                    this.settings_detail = Some(SettingsDetail::Memory {
+                                        file: None,
+                                        scope: scope.clone(),
+                                    });
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_extra.clear();
+                                    cx.notify();
                                 }
                             }),
                         )),
@@ -14226,13 +14248,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         )
                         .on_click(cx.listener({
                             let scope = scope.clone();
-                            move |this, _event, window, cx| {
-                                this.open_memory_dialog(
-                                    Some(file_for_edit.clone()),
-                                    scope.clone(),
-                                    window,
-                                    cx,
-                                );
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = Some(SettingsDetail::Memory {
+                                    file: Some(file_for_edit.clone()),
+                                    scope: scope.clone(),
+                                });
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                cx.notify();
                             }
                         })),
                     )
@@ -20462,71 +20485,6 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
         )
 }
 
-/// 多行字段（正文类输入）：固定高度、内部滚动。
-fn dialog_field_tall(
-    id: &'static str,
-    label: &'static str,
-    input: &Entity<SimpleInput>,
-    height: f32,
-) -> impl IntoElement {
-    let wechat = wecom_theme::active();
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(
-            div()
-                .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
-                } else {
-                    theme::FONT_FAMILY
-                })
-                .text_size(px(13.))
-                .line_height(px(18.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(if wechat {
-                    wecom_theme::list_preview()
-                } else {
-                    theme::ink_secondary()
-                })
-                .child(i18n::t(label)),
-        )
-        .child(
-            div()
-                .id(id)
-                .key_context("Dialog")
-                .h(px(height))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(if wechat {
-                    wecom_theme::panel_divider()
-                } else {
-                    theme::edge()
-                })
-                .bg(if wechat {
-                    wecom_theme::chat_bg()
-                } else {
-                    theme::card()
-                })
-                .px(px(10.))
-                .py(px(6.))
-                .overflow_hidden()
-                .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
-                } else {
-                    theme::FONT_FAMILY
-                })
-                .text_size(px(13.))
-                .line_height(px(18.))
-                .text_color(if wechat {
-                    wecom_theme::chat_title()
-                } else {
-                    theme::ink()
-                })
-                .child(input.clone()),
-        )
-}
-
 /// 居中遮罩（点击遮罩吞掉事件，不关闭——关闭交给各对话框自己的按钮/Esc）。
 /// 卡片进场上做 140ms 淡入（DS 原则「有进就有出」的最小实现；gpui 的
 /// `with_animation` 在系统减少动效时会自动落到终态）。
@@ -21303,6 +21261,11 @@ enum SettingsDetail {
     Section {
         editing_id: Option<String>,
         current_name: String,
+    },
+    /// 团队/群聊记忆编辑（标题 + 描述 + 正文）。`file` 为空 = 新建。
+    Memory {
+        file: Option<String>,
+        scope: MemoryScope,
     },
 }
 
