@@ -959,57 +959,6 @@ struct FindState {
     results: Vec<session_db::SearchHit>,
 }
 
-/// 「新建定时任务」表单（DS 的 + 新建任务）。
-struct ScheduleFormState {
-    bot_id: String,
-    title: Entity<SimpleInput>,
-    cron: Entity<SimpleInput>,
-    prompt: Entity<SimpleInput>,
-    recurring: bool,
-    error: Option<String>,
-}
-
-impl Render for ScheduleFormState {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let recurring = self.recurring;
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(dialog_field("schedule-title", i18n::t("标题"), &self.title))
-            .child(dialog_field(
-                "schedule-cron",
-                i18n::t("cron（五段，本地时区）"),
-                &self.cron,
-            ))
-            .child(dialog_field(
-                "schedule-prompt",
-                i18n::t("到点后发给 Bot 的指令"),
-                &self.prompt,
-            ))
-            .child(
-                settings_row(
-                    i18n::t("循环运行").to_string(),
-                    Some(if recurring {
-                        i18n::t("按 cron 重复").to_string()
-                    } else {
-                        i18n::t("只运行一次").to_string()
-                    }),
-                )
-                .child(switch("schedule-recurring", recurring).on_click(cx.listener(
-                    |this, _event, _window, cx| {
-                        this.recurring = !this.recurring;
-                        cx.notify();
-                    },
-                ))),
-            );
-        if let Some(error) = &self.error {
-            body = body.child(settings_error(error.clone()));
-        }
-        body
-    }
-}
-
 /// 群目标编辑对话框状态（写回 `{data_root}/v2/groups/<gid>/goal.json`）。
 struct GroupGoalState {
     group_id: String,
@@ -1954,94 +1903,6 @@ impl Render for GroupTasksState {
     }
 }
 
-/// 从内置模板新增 provider。
-struct ProviderAddState {
-    templates: Vec<data::ProviderTemplate>,
-    selected: usize,
-    provider_id: Entity<SimpleInput>,
-    provider_name: Entity<SimpleInput>,
-    api_key: Entity<SimpleInput>,
-    error: Option<String>,
-}
-
-impl Render for ProviderAddState {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(settings_note(
-                i18n::t("从内置模板创建 personal provider；模型列表取模板的 builtinModelIds。"),
-            ))
-            .child(section_label(i18n::t("模板")));
-        let mut pills = div().flex().flex_wrap().gap(px(5.));
-        for (index, template) in self.templates.iter().enumerate() {
-            let active = self.selected == index;
-            let template_id = template.template_id.clone();
-            let template_name = template.name.clone();
-            let provider_id_input = self.provider_id.clone();
-            let name_input = self.provider_name.clone();
-            pills = pills.child(
-                div()
-                    .id(SharedString::from(format!("provider-template-{index}")))
-                    .h(px(24.))
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(if active { theme::accent() } else { theme::edge() })
-                    .bg(if active { theme::raised() } else { theme::card() })
-                    .px(px(9.))
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme::hover()))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.selected = index;
-                        provider_id_input.update(cx, |input, cx| {
-                            input.set_content(template_id.clone(), cx);
-                        });
-                        name_input.update(cx, |input, cx| {
-                            input.set_content(template_name.clone(), cx);
-                        });
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .font_family(theme::FONT_FAMILY)
-                            .text_size(px(11.))
-                            .text_color(if active {
-                                theme::ink()
-                            } else {
-                                theme::ink_secondary()
-                            })
-                            .child(SharedString::from(template.name.clone())),
-                    ),
-            );
-        }
-        body = body.child(pills);
-        if self.templates.is_empty() {
-            body = body.child(hint_row(i18n::t("没有读到 mode-builtin.json 的模板")));
-        }
-        body = body
-            .child(dialog_field("provider-add-id", "Provider ID", &self.provider_id))
-            .child(dialog_field(
-                "provider-add-name",
-                i18n::t("显示名称"),
-                &self.provider_name,
-            ))
-            .child(dialog_field("provider-add-key", "API Key", &self.api_key));
-        if let Some(error) = &self.error {
-            body = body.child(
-                div()
-                    .font_family(theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .text_color(theme::danger())
-                    .child(SharedString::from(error.clone())),
-            );
-        }
-        body
-    }
-}
-
 /// 「新建/编辑群聊」对话框状态（写回 groups.json）。
 #[derive(Clone)]
 enum GroupFormRequest {
@@ -2857,8 +2718,6 @@ struct PilotApp {
     /// 用量页「全库累计」快照：外层 None = 未加载，内层 None = 还没有会话。
     usage_totals_view: Option<Option<session_db::UsageSummary>>,
     /// 设置 → 密钥：新增密钥的两个输入框。
-    secret_name_input: Entity<SimpleInput>,
-    secret_value_input: Entity<SimpleInput>,
     /// 待二次确认移除的密钥名。
     confirm_remove_secret: Option<String>,
     /// 设置 → IM：当前选中的机器人（None = 只看列表）。
@@ -2875,8 +2734,6 @@ struct PilotApp {
     working_tick_started: bool,
     /// 设置 → IM：机器人心跳间隔（分钟，0 关闭）。
     im_heartbeat_input: Entity<SimpleInput>,
-    /// 连接器密钥输入框（按密钥名预建，目录里的 `secrets` 固定）。
-    connector_secret_inputs: HashMap<&'static str, Entity<SimpleInput>>,
     /// 连接器页搜索框与分类筛选（DS 的「搜索 + chips」）。
     connector_search: Entity<SimpleInput>,
     connector_query: String,
@@ -2899,8 +2756,10 @@ struct PilotApp {
     settings_detail_error: Option<String>,
     /// 详情面板里的列表项（白名单这类可增删的集合）。
     settings_detail_entries: Vec<String>,
-    /// 详情面板里的附加输入框（记忆表单的描述/正文）。
+    /// 详情面板里的附加输入框（多字段表单的 2..N 号字段）。
     settings_detail_extra: Vec<Entity<SimpleInput>>,
+    /// 详情面板里的开关状态（Bot 表单的同步/隐私/管理员）。
+    settings_detail_flags: Vec<bool>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
     /// 每个群在当前用户回合里已发生的 Bot 交接次数（上限 4，防止互相 @ 无限循环）。
@@ -3249,28 +3108,9 @@ impl PilotApp {
         let browser_url_input = cx.new(|cx| {
             SimpleInput::new("https://…", theme::ink_tertiary, cx)
         });
-        let secret_name_input = cx.new(|cx| {
-            SimpleInput::new(i18n::t("例如 OPENAI_API_KEY"), theme::ink_tertiary, cx)
-        });
-        let secret_value_input = cx.new(|cx| {
-            SimpleInput::new(i18n::t("值只写不读，保存后清空"), theme::ink_tertiary, cx)
-        });
         let question_free_input = cx.new(|cx| {
             SimpleInput::new(i18n::t("输入你的回答…"), theme::ink_tertiary, cx)
         });
-        let connector_secret_inputs: HashMap<&'static str, Entity<SimpleInput>> =
-            connectors_service::CATALOG
-                .iter()
-                .flat_map(|spec| spec.secrets.iter())
-                .map(|secret| {
-                    (
-                        secret.name,
-                        cx.new(|cx| {
-                            SimpleInput::new(i18n::t("输入后保存"), theme::ink_tertiary, cx)
-                        }),
-                    )
-                })
-                .collect();
         let connector_search = cx.new(|cx| {
             SimpleInput::new(i18n::t("搜索连接器"), theme::ink_tertiary, cx)
         });
@@ -3326,8 +3166,6 @@ impl PilotApp {
             search_input,
             browser_url_input,
             browser_recents: HashMap::new(),
-            secret_name_input,
-            secret_value_input,
             confirm_remove_secret: None,
             im_selected: None,
             im_delete: None,
@@ -3338,7 +3176,6 @@ impl PilotApp {
             im_heartbeat_input: cx.new(|cx| {
                 SimpleInput::new(i18n::t("分钟，0 关闭"), theme::ink_tertiary, cx)
             }),
-            connector_secret_inputs,
             connector_search,
             connector_query: String::new(),
             connector_category: None,
@@ -3386,6 +3223,7 @@ impl PilotApp {
             settings_detail_error: None,
             settings_detail_entries: Vec::new(),
             settings_detail_extra: Vec::new(),
+            settings_detail_flags: Vec::new(),
             question_free_active: None,
             question_free_input,
             group_task_turns: HashMap::new(),
@@ -9426,6 +9264,421 @@ impl PilotApp {
 
                 (format!("{}记忆", label), Some(label.to_string()), panel)
             }
+            SettingsDetail::AddSecret => {
+                let fields = self.ensure_detail_fields(
+                    cx,
+                    &[("名称", String::new()), ("值", String::new())],
+                );
+                let name_input = fields[0].clone();
+                let value_input = fields[1].clone();
+                let clear = |this: &mut Self| {
+                    this.settings_detail = None;
+                    this.settings_detail_input = None;
+                    this.settings_detail_extra.clear();
+                    this.settings_detail_error = None;
+                };
+                let panel = ui::DetailPanel::new(i18n::t("添加密钥"))
+                    .subtitle(i18n::t(
+                        "保存后清空；Bot 只能通过 ${secret:NAME} 使用，看不到明文。",
+                    ))
+                    .body(ui::form_field("detail-secret-name", i18n::t("名称"), &name_input))
+                    .body(ui::form_field("detail-secret-value", i18n::t("值"), &value_input))
+                    .action(
+                        ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .action(ui::button("detail-save", i18n::t("保存")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            let Some(name_input) = this.settings_detail_input.clone() else {
+                                return;
+                            };
+                            let name = name_input.read(cx).content().trim().to_string();
+                            let value = this
+                                .settings_detail_extra
+                                .first()
+                                .map(|input| input.read(cx).content().to_string())
+                                .unwrap_or_default();
+                            if name.is_empty() {
+                                this.settings_detail_error =
+                                    Some(i18n::t("名称不能为空").to_string());
+                                cx.notify();
+                                return;
+                            }
+                            match secrets::set(&data::data_root(), &name, &value) {
+                                Ok(_) => {
+                                    this.toast(
+                                        tri!("已保存密钥：{name}", "Saved secret: {name}"),
+                                        cx,
+                                    );
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_extra.clear();
+                                    this.settings_detail_error = None;
+                                }
+                                Err(message) => this.settings_detail_error = Some(message),
+                            }
+                            cx.notify();
+                        },
+                    )));
+                let _ = clear;
+                (i18n::t("添加密钥").to_string(), None, panel)
+            }
+            SettingsDetail::ConnectorSecret { connector_id } => {
+                let spec =
+                    connectors_service::CATALOG.iter().find(|spec| spec.id == *connector_id)?;
+                let specs: Vec<(&'static str, String)> = spec
+                    .secrets
+                    .iter()
+                    .map(|secret| (secret.label, String::new()))
+                    .collect();
+                if specs.is_empty() {
+                    return None;
+                }
+                let fields = self.ensure_detail_fields(cx, &specs);
+                let root = self.roster.data_root.clone();
+                let mut panel = ui::DetailPanel::new(format!("{} · 密钥", spec.name))
+                    .subtitle(i18n::t("密钥只写不读，保存后清空输入框。"));
+                for (index, (secret, input)) in spec.secrets.iter().zip(fields.iter()).enumerate() {
+                    let id: &'static str = ["detail-connector-0", "detail-connector-1",
+                        "detail-connector-2", "detail-connector-3"]
+                        .get(index)
+                        .copied()
+                        .unwrap_or("detail-connector-n");
+                    panel = panel.body(ui::form_field(id, secret.label, input));
+                }
+                let ids: Vec<(&'static str, Entity<SimpleInput>)> = spec
+                    .secrets
+                    .iter()
+                    .map(|secret| secret.name)
+                    .zip(fields.iter().cloned())
+                    .collect();
+                let panel = panel
+                    .action(
+                        ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .action(ui::button("detail-save", i18n::t("保存密钥")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            let mut saved = 0usize;
+                            let mut error = None;
+                            for (name, input) in &ids {
+                                let value = input.read(cx).content().trim().to_string();
+                                if value.is_empty() {
+                                    continue;
+                                }
+                                match secrets::set(&root, name, &value) {
+                                    Ok(_) => saved += 1,
+                                    Err(message) => {
+                                        error = Some(message);
+                                        break;
+                                    }
+                                }
+                            }
+                            match error {
+                                Some(message) => this.settings_detail_error = Some(message),
+                                None => {
+                                    this.toast(
+                                        tri!("已保存 {saved} 项密钥", "Saved {saved} secrets"),
+                                        cx,
+                                    );
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_extra.clear();
+                                    this.settings_detail_error = None;
+                                }
+                            }
+                            cx.notify();
+                        }),
+                    ));
+                (format!("{} · 密钥", spec.name), Some(spec.name.to_string()), panel)
+            }
+            SettingsDetail::NewSchedule => {
+                let bot = self.selected_bot().cloned()?;
+                let fields = self.ensure_detail_fields(
+                    cx,
+                    &[
+                        ("例如：每日简报", String::new()),
+                        ("cron（五段，本地时区）", "0 9 * * *".to_string()),
+                        ("到点后发给 Bot 的指令", String::new()),
+                    ],
+                );
+                let title_input = fields[0].clone();
+                let cron_input = fields[1].clone();
+                let prompt_input = fields[2].clone();
+                let flags = self.ensure_detail_flags(&[true]);
+                let recurring = flags[0];
+                let bot_id = bot.id.clone();
+                let panel = ui::DetailPanel::new(i18n::t("新建定时任务"))
+                    .subtitle(format!("{} · {}", bot.name, i18n::t("按 cron 触发")))
+                    .body(ui::form_field("detail-schedule-title", i18n::t("标题"), &title_input))
+                    .body(ui::form_field(
+                        "detail-schedule-cron",
+                        i18n::t("cron（五段，本地时区）"),
+                        &cron_input,
+                    ))
+                    .body(ui::form_field_tall(
+                        "detail-schedule-prompt",
+                        i18n::t("指令"),
+                        &prompt_input,
+                        120.,
+                    ))
+                    .body(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(ui::label(i18n::t("重复执行")))
+                            .child(
+                                ui::switch("detail-schedule-recurring", recurring).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        if let Some(flag) =
+                                            this.settings_detail_flags.first_mut()
+                                        {
+                                            *flag = !*flag;
+                                        }
+                                        cx.notify();
+                                    }),
+                                ),
+                            ),
+                    )
+                    .action(
+                        ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_flags.clear();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .action(ui::button("detail-create", i18n::t("创建")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            let read = |input: &Entity<SimpleInput>, cx: &mut Context<Self>| {
+                                input.read(cx).content().trim().to_string()
+                            };
+                            let (Some(title_input), Some(cron_input), Some(prompt_input)) = (
+                                this.settings_detail_input.clone(),
+                                this.settings_detail_extra.first().cloned(),
+                                this.settings_detail_extra.get(1).cloned(),
+                            ) else {
+                                return;
+                            };
+                            let title = read(&title_input, cx);
+                            let cron = read(&cron_input, cx);
+                            let prompt = prompt_input.read(cx).content().to_string();
+                            let recurring = this
+                                .settings_detail_flags
+                                .first()
+                                .copied()
+                                .unwrap_or(true);
+                            if title.is_empty() {
+                                this.settings_detail_error =
+                                    Some(i18n::t("标题不能为空").to_string());
+                                cx.notify();
+                                return;
+                            }
+                            let Some(bot) = this.roster.bot_by_id(&bot_id).cloned() else {
+                                return;
+                            };
+                            let workspace = if bot.directory.trim().is_empty() {
+                                backend::fallback_workspace().to_string_lossy().into_owned()
+                            } else {
+                                bot.directory.clone()
+                            };
+                            let identity = bot.identity();
+                            match automations::create_task(
+                                &automations::db_path(&data::data_root()),
+                                &workspace,
+                                Some(&identity),
+                                &title,
+                                &cron,
+                                &prompt,
+                                recurring,
+                            ) {
+                                Ok(_) => {
+                                    this.automations_view = None;
+                                    this.toast(
+                                        tri!("已创建定时任务：{title}", "Created schedule: {title}"),
+                                        cx,
+                                    );
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_extra.clear();
+                                    this.settings_detail_flags.clear();
+                                    this.settings_detail_error = None;
+                                }
+                                Err(message) => this.settings_detail_error = Some(message),
+                            }
+                            cx.notify();
+                        },
+                    )));
+                (i18n::t("新建定时任务").to_string(), None, panel)
+            }
+            SettingsDetail::AddProvider => {
+                let templates = data::provider_templates();
+                if templates.is_empty() {
+                    return None;
+                }
+                let selected = self.settings_detail_entries.len().min(templates.len() - 1);
+                let fields = self.ensure_detail_fields(
+                    cx,
+                    &[
+                        ("provider id（如 my-provider）", String::new()),
+                        ("显示名", String::new()),
+                        ("API Key（可留空）", String::new()),
+                    ],
+                );
+                let id_input = fields[0].clone();
+                let name_input = fields[1].clone();
+                let key_input = fields[2].clone();
+                let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+                    .subtitle(i18n::t(
+                        "从内置模板创建 personal provider；模型列表取模板的 builtinModelIds。",
+                    ));
+                let mut pills = div().flex().flex_wrap().gap(px(ui::S1));
+                for (index, template) in templates.iter().enumerate() {
+                    let active = index == selected;
+                    let template_id = template.template_id.clone();
+                    pills = pills.child(
+                        ui::chip(
+                            SharedString::from(format!("provider-tpl-{index}")),
+                            template.name.clone(),
+                            active,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                let mut entries = this.settings_detail_entries.clone();
+                                entries.clear();
+                                entries.push(template_id.clone());
+                                this.settings_detail_entries = entries;
+                                cx.notify();
+                            },
+                        )),
+                    );
+                }
+                let chosen = self
+                    .settings_detail_entries
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| templates[selected].template_id.clone());
+                panel = panel
+                    .body(ui::label(i18n::t("模板")))
+                    .body(pills)
+                    .body(ui::form_field("detail-provider-id", i18n::t("ID"), &id_input))
+                    .body(ui::form_field("detail-provider-name", i18n::t("显示名"), &name_input))
+                    .body(ui::form_field("detail-provider-key", i18n::t("API Key"), &key_input))
+                    .action(
+                        ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_entries.clear();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .action(ui::button("detail-create", i18n::t("创建")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            let (Some(id_input), Some(name_input), Some(key_input)) = (
+                                this.settings_detail_input.clone(),
+                                this.settings_detail_extra.first().cloned(),
+                                this.settings_detail_extra.get(1).cloned(),
+                            ) else {
+                                return;
+                            };
+                            let id = id_input.read(cx).content().trim().to_string();
+                            let name = name_input.read(cx).content().trim().to_string();
+                            let key = key_input.read(cx).content().trim().to_string();
+                            match data::add_provider_from_template(&chosen, &id, &name, &key) {
+                                Ok(()) => {
+                                    this.toast(i18n::t("已添加服务商"), cx);
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_extra.clear();
+                                    this.settings_detail_entries.clear();
+                                    this.settings_detail_error = None;
+                                }
+                                Err(message) => this.settings_detail_error = Some(message),
+                            }
+                            cx.notify();
+                        },
+                    )));
+                (i18n::t("添加服务商").to_string(), None, panel)
+            }
+            SettingsDetail::NewBotModel => {
+                let current = self.new_bot_model.clone();
+                let options = data::available_models();
+                let mut panel = ui::DetailPanel::new(i18n::t("新建 Bot 默认模型"))
+                    .subtitle(i18n::t("点条目立即生效并收起"))
+                    .body(
+                        ui::list_row(i18n::t("沿用第一个 Bot 的模型"), None).into_any_element(),
+                    );
+                if options.is_empty() {
+                    panel = panel.body(ui::note(i18n::t(
+                        "没读到 provider_config.json；先在数据根 v2 下配置 provider",
+                    )));
+                }
+                let mut last_provider = String::new();
+                for option in &options {
+                    if option.provider_id != last_provider {
+                        last_provider = option.provider_id.clone();
+                        panel = panel.body(ui::section(option.provider_name.clone()));
+                    }
+                    let selected = current.as_ref().is_some_and(|model| {
+                        model.provider_id == option.provider_id
+                            && model.model_id == option.model_id
+                    });
+                    let model = data::ModelSpec {
+                        provider_id: option.provider_id.clone(),
+                        model_id: option.model_id.clone(),
+                        reasoning_level: None,
+                    };
+                    let row = ui::list_row(
+                        option.model_id.clone(),
+                        Some(if selected { i18n::t("当前") } else { "" }.to_string().into()),
+                    );
+                    panel = panel.body(
+                        ui::button_ghost(
+                            SharedString::from(format!(
+                                "newbot-model-{}-{}",
+                                option.provider_id, option.model_id
+                            )),
+                            "",
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.new_bot_model = Some(model.clone());
+                            save_new_bot_model(Some(&model));
+                            this.toast(i18n::t("已设为新 Bot 默认模型"), cx);
+                            this.settings_detail = None;
+                            cx.notify();
+                        }))
+                        .child(row),
+                    );
+                }
+                let panel = panel.action(
+                    ui::button("detail-close", i18n::t("关闭")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            cx.notify();
+                        },
+                    )),
+                );
+                (i18n::t("新建 Bot 默认模型").to_string(), None, panel)
+            }
             SettingsDetail::Allowlist { bot_id } => {
                 let bot_id = bot_id.clone();
                 if self.settings_detail_entries.is_empty()
@@ -9651,6 +9904,51 @@ impl PilotApp {
             cx,
         );
         Some(rendered)
+    }
+
+    /// 详情面板的多字段表单：首次进入时按 `specs` 创建，已有则原样返回。
+    ///
+    /// `specs` 是 (占位符, 初始值)。返回第一个字段 + 其余字段，
+    /// 调用方自己决定标题和排版。
+    fn ensure_detail_fields(
+        &mut self,
+        cx: &mut Context<Self>,
+        specs: &[(&'static str, String)],
+    ) -> Vec<Entity<SimpleInput>> {
+        if self.settings_detail_extra.len() + usize::from(self.settings_detail_input.is_some())
+            == specs.len()
+            && self.settings_detail_input.is_some()
+        {
+            let mut all = vec![self.settings_detail_input.clone().expect("checked")];
+            all.extend(self.settings_detail_extra.iter().cloned());
+            return all;
+        }
+        let mut fields = Vec::with_capacity(specs.len());
+        for (placeholder, initial) in specs {
+            let input =
+                cx.new(|cx| SimpleInput::new(i18n::t(placeholder), theme::ink_tertiary, cx));
+            if !initial.is_empty() {
+                input.update(cx, |input, cx| input.set_content(initial.clone(), cx));
+            }
+            fields.push(input);
+        }
+        let mut iter = fields.into_iter();
+        self.settings_detail_input = iter.next();
+        self.settings_detail_extra = iter.collect();
+        let mut all = Vec::new();
+        if let Some(first) = self.settings_detail_input.clone() {
+            all.push(first);
+        }
+        all.extend(self.settings_detail_extra.iter().cloned());
+        all
+    }
+
+    /// 开关状态：首次进入时按 `defaults` 初始化。
+    fn ensure_detail_flags(&mut self, defaults: &[bool]) -> Vec<bool> {
+        if self.settings_detail_flags.len() != defaults.len() {
+            self.settings_detail_flags = defaults.to_vec();
+        }
+        self.settings_detail_flags.clone()
     }
 
     /// 详情面板的输入框：首次进入时创建，切面板时重建。
@@ -9924,8 +10222,11 @@ impl PilotApp {
                 )
                 .child(
                     settings_button(SharedString::from("new-bot-model"), i18n::t("选择")).on_click(
-                        cx.listener(|this, _event, window, cx| {
-                            this.open_new_bot_model_dialog(window, cx);
+                        cx.listener(|this, _event, _window, cx| {
+                            this.settings_detail = Some(SettingsDetail::NewBotModel);
+                            this.settings_detail_input = None;
+                            this.settings_detail_extra.clear();
+                            cx.notify();
                         }),
                     ),
                 )
@@ -10891,8 +11192,13 @@ impl PilotApp {
         body = body.child(ui::section_action(
             tri!("Provider 与模型 · {}", "Providers & models · {}", providers.len()),
             ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
-                cx.listener(|this, _event, window, cx| {
-                    this.open_add_provider_dialog(window, cx);
+                cx.listener(|this, _event, _window, cx| {
+                    this.settings_detail = Some(SettingsDetail::AddProvider);
+                    this.settings_detail_input = None;
+                    this.settings_detail_extra.clear();
+                    this.settings_detail_entries.clear();
+                    this.settings_detail_error = None;
+                    cx.notify();
                 }),
             ),
         ));
@@ -12693,157 +12999,6 @@ impl PilotApp {
         body.into_any_element()
     }
 
-    /// 连接器密钥：点「连接/填写密钥」弹出统一对话框，保存后自动启用。
-    fn open_connector_secret_dialog(
-        &mut self,
-        connector_id: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(spec) = connectors_service::CATALOG
-            .iter()
-            .find(|spec| spec.id == connector_id)
-        else {
-            return;
-        };
-        if spec.secrets.is_empty() {
-            return;
-        }
-        let title = if i18n::is_en() {
-            format!("{} · Secrets", spec.name)
-        } else {
-            format!("{} · 密钥", spec.name)
-        };
-        let root = self.roster.data_root.clone();
-        let fields: Vec<(&'static str, &'static str, Entity<SimpleInput>)> = spec
-            .secrets
-            .iter()
-            .filter_map(|secret| {
-                self.connector_secret_inputs
-                    .get(secret.name)
-                    .cloned()
-                    .map(|input| (secret.name, secret.label, input))
-            })
-            .collect();
-        if fields.is_empty() {
-            return;
-        }
-        for (_, _, input) in &fields {
-            input.update(cx, |input, cx| input.clear(window, cx));
-        }
-        let first = fields
-            .first()
-            .map(|(_, _, input)| input.read(cx).focus_handle(cx));
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        let content_fields = fields.clone();
-        let ok_fields = fields.clone();
-        let ok_root = root.clone();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let content_fields = content_fields.clone();
-            let ok_fields = ok_fields.clone();
-            let ok_root = ok_root.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(SharedString::from(title.clone()))
-                .width(px(460.))
-                .centered()
-                .ok_text(i18n::t("保存密钥"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| {
-                    let mut body = div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .child(settings_note(i18n::t(
-                            "密钥只写不读，保存后清空输入框。",
-                        )));
-                    for (_, label, input) in &content_fields {
-                        body = body.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.))
-                                .child(
-                                    div()
-                                        .font_family(theme::FONT_FAMILY)
-                                        .text_size(px(12.))
-                                        .line_height(px(18.))
-                                        .text_color(theme::ink_secondary())
-                                        .child(SharedString::from(*label)),
-                                )
-                                .child(
-                                    div()
-                                        .h(px(32.))
-                                        .rounded(px(8.))
-                                        .border_1()
-                                        .border_color(theme::edge())
-                                        .bg(theme::bg())
-                                        .px(px(10.))
-                                        .flex()
-                                        .items_center()
-                                        .child(input.clone()),
-                                ),
-                        );
-                    }
-                    content.child(body)
-                })
-                .on_ok(move |_, window, cx| {
-                    let mut saved = 0usize;
-                    let mut error = None;
-                    for (name, _, input) in &ok_fields {
-                        let value = input.read(cx).content().trim().to_string();
-                        if value.is_empty() {
-                            continue;
-                        }
-                        match secrets::set(&ok_root, name, &value) {
-                            Ok(_) => {
-                                saved += 1;
-                                input.update(cx, |input, cx| input.clear(window, cx));
-                            }
-                            Err(message) => {
-                                error = Some(message);
-                                break;
-                            }
-                        }
-                    }
-                    if let Some(message) = error {
-                        let _ = weak.update(cx, |this, cx| this.toast(message, cx));
-                        return false;
-                    }
-                    if saved == 0 {
-                        let _ =
-                            weak.update(cx, |this, cx| this.toast(i18n::t("没有填写新密钥"), cx));
-                        return false;
-                    }
-                    if let Err(message) = connectors::set_enabled(&ok_root, connector_id, true) {
-                        let _ = weak.update(cx, |this, cx| this.toast(message, cx));
-                        return false;
-                    }
-                    crate::mcp_host::refresh_all();
-                    let _ = weak.update(cx, |this, cx| {
-                        this.toast(
-                            if i18n::is_en() {
-                                format!("Saved {saved} secret(s)")
-                            } else {
-                                format!("已保存 {saved} 个密钥")
-                            },
-                            cx,
-                        );
-                        cx.notify();
-                    });
-                    true
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        if let Some(handle) = first {
-            window.defer(cx, move |window, cx| handle.focus(window, cx));
-        }
-    }
-
     fn settings_page_connectors(
         &mut self,
         content_width: f32,
@@ -13008,9 +13163,14 @@ impl PilotApp {
                     SharedString::from(format!("connector-toggle-{}", spec.id)),
                     action_label,
                 )
-                .on_click(cx.listener(move |this, _event, window, cx| {
+                .on_click(cx.listener(move |this, _event, _window, cx| {
                     if has_secrets && needs_secrets && !on {
-                        this.open_connector_secret_dialog(spec_id, window, cx);
+                        this.settings_detail =
+                            Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
+                        this.settings_detail_input = None;
+                        this.settings_detail_extra.clear();
+                        this.settings_detail_error = None;
+                        cx.notify();
                         return;
                     }
                     match connectors::set_enabled(&toggle_root, &toggle_id, toggled_on) {
@@ -13066,8 +13226,13 @@ impl PilotApp {
                             SharedString::from(format!("connector-secret-{}", spec.id)),
                             i18n::t("填写密钥"),
                         )
-                        .on_click(cx.listener(move |this, _event, window, cx| {
-                            this.open_connector_secret_dialog(secret_id, window, cx);
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail =
+                                Some(SettingsDetail::ConnectorSecret { connector_id: secret_id });
+                            this.settings_detail_input = None;
+                            this.settings_detail_extra.clear();
+                            this.settings_detail_error = None;
+                            cx.notify();
                         })),
                     );
                 }
@@ -13195,8 +13360,13 @@ impl PilotApp {
         body = body.child(settings_section_action(
             tri!("定时任务 · {}", "Schedules · {}", view.entries.len()),
             settings_action_button("automation-new", i18n::t("新建任务")).on_click(
-                cx.listener(|this, _event, window, cx| {
-                    this.open_schedule_dialog(window, cx);
+                cx.listener(|this, _event, _window, cx| {
+                    this.settings_detail = Some(SettingsDetail::NewSchedule);
+                    this.settings_detail_input = None;
+                    this.settings_detail_extra.clear();
+                    this.settings_detail_flags.clear();
+                    this.settings_detail_error = None;
+                    cx.notify();
                 }),
             ),
         ));
@@ -13373,8 +13543,12 @@ impl PilotApp {
         body = body.child(settings_section_action(
             tri!("密钥 · {}", "Secrets · {}", names.len()),
             settings_action_button("secret-add", i18n::t("+ 添加密钥")).on_click(cx.listener(
-                |this, _event, window, cx| {
-                    this.open_secret_dialog(window, cx);
+                |this, _event, _window, cx| {
+                    this.settings_detail = Some(SettingsDetail::AddSecret);
+                    this.settings_detail_input = None;
+                    this.settings_detail_extra.clear();
+                    this.settings_detail_error = None;
+                    cx.notify();
                 },
             )),
         ));
@@ -13447,77 +13621,6 @@ impl PilotApp {
             body = body.child(settings_group(secret_rows));
         }
         body.into_any_element()
-    }
-
-    /// 「+ 添加密钥」弹窗：名称 + 值（保存后清空，值只写不读）。
-    fn open_secret_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.secret_name_input
-            .update(cx, |input, cx| input.clear(window, cx));
-        self.secret_value_input
-            .update(cx, |input, cx| input.clear(window, cx));
-        let name_input = self.secret_name_input.clone();
-        let value_input = self.secret_value_input.clone();
-        let handle = name_input.read(cx).focus_handle(cx);
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let name_field = name_input.clone();
-            let value_field = value_input.clone();
-            let name_ok = name_input.clone();
-            let value_ok = value_input.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(i18n::t("添加密钥"))
-                .width(px(420.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| {
-                    content.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .child(dialog_field(
-                                "secret-dialog-name",
-                                i18n::t("名称"),
-                                &name_field,
-                            ))
-                            .child(dialog_field(
-                                "secret-dialog-value",
-                                i18n::t("值"),
-                                &value_field,
-                            ))
-                            .child(settings_note(i18n::t(
-                                "保存后清空；Bot 只能通过 ${secret:NAME} 使用，看不到明文。",
-                            ))),
-                    )
-                })
-                .on_ok(move |_, _, cx| {
-                    let name = name_ok.read(cx).content().trim().to_string();
-                    let value = value_ok.read(cx).content().to_string();
-                    match secrets::set(&data::data_root(), &name, &value) {
-                        Ok(_) => {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.toast(
-                                    tri!("已保存密钥：{name}", "Saved secret: {name}"),
-                                    cx,
-                                );
-                                cx.notify();
-                            });
-                            true
-                        }
-                        Err(message) => {
-                            let _ = weak.update(cx, |this, cx| this.toast(message, cx));
-                            false
-                        }
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
     /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
@@ -16193,150 +16296,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         });
     }
 
-    /// 新建 Bot 的默认模型（偏好）：与单 Bot 模型选择同构，点条目写 prefs.json。
-    fn open_new_bot_model_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.new_bot_model.clone();
-        let options = data::available_models();
-        let viewport_height = f32::from(window.viewport_size().height);
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let weak = weak.clone();
-            let restore = restore.clone();
-            let current = current.clone();
-            let options = options.clone();
-            alert
-                .title(i18n::t("新建 Bot 默认模型"))
-                .width(px(420.))
-                .centered()
-                .ok_text(i18n::t("关闭"))
-                .show_cancel(false)
-                .content(move |content, _, _| {
-                    let is_default = current.is_none();
-                    let default_click = {
-                        let weak = weak.clone();
-                        move |_event: &gpui::ClickEvent,
-                              window: &mut Window,
-                              cx: &mut App| {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.new_bot_model = None;
-                                save_new_bot_model(None);
-                                this.toast(i18n::t("新 Bot 将沿用第一个 Bot 的模型"), cx);
-                                cx.notify();
-                            });
-                            window.close_dialog(cx);
-                            Self::defer_focus_restore(weak.clone(), window, cx);
-                        }
-                    };
-                    let mut body = div().w_full().flex().flex_col().gap(px(10.)).child(
-                        div()
-                            .id("new-bot-model-default")
-                            .h(px(30.))
-                            .rounded(px(6.))
-                            .px(px(8.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(theme::hover()))
-                            .on_click(default_click)
-                            .child(
-                                div()
-                                    .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(12.))
-                                    .text_color(theme::ink())
-                                    .child(i18n::t("沿用第一个 Bot 的模型")),
-                            )
-                            .children(is_default.then(current_marker)),
-                    );
-                    if options.is_empty() {
-                        body = body.child(hint_row(
-                            i18n::t("没读到 provider_config.json；先在数据根 v2 下配置 provider"),
-                        ));
-                    } else {
-                        let mut last_provider = String::new();
-                        for option in &options {
-                            if option.provider_id != last_provider {
-                                last_provider = option.provider_id.clone();
-                                // 分组标题带厂商 logo（没有官方标的回落首字母方块）
-                                let logo = brand_icons::provider_color(&option.provider_id, 16.)
-                                    .unwrap_or_else(|| {
-                                        provider_initial_tile(&option.provider_name, 16.)
-                                    });
-                                body = body.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .pt(px(4.))
-                                        .child(logo)
-                                        .child(section_label(&option.provider_name)),
-                                );
-                            }
-                            let selected = current.as_ref().is_some_and(|model| {
-                                model.provider_id == option.provider_id
-                                    && model.model_id == option.model_id
-                            });
-                            let model = data::ModelSpec {
-                                provider_id: option.provider_id.clone(),
-                                model_id: option.model_id.clone(),
-                                reasoning_level: Some("max".to_string()),
-                            };
-                            let click = {
-                                let weak = weak.clone();
-                                let model = model.clone();
-                                move |_event: &gpui::ClickEvent,
-                                      window: &mut Window,
-                                      cx: &mut App| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        this.new_bot_model = Some(model.clone());
-                                        save_new_bot_model(Some(&model));
-                                        this.toast(i18n::t("已设为新 Bot 默认模型"), cx);
-                                        cx.notify();
-                                    });
-                                    window.close_dialog(cx);
-                                    Self::defer_focus_restore(weak.clone(), window, cx);
-                                }
-                            };
-                            body = body.child(
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "new-bot-model-{}-{}",
-                                        option.provider_id, option.model_id
-                                    )))
-                                    .h(px(30.))
-                                    .rounded(px(6.))
-                                    .px(px(8.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(theme::hover()))
-                                    .on_click(click)
-                                    .child(
-                                        div()
-                                            .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(12.))
-                                            .text_color(theme::ink())
-                                            .child(SharedString::from(option.model_id.clone())),
-                                    )
-                                    .children(selected.then(current_marker)),
-                            );
-                        }
-                    }
-                    content.child(
-                        div()
-                            .id("new-bot-model-dialog-body")
-                            .max_h(px((viewport_height - 200.).max(240.)))
-                            .overflow_y_scroll()
-                            .scrollbar_width(px(6.))
-                            .child(body),
-                    )
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-    }
-
     /// 落模型选择并刷新名册（`None` = 跟随默认）。新会话才生效，旧会话保持原模型。
     fn apply_model_choice(
         &mut self,
@@ -16410,88 +16369,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         });
     }
 
-    /// 从模板新增 provider。
-    fn open_add_provider_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let templates = data::provider_templates();
-        let (first_id, first_name) = templates
-            .first()
-            .map(|template| (template.template_id.clone(), template.name.clone()))
-            .unwrap_or_default();
-        let provider_id =
-            cx.new(|cx| SimpleInput::new("provider id", theme::ink_tertiary, cx));
-        let provider_name =
-            cx.new(|cx| SimpleInput::new(i18n::t("显示名称"), theme::ink_tertiary, cx));
-        let api_key = cx.new(|cx| SimpleInput::new("sk-…", theme::ink_tertiary, cx));
-        provider_id.update(cx, |input, cx| input.set_content(first_id, cx));
-        provider_name.update(cx, |input, cx| input.set_content(first_name, cx));
-        let handle = provider_id.read(cx).focus_handle(cx);
-        let form = cx.new(|_| ProviderAddState {
-            templates,
-            selected: 0,
-            provider_id,
-            provider_name,
-            api_key,
-            error: None,
-        });
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(i18n::t("新增 Provider"))
-                .width(px(520.))
-                .centered()
-                .ok_text(i18n::t("创建"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let (template_id, provider_id, provider_name, api_key) = {
-                        let form = form_ok.read(cx);
-                        let template_id = form
-                            .templates
-                            .get(form.selected)
-                            .map(|template| template.template_id.clone())
-                            .unwrap_or_default();
-                        (
-                            template_id,
-                            form.provider_id.read(cx).content().trim().to_string(),
-                            form.provider_name.read(cx).content().trim().to_string(),
-                            form.api_key.read(cx).content().to_string(),
-                        )
-                    };
-                    match data::add_provider_from_template(
-                        &template_id,
-                        &provider_id,
-                        &provider_name,
-                        &api_key,
-                    ) {
-                        Ok(()) => {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.toast(i18n::t("已新增 Provider"), cx);
-                                cx.notify();
-                            });
-                            true
-                        }
-                        Err(message) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
     fn delete_group_and_reselect(&mut self, group_id: &str, cx: &mut Context<Self>) {
         if let Err(message) = data::delete_group(group_id) {
             eprintln!("[delete] {message}");
@@ -16540,103 +16417,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 })
                 .on_close(move |event, window, cx| restore(event, window, cx))
         });
-    }
-
-    /// 新建定时任务：DS 的「+ 新建任务」弹窗（标题 / cron / 指令 / 是否循环）。
-    fn open_schedule_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bot) = self.selected_bot().cloned() else {
-            self.toast(i18n::t("先在左栏选中一个 Bot"), cx);
-            return;
-        };
-        let title = cx.new(|cx| SimpleInput::new(i18n::t("例如：每日简报"), theme::ink_tertiary, cx));
-        let cron = cx.new(|cx| SimpleInput::new("0 9 * * *", theme::ink_tertiary, cx));
-        let prompt = cx.new(|cx| {
-            SimpleInput::new(i18n::t("到点后发给 Bot 的指令"), theme::ink_tertiary, cx)
-        });
-        cron.update(cx, |input, cx| input.set_content("0 9 * * *", cx));
-        let form = cx.new(|_| ScheduleFormState {
-            bot_id: bot.id.clone(),
-            title,
-            cron,
-            prompt,
-            recurring: true,
-            error: None,
-        });
-        let handle = form.read(cx).title.read(cx).focus_handle(cx);
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(i18n::t("新建定时任务"))
-                .width(px(460.))
-                .centered()
-                .ok_text(i18n::t("创建"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let (bot_id, title, cron, prompt, recurring) = {
-                        let form = form_ok.read(cx);
-                        (
-                            form.bot_id.clone(),
-                            form.title.read(cx).content().trim().to_string(),
-                            form.cron.read(cx).content().trim().to_string(),
-                            form.prompt.read(cx).content().to_string(),
-                            form.recurring,
-                        )
-                    };
-                    let (workspace, identity) = {
-                        let Ok(Some(bot)) = weak.update(cx, |this, _| {
-                            this.roster.bot_by_id(&bot_id).cloned()
-                        }) else {
-                            return false;
-                        };
-                        let workspace = if bot.directory.trim().is_empty() {
-                            backend::fallback_workspace().to_string_lossy().into_owned()
-                        } else {
-                            bot.directory.clone()
-                        };
-                        (workspace, bot.identity())
-                    };
-                    let result = automations::create_task(
-                        &automations::db_path(&data::data_root()),
-                        &workspace,
-                        Some(&identity),
-                        &title,
-                        &cron,
-                        &prompt,
-                        recurring,
-                    );
-                    match result {
-                        Ok(_) => {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.automations_view = None;
-                                this.toast(
-                                    tri!("已创建定时任务：{title}", "Created schedule: {title}"),
-                                    cx,
-                                );
-                                cx.notify();
-                            });
-                            true
-                        }
-                        Err(message) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
     /// 运行历史：kit AlertDialog + 只读列表（打开时已取好快照）。
@@ -21267,6 +21047,18 @@ enum SettingsDetail {
         file: Option<String>,
         scope: MemoryScope,
     },
+    /// 添加密钥（名称 + 值）。
+    AddSecret,
+    /// 连接器密钥（按 connector 的 secrets 清单逐项填）。
+    ConnectorSecret {
+        connector_id: &'static str,
+    },
+    /// 新建定时任务。
+    NewSchedule,
+    /// 从模板添加 provider。
+    AddProvider,
+    /// 新建 Bot 默认模型（列表选择）。
+    NewBotModel,
 }
 
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
