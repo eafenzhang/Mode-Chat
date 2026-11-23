@@ -24597,9 +24597,188 @@ impl PilotApp {
                             .text_color(wecom_theme::chat_title())
                             .child(SharedString::from(title)),
                     )
-                    .child(ui::badge(status, status_tone)),
+                    .child(ui::badge(status, status_tone))
+                    // 右上角折叠：收起整列
+                    .child(
+                        div()
+                            .id("chat-info-collapse")
+                            .size(px(22.))
+                            .flex_shrink_0()
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.right_panel_open = false;
+                                cx.notify();
+                            }))
+                            .child(icons::icon(
+                                icons::Icon::PaneCollapse,
+                                14.,
+                                wecom_theme::icon(),
+                            )),
+                    ),
             )
             .child(card);
+
+        // ---- DS bot 右栏的其余分区 ----
+        // 1) 待处理：审批 / 提问 / 表单
+        if pending > 0 {
+            let mut pending_rows = vec![
+                ui::stat_row(i18n::t("审批"), chat.map(|c| c.permissions.len()).unwrap_or(0).to_string())
+                    .into_any_element(),
+                ui::stat_row(i18n::t("提问"), chat.map(|c| c.questions.len()).unwrap_or(0).to_string())
+                    .into_any_element(),
+                ui::stat_row(
+                    i18n::t("表单"),
+                    chat.map(|c| c.elicitations.len()).unwrap_or(0).to_string(),
+                )
+                .into_any_element(),
+            ];
+            let count = pending_rows.len();
+            let mut card = ui::card(vec![]);
+            for (index, row) in pending_rows.drain(..).enumerate() {
+                card = card.child(ui::card_row(row, index + 1 == count));
+            }
+            body = body.child(ui::section(i18n::t("待处理"))).child(card);
+        }
+
+        // 2) 待办：只读自会话库
+        if let Some(chat) = chat
+            && !chat.todos.is_empty()
+        {
+            {
+                let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                for item in chat.todos.iter().take(6) {
+                    let (glyph, tone) = match item.status.as_str() {
+                        "completed" => ("✓", ui::Tone::Success),
+                        "in_progress" => ("●", ui::Tone::Accent),
+                        _ => ("○", ui::Tone::Neutral),
+                    };
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S1))
+                            .child(ui::badge(glyph, tone))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(SharedString::from(item.content.clone())),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                let overflow = chat.todos.len().saturating_sub(6);
+                if overflow > 0 {
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .child(
+                                div()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .text_color(wecom_theme::time_label())
+                                    .child(SharedString::from(format!("还有 {overflow} 条"))),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                let count = rows.len();
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body.child(ui::section(i18n::t("待办"))).child(card);
+            }
+        }
+
+        // 3) 排队消息
+        if let Some(chat) = chat
+            && !chat.queued.is_empty()
+        {
+            {
+                let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                for (index, queued_item) in chat.queued.iter().enumerate() {
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S1))
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S1))
+                            .child(
+                                div()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(10.))
+                                    .text_color(wecom_theme::time_label())
+                                    .child(SharedString::from(format!("{}", index + 1))),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(wecom_theme::list_preview())
+                                    .child(SharedString::from(queued_item.text.clone())),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                let count = rows.len();
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body
+                    .child(ui::section(tri!(
+                        "排队中的消息 · {}", "Queued · {}", count
+                    )))
+                    .child(card);
+            }
+        }
+
+        // 4) 运行参数：审批档位 / 工作目录
+        {
+            let mut rows: Vec<gpui::AnyElement> = Vec::new();
+            if let Some(bot) = &bot {
+                rows.push(
+                    ui::stat_row(
+                        i18n::t("审批档位"),
+                        match bot.approval_level.as_str() {
+                            "ask" => i18n::t("每次询问").to_string(),
+                            "auto" => i18n::t("自动只读").to_string(),
+                            "full" => i18n::t("工作区自动").to_string(),
+                            other => other.to_string(),
+                        },
+                    )
+                    .into_any_element(),
+                );
+            }
+            if !rows.is_empty() {
+                let count = rows.len();
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body.child(ui::section(i18n::t("运行参数"))).child(card);
+            }
+        }
 
         // 快捷动作：与「⋯」菜单里的常用项对齐
         if let Some(bot_id) = bot.as_ref().map(|bot| bot.id.clone()) {
@@ -24646,15 +24825,6 @@ impl PilotApp {
             "Mode Chat".to_string()
         };
         let is_bot_chat = self.selected_bot().is_some();
-        let model_chip = self.selected_bot().map(|bot| {
-            (
-                bot.id.clone(),
-                bot.model
-                    .as_ref()
-                    .map(|model| model.model_id.clone())
-                    .unwrap_or_else(|| i18n::t("默认模型").to_string()),
-            )
-        });
         div()
             .flex_1()
             .min_w(px(0.))
@@ -24707,25 +24877,31 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(4.))
-                            .children(model_chip.map(|(bot_id, label)| {
+                            // 右上角只留「展开右栏」：模型/运行状态都放进栏内，
+                            // 不再直接弹模型选择框。
+                            .child(
                                 div()
-                                    .id("wechat-model-chip")
-                                    .max_w(px(150.))
-                                    .h(px(22.))
-                                    .px(px(6.))
+                                    .id("wechat-panel-toggle")
+                                    .size(px(28.))
                                     .rounded(px(4.))
-                                    .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(10.))
-                                    .line_height(px(16.))
-                                    .text_color(wecom_theme::time_label())
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .cursor_pointer()
+                                    .when(self.right_panel_open, |el| {
+                                        el.bg(wecom_theme::chip_bg())
+                                    })
                                     .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                                    .on_click(cx.listener(move |this, _event, window, cx| {
-                                        this.open_model_dialog(bot_id.clone(), window, cx);
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.right_panel_open = !this.right_panel_open;
+                                        cx.notify();
                                     }))
-                                    .child(SharedString::from(label))
-                            }))
+                                    .child(icons::icon(
+                                        icons::Icon::SidebarExpand,
+                                        18.,
+                                        wecom_theme::icon(),
+                                    )),
+                            )
                             .child(
                                 div()
                                     .id("wechat-more")

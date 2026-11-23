@@ -75,6 +75,10 @@ PHOSPHOR = {
     "Sun": "sun",
     "Moon": "moon",
     "Monitor": "desktop",
+    # 右栏开合：展开 = 侧栏轮廓，折叠 = 双向箭头收拢
+    "SidebarExpand": "sidebar-simple",
+    "PaneCollapse": "caret-double-right",
+    "PaneExpand": "caret-double-left",
 }
 
 # 侧栏 / 设置菜单：21 组，(线, 面)

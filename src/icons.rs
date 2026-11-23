@@ -69,6 +69,12 @@ pub enum Icon {
     Moon,
     Monitor,
     ChevronDown,
+    /// 展开右侧栏（侧栏轮廓）
+    SidebarExpand,
+    /// 折叠右侧栏（双箭头向右收拢）
+    PaneCollapse,
+    /// 展开（双箭头向左）
+    PaneExpand,
 }
 
 /// 图标字重。Phosphor 每个图标提供 regular / light / bold / fill 等变体，
@@ -88,7 +94,7 @@ pub enum Weight {
 impl Icon {
     /// 全部图标（测试与清单用；顺序与 `svg()` 无关）。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const ALL: [Icon; 52] = [
+    pub const ALL: [Icon; 55] = [
         Icon::Search,
         Icon::Plus,
         Icon::Ellipsis,
@@ -141,6 +147,9 @@ impl Icon {
         Icon::Moon,
         Icon::Monitor,
         Icon::ChevronDown,
+        Icon::SidebarExpand,
+        Icon::PaneCollapse,
+        Icon::PaneExpand,
     ];
 
     /// 图标对应的 SVG 原文（regular 字重）。
@@ -213,6 +222,15 @@ impl Icon {
             Icon::Moon => include_bytes!("../assets/icons/phosphor/moon.svg"),
             Icon::Monitor => include_bytes!("../assets/icons/phosphor/desktop.svg"),
             Icon::ChevronDown => include_bytes!("../assets/icons/phosphor/caret-down.svg"),
+            Icon::SidebarExpand => {
+                include_bytes!("../assets/icons/phosphor/sidebar-simple.svg")
+            }
+            Icon::PaneCollapse => {
+                include_bytes!("../assets/icons/phosphor/caret-double-right.svg")
+            }
+            Icon::PaneExpand => {
+                include_bytes!("../assets/icons/phosphor/caret-double-left.svg")
+            }
         }
     }
 
@@ -281,6 +299,15 @@ impl Icon {
             Icon::Moon => include_bytes!("../assets/icons/phosphor/moon-light.svg"),
             Icon::Monitor => include_bytes!("../assets/icons/phosphor/desktop-light.svg"),
             Icon::ChevronDown => include_bytes!("../assets/icons/phosphor/caret-down-light.svg"),
+            Icon::SidebarExpand => {
+                include_bytes!("../assets/icons/phosphor/sidebar-simple-light.svg")
+            }
+            Icon::PaneCollapse => {
+                include_bytes!("../assets/icons/phosphor/caret-double-right-light.svg")
+            }
+            Icon::PaneExpand => {
+                include_bytes!("../assets/icons/phosphor/caret-double-left-light.svg")
+            }
         }
     }
 }
@@ -330,7 +357,7 @@ mod tests {
 
     #[test]
     fn icon_set_matches_design_inventory() {
-        assert_eq!(Icon::ALL.len(), 52);
+        assert_eq!(Icon::ALL.len(), 55);
     }
 
     #[test]
