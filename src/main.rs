@@ -69,6 +69,7 @@ mod composer_input;
 // 当前界面未全部消费，允许保留未用项。
 #[allow(dead_code)]
 mod theme;
+mod ui_kit;
 mod time;
 mod tls;
 
@@ -10370,225 +10371,302 @@ impl PilotApp {
         pills
     }
 
+    /// 模型：卡片式。每个 provider 一张卡，卡片内是模型列表。
+    ///
+    /// 原来是一长串「文字行 + 一排文字按钮」，改成一卡一 provider：
+    /// 厂商 logo + 名称 + 密钥状态 + 卡内模型行（启用/排序）。
     fn settings_page_models(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use crate::ui_kit as ui;
+
         let providers = data::provider_entries();
-        let mut body = settings_page_body("模型");
-        body = body
-            .child(settings_section_action(
-                tri!("Provider 与模型 · {}", "Providers & models · {}", providers.len()),
-                settings_action_button("provider-add", i18n::t("+ 添加服务商")).on_click(
-                    cx.listener(|this, _event, window, cx| {
-                        this.open_add_provider_dialog(window, cx);
-                    }),
-                ),
-            ));
+        let mut body = ui::page();
+        body = body.child(ui::section_action(
+            tri!("Provider 与模型 · {}", "Providers & models · {}", providers.len()),
+            ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
+                cx.listener(|this, _event, window, cx| {
+                    this.open_add_provider_dialog(window, cx);
+                }),
+            ),
+        ));
         if providers.is_empty() {
-            body = body.child(settings_empty(
-                i18n::t("还没有配置 provider。"),
-            ));
-        } else {
-            for provider in providers {
-                let editable = matches!(
-                    provider.access_type.as_str(),
-                    "api-key" | "zhipu-coding-plan-api-key"
-                );
-                let status = if provider.has_api_key {
-                    i18n::t("已设置 key")
-                } else {
-                    i18n::t("未设置 key")
-                };
-                // 厂商 logo：有官方彩色标的走多色渲染，没有就回落首字母方块
-                let logo = brand_icons::provider_color(&provider.provider_id, 18.)
-                    .unwrap_or_else(|| {
-                        provider_initial_tile(&provider.provider_name, 18.)
-                    });
-                let mut row = settings_row_with_leading(
-                    logo,
-                    format!("{} · {}", provider.provider_name, provider.provider_id),
-                    Some(status.to_string()),
-                );
-                let order_id = provider.provider_id.clone();
-                row = row
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("provider-up-{}", order_id)),
-                            "↑",
-                        )
-                        .on_click(cx.listener({
-                            let id = order_id.clone();
-                            move |this, _event, _window, cx| {
-                                if let Err(message) = data::move_provider(&id, -1) {
-                                    this.toast(message, cx);
-                                }
-                                cx.notify();
-                            }
-                        })),
+            return body
+                .child(ui::empty(i18n::t("还没有配置 provider。")))
+                .into_any_element();
+        }
+
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
+        for provider in providers {
+            let editable = matches!(
+                provider.access_type.as_str(),
+                "api-key" | "zhipu-coding-plan-api-key"
+            );
+            let has_key = provider.has_api_key;
+            let logo = brand_icons::provider_color(&provider.provider_id, 22.)
+                .unwrap_or_else(|| provider_initial_tile(&provider.provider_name, 22.));
+
+            // ---- 卡片头：logo + 名称 + 状态徽标 ----
+            let head = div()
+                .flex()
+                .items_center()
+                .gap(px(ui::S2))
+                .child(logo)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.))
+                        .child(ui::title(provider.provider_name.clone()))
+                        .child(ui::label(provider.provider_id.clone())),
+                )
+                .child(ui::badge(
+                    if has_key {
+                        i18n::t("已设置 key")
+                    } else {
+                        i18n::t("未设置 key")
+                    },
+                    if has_key {
+                        ui::Tone::Success
+                    } else {
+                        ui::Tone::Neutral
+                    },
+                ));
+
+            // ---- 卡片动作行 ----
+            let order_id = provider.provider_id.clone();
+            let mut actions = div().flex().items_center().gap(px(ui::S1));
+            if let Some(base_url) = provider.base_url.clone() {
+                let pid = provider.provider_id.clone();
+                let pname = provider.provider_name.clone();
+                actions = actions.child(
+                    ui::button_ghost(
+                        SharedString::from(format!("provider-url-{}", pid)),
+                        i18n::t("地址"),
                     )
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("provider-down-{}", order_id)),
-                            "↓",
-                        )
-                        .on_click(cx.listener({
-                            let id = order_id.clone();
-                            move |this, _event, _window, cx| {
-                                if let Err(message) = data::move_provider(&id, 1) {
-                                    this.toast(message, cx);
-                                }
-                                cx.notify();
-                            }
-                        })),
-                    );
-                if editable {
-                    let provider_id = provider.provider_id.clone();
-                    let provider_name = provider.provider_name.clone();
-                    row = row.child(
-                        settings_button(
-                            SharedString::from(format!(
-                                "provider-key-{}",
-                                provider.provider_id
-                            )),
-                            i18n::t("改密钥"),
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.pending_provider_key_dialog =
-                                Some((provider_id.clone(), provider_name.clone()));
-                            cx.notify();
-                        })),
-                    );
-                }
-                if let Some(base_url) = provider.base_url.clone() {
-                    let provider_id = provider.provider_id.clone();
-                    let provider_name = provider.provider_name.clone();
-                    row = row.child(
-                        settings_button(
-                            SharedString::from(format!(
-                                "provider-url-{}",
-                                provider.provider_id
-                            )),
-                            i18n::t("地址"),
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.pending_provider_url_dialog = Some((
-                                provider_id.clone(),
-                                provider_name.clone(),
-                                base_url.clone(),
-                            ));
-                            cx.notify();
-                        })),
-                    );
-                }
-                let delete_id = provider.provider_id.clone();
-                let delete_name = provider.provider_name.clone();
-                row = row.child(
-                    settings_button(
-                        SharedString::from(format!("provider-del-{}", delete_id)),
-                        i18n::t("删除"),
-                    )
-                    .on_click(cx.listener(move |this, _event, window, cx| {
-                        this.open_delete_provider_dialog(
-                            delete_id.clone(),
-                            delete_name.clone(),
-                            window,
-                            cx,
-                        );
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.pending_provider_url_dialog =
+                            Some((pid.clone(), pname.clone(), base_url.clone()));
+                        cx.notify();
                     })),
                 );
-                let mut provider_rows = vec![row.into_any_element()];
-                let model_rows = data::provider_model_rows(&provider.provider_id);
-                for model in model_rows {
-                    let provider_id = provider.provider_id.clone();
-                    let model_id = model.model_id.clone();
-                    let enabled = model.enabled;
-                    let mut model_row = settings_row(
-                        format!("　· {}", model.model_id),
-                        Some(if enabled { i18n::t("已启用") } else { i18n::t("已停用") }.to_string()),
+            }
+            if editable {
+                let pid = provider.provider_id.clone();
+                let pname = provider.provider_name.clone();
+                actions = actions.child(
+                    ui::button_ghost(
+                        SharedString::from(format!("provider-key-{}", pid)),
+                        i18n::t("改密钥"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.pending_provider_key_dialog = Some((pid.clone(), pname.clone()));
+                        cx.notify();
+                    })),
+                );
+            }
+            let up_id = order_id.clone();
+            actions = actions.child(
+                ui::button_ghost(
+                    SharedString::from(format!("provider-up-{}", up_id)),
+                    "↑",
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    if let Err(message) = data::move_provider(&up_id, -1) {
+                        this.toast(message, cx);
+                    }
+                    cx.notify();
+                })),
+            );
+            let down_id = order_id.clone();
+            actions = actions.child(
+                ui::button_ghost(
+                    SharedString::from(format!("provider-down-{}", down_id)),
+                    "↓",
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    if let Err(message) = data::move_provider(&down_id, 1) {
+                        this.toast(message, cx);
+                    }
+                    cx.notify();
+                })),
+            );
+            let delete_id = provider.provider_id.clone();
+            let delete_name = provider.provider_name.clone();
+            actions = actions.child(
+                ui::button_ghost(
+                    SharedString::from(format!("provider-del-{}", delete_id)),
+                    i18n::t("删除"),
+                )
+                .on_click(cx.listener(move |this, _event, window, cx| {
+                    this.open_delete_provider_dialog(
+                        delete_id.clone(),
+                        delete_name.clone(),
+                        window,
+                        cx,
                     );
-                    model_row = model_row
-                        .child(
-                            settings_button(
-                                SharedString::from(format!(
-                                    "model-toggle-{}-{}",
-                                    provider_id, model_id
-                                )),
+                })),
+            );
+
+            // ---- 卡内模型列表 ----
+            let model_rows = data::provider_model_rows(&provider.provider_id);
+            let mut inner: Vec<gpui::AnyElement> = Vec::new();
+            for model in model_rows {
+                let pid = provider.provider_id.clone();
+                let mid = model.model_id.clone();
+                let enabled = model.enabled;
+                inner.push(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(ui::S2))
+                        .py(px(ui::S1))
+                        .child(ui::body_muted(model.model_id.clone()).truncate())
+                        .child(div().flex_1())
+                        .child(ui::badge(
+                            if enabled {
+                                i18n::t("已启用")
+                            } else {
+                                i18n::t("已停用")
+                            },
+                            if enabled {
+                                ui::Tone::Accent
+                            } else {
+                                ui::Tone::Neutral
+                            },
+                        ))
+                        .child({
+                            let pid = pid.clone();
+                            let mid = mid.clone();
+                            ui::button_ghost(
+                                SharedString::from(format!("model-toggle-{pid}-{mid}")),
                                 if enabled { i18n::t("停用") } else { i18n::t("启用") },
                             )
-                            .on_click(cx.listener({
-                                let provider_id = provider_id.clone();
-                                let model_id = model_id.clone();
-                                move |this, _event, _window, cx| {
-                                    if let Err(message) = data::set_model_enabled(
-                                        &provider_id,
-                                        &model_id,
-                                        !enabled,
-                                    ) {
-                                        this.toast(message, cx);
-                                    }
-                                    cx.notify();
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Err(message) =
+                                    data::set_model_enabled(&pid, &mid, !enabled)
+                                {
+                                    this.toast(message, cx);
                                 }
-                            })),
-                        )
-                        .child(
-                            settings_button(
-                                SharedString::from(format!(
-                                    "model-up-{}-{}",
-                                    provider_id, model_id
-                                )),
+                                cx.notify();
+                            }))
+                        })
+                        .child({
+                            let pid = pid.clone();
+                            let mid = mid.clone();
+                            ui::button_ghost(
+                                SharedString::from(format!("model-up-{pid}-{mid}")),
                                 "↑",
                             )
-                            .on_click(cx.listener({
-                                let provider_id = provider_id.clone();
-                                let model_id = model_id.clone();
-                                move |this, _event, _window, cx| {
-                                    if let Err(message) =
-                                        data::move_model(&provider_id, &model_id, -1)
-                                    {
-                                        this.toast(message, cx);
-                                    }
-                                    cx.notify();
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Err(message) = data::move_model(&pid, &mid, -1) {
+                                    this.toast(message, cx);
                                 }
-                            })),
-                        )
-                        .child(
-                            settings_button(
-                                SharedString::from(format!(
-                                    "model-down-{}-{}",
-                                    provider_id, model_id
-                                )),
+                                cx.notify();
+                            }))
+                        })
+                        .child({
+                            let pid = pid.clone();
+                            let mid = mid.clone();
+                            ui::button_ghost(
+                                SharedString::from(format!("model-down-{pid}-{mid}")),
                                 "↓",
                             )
-                            .on_click(cx.listener({
-                                let provider_id = provider_id.clone();
-                                let model_id = model_id.clone();
-                                move |this, _event, _window, cx| {
-                                    if let Err(message) =
-                                        data::move_model(&provider_id, &model_id, 1)
-                                    {
-                                        this.toast(message, cx);
-                                    }
-                                    cx.notify();
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Err(message) = data::move_model(&pid, &mid, 1) {
+                                    this.toast(message, cx);
                                 }
-                            })),
-                        );
-                    provider_rows.push(model_row.into_any_element());
-                }
-                body = body.child(settings_group(provider_rows));
+                                cx.notify();
+                            }))
+                        })
+                        .into_any_element(),
+                );
             }
+
+            let mut card = div()
+                .w_full()
+                .rounded(px(ui::R_CARD))
+                .border_1()
+                .border_color(ui::describe_edge())
+                .bg(ui::card_bg())
+                .p(px(ui::S3))
+                .flex()
+                .flex_col()
+                .gap(px(ui::S2))
+                .child(head)
+                .child(actions);
+            if !inner.is_empty() {
+                card = card.child(
+                    div()
+                        .w_full()
+                        .pt(px(ui::S1))
+                        .border_t_1()
+                        .border_color(ui::edge())
+                        .flex()
+                        .flex_col()
+                        .children(inner),
+                );
+            }
+            cards.push(card.into_any_element());
         }
-        body.into_any_element()
+        body.child(div().w_full().flex().flex_col().gap(px(ui::S2)).children(cards))
+            .into_any_element()
     }
 
-    /// 插件市场：内嵌引擎暂不提供插件宿主（MCP 桥接另立）。
+    /// 插件：卡片式。三张卡（插件宿主 / 浏览器 / 电脑操控）。
     fn settings_page_plugins(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        settings_page_body("插件")
-            .child(settings_section(i18n::t("插件")))
-            .child(settings_empty(i18n::t(
-                "暂未接入插件宿主；MCP 连接器见「连接器」。",
+        use crate::ui_kit as ui;
+
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
+
+        // 插件宿主（当前未接入）
+        cards.push(
+            ui::icon_card(
+                icons::icon(icons::Icon::Plug, 18., ui::ink_secondary()),
+                i18n::t("插件宿主"),
+                Some(i18n::t(
+                    "暂未接入插件宿主；MCP 连接器见「连接器」。",
+                ).to_string().into()),
+                Some(ui::badge(i18n::t("未接入"), ui::Tone::Neutral).into_any_element()),
+            )
+            .into_any_element(),
+        );
+
+        // 浏览器 / 电脑操控：现有子页已经组件化，套上卡片头
+        cards.push(
+            ui::icon_card(
+                icons::icon(icons::Icon::Search, 18., ui::ink_secondary()),
+                i18n::t("浏览器"),
+                Some(i18n::t("Agent 插件工具可驱动浏览器；workspace 开关见下").to_string().into()),
+                None,
+            )
+            .child(div().w_full().pt(px(ui::S1)).child(self.settings_page_browser(cx)))
+            .into_any_element(),
+        );
+        cards.push(
+            ui::icon_card(
+                icons::icon(icons::Icon::Monitor, 18., ui::ink_secondary()),
+                i18n::t("电脑操控"),
+                Some(i18n::t("computer-use 插件的 workspace 开关").to_string().into()),
+                None,
+            )
+            .child(div().w_full().pt(px(ui::S1)).child(self.settings_page_computer(cx)))
+            .into_any_element(),
+        );
+
+        ui::page()
+            .child(ui::section(tri!(
+                "插件 · {}", "Plugins · {}", cards.len()
             )))
-            .child(settings_section(i18n::t("浏览器")))
-            .child(self.settings_page_browser(cx))
-            .child(settings_section(i18n::t("电脑操控")))
-            .child(self.settings_page_computer(cx))
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(ui::S2))
+                    .children(cards),
+            )
             .into_any_element()
     }
 
@@ -10622,8 +10700,10 @@ impl PilotApp {
         cx.notify();
     }
 
-    /// 智能体：探测本机 CLI 引擎，并给当前 Bot 选择引擎（Mode Agent 或本地 ACP）。
+    /// 智能体：卡片式。每个引擎一张卡（官方标 + 名称 + 检测状态 + 选用）。
     fn settings_page_local_agents(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use crate::ui_kit as ui;
+
         let agents = data::local_agents();
         let bot = self.selected_bot().cloned();
         let bot_index = self.bot_index();
@@ -10642,142 +10722,117 @@ impl PilotApp {
                 .map(|agent| agent.name.to_string())
                 .unwrap_or_else(|| current.clone())
         };
-        let mut body = settings_page_body("智能体");
+
+        let mut body = ui::page();
         if let Some(bot) = &bot {
-            body = body
-                .child(settings_section(i18n::t("当前 Bot")))
-                .child(settings_group(vec![
-                    kv_row(bot.name.clone(), "Bot").into_any_element(),
-                    kv_row(current_label.clone(), i18n::t("当前引擎")).into_any_element(),
-                ]));
+            body = body.child(ui::section(i18n::t("当前 Bot"))).child(ui::card(vec![
+                ui::stat_row(bot.name.clone(), "Bot").into_any_element(),
+                ui::stat_row(current_label.clone(), i18n::t("当前引擎")).into_any_element(),
+            ]));
         } else {
-            body = body.child(settings_empty(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
+            body = body.child(ui::empty(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
         }
-        body = body.child(settings_section_action(
-            i18n::t("已检测到的 Agent"),
-            settings_action_button("agents-refresh", i18n::t("刷新")).on_click(
-                cx.listener(|this, _event, _window, cx| {
+
+        body = body.child(ui::section_action(
+            tri!("已检测到的 Agent · {}", "Detected agents · {}", agents.len()),
+            ui::button("agents-refresh", i18n::t("刷新")).on_click(cx.listener(
+                |this, _event, _window, cx| {
                     cx.notify();
                     let _ = this;
-                }),
-            ),
+                },
+            )),
         ));
-        let mut engine_rows: Vec<gpui::AnyElement> = Vec::new();
+
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
         for agent in agents {
-            let is_current = current == agent.command
-                || (current == "mode" && agent.wired);
-            let status = if agent.wired {
-                i18n::t("内置")
-            } else if agent.path.is_some() {
-                i18n::t("可选用")
-            } else {
-                i18n::t("未安装")
-            };
-            let wechat = wecom_theme::active();
-            let color = if is_current {
-                if wechat {
-                    wecom_theme::send_enabled()
-                } else {
-                    theme::accent()
-                }
-            } else if agent.wired {
-                theme::success()
-            } else if agent.path.is_some() {
-                if wechat {
-                    wecom_theme::panel_text()
-                } else {
-                    theme::ink_secondary()
-                }
-            } else if wechat {
-                wecom_theme::time_label()
-            } else {
-                theme::ink_tertiary()
-            };
-            let detail = if agent.wired {
-                tri!("进程内 · 随应用分发（无 Node）", "in-process · bundled (no Node)")
-            } else {
-                format!(
-                    "{} · {}",
-                    agent.id,
-                    agent
-                        .path
-                        .clone()
-                        .unwrap_or_else(|| tri!("PATH 上没找到 {}", "{} was not found on PATH", agent.command))
-                )
-            };
-            let row = settings_row_with_leading(
-                agent_icon(agent.id),
-                agent.name.to_string(),
-                Some(detail),
-            )
-            .child(
-                div()
-                    .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
-                    } else {
-                        theme::FONT_FAMILY
-                    })
-                    .text_size(px(if wechat { 12. } else { 11. }))
-                    .line_height(px(if wechat { 18. } else { 16. }))
-                    .text_color(color)
-                    .child(if is_current { i18n::t("当前") } else { status }),
-            );
-            // 只有已接入适配层的引擎可选用：Mode（内置）、pi-acp / deepseek-acp /
-            // zcode-acp-server / hermes（均为 ACP）。其余只展示检测结果，
-            // 否则选了会静默回落到 Mode（resolve_engine 认不出命令）。
+            let is_current = current == agent.command || (current == "mode" && agent.wired);
+            let installed = agent.path.is_some();
             let adapter = agent.wired
                 || matches!(
                     agent.command,
                     "pi-acp" | "deepseek-acp" | "zcode-acp-server" | "hermes"
                 );
-            let selectable = bot_id_opt.is_some() && adapter && agent.path.is_some() && !is_current;
-            engine_rows.push(if selectable {
-                let bot_id = bot_id_opt.clone().unwrap_or_default();
-                let engine_id = agent.command.to_string();
-                row.child(
-                    settings_button(
-                        SharedString::from(format!("engine-pick-{}", agent.command)),
-                        i18n::t("选用"),
-                    )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        if this.sessions.set_engine(&bot_id, &engine_id) {
-                            this.sessions.save();
-                        }
-                        let key = bot_key(&bot_id);
-                        this.backend.reset_session(&key);
-                        this.chats.remove(&key);
-                        this.ensure_bot(bot_index);
-                        this.toast(tri!("已切换到 {engine_id}", "Switched to {engine_id}"), cx);
-                        cx.notify();
-                    })),
-                )
-            } else if bot_id_opt.is_some() && agent.wired && !is_current {
-                let bot_id = bot_id_opt.clone().unwrap_or_default();
-                row.child(
-                    settings_button(
-                        SharedString::from(format!("engine-pick-{}", agent.command)),
-                        i18n::t("选用"),
-                    )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        if this.sessions.set_engine(&bot_id, "mode") {
-                            this.sessions.save();
-                        }
-                        let key = bot_key(&bot_id);
-                        this.backend.reset_session(&key);
-                        this.chats.remove(&key);
-                        this.ensure_bot(bot_index);
-                        this.toast(i18n::t("已切换到内置引擎"), cx);
-                        cx.notify();
-                    })),
-                )
+            let selectable = bot_id_opt.is_some() && adapter && installed && !is_current;
+
+            let detail = if agent.wired {
+                tri!("进程内 · 随应用分发（无 Node）", "in-process · bundled (no Node)").to_string()
             } else {
-                row
-            }.into_any_element());
+                format!(
+                    "{} · {}",
+                    agent.id,
+                    agent.path.clone().unwrap_or_else(|| tri!(
+                        "PATH 上没找到 {}", "{} was not found on PATH", agent.command
+                    ))
+                )
+            };
+
+            let tone = if is_current {
+                ui::Tone::Accent
+            } else if agent.wired {
+                ui::Tone::Success
+            } else if installed {
+                ui::Tone::Neutral
+            } else {
+                ui::Tone::Danger
+            };
+            let status_text = if is_current {
+                i18n::t("当前")
+            } else if agent.wired {
+                i18n::t("内置")
+            } else if installed {
+                i18n::t("可选用")
+            } else {
+                i18n::t("未安装")
+            };
+
+            let mut card = ui::icon_card(
+                agent_icon(agent.id),
+                agent.name.to_string(),
+                Some(detail.into()),
+                Some(ui::badge(status_text, tone).into_any_element()),
+            );
+
+            if selectable {
+                let bot_id = bot_id_opt.clone().unwrap_or_default();
+                let engine_id = if agent.wired {
+                    "mode".to_string()
+                } else {
+                    agent.command.to_string()
+                };
+                card = card.child(
+                    div().flex().child(
+                        ui::button(
+                            SharedString::from(format!("engine-pick-{}", agent.command)),
+                            i18n::t("选用"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if this.sessions.set_engine(&bot_id, &engine_id) {
+                                this.sessions.save();
+                            }
+                            let key = bot_key(&bot_id);
+                            this.backend.reset_session(&key);
+                            this.chats.remove(&key);
+                            this.ensure_bot(bot_index);
+                            this.toast(
+                                tri!("已切换到 {engine_id}", "Switched to {engine_id}"),
+                                cx,
+                            );
+                            cx.notify();
+                        })),
+                    ),
+                );
+            }
+            cards.push(card.into_any_element());
         }
-        if !engine_rows.is_empty() {
-            body = body.child(settings_group(engine_rows));
-        }
-        body.into_any_element()
+        body.child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(ui::S2))
+                .children(cards),
+        )
+        .into_any_element()
     }
 
     fn settings_page_bots(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -12984,7 +13039,10 @@ impl PilotApp {
         self.usage_totals_view.as_ref().expect("just loaded")
     }
 
+    /// 用量：对齐 DS 的看板排版——顶部四张数字卡，中间 7 天堆叠柱，底部会话明细。
     fn settings_page_usage(&mut self) -> gpui::AnyElement {
+        use crate::ui_kit as ui;
+
         let chat = self.active_key().and_then(|key| self.chats.get(&key));
         let session = chat
             .and_then(|chat| chat.session_id.clone())
@@ -12996,217 +13054,141 @@ impl PilotApp {
         let totals = *self.get_or_load_usage_totals();
         let summary = totals.or(usage);
         let daily = crate::rpi_engine::usage_daily(7);
-        let wechat = wecom_theme::active();
-        let card_bg = if wechat {
-            wecom_theme::panel_bg()
-        } else {
-            theme::card()
+
+        let token = |value: Option<i64>| {
+            value
+                .map(session_db::format_tokens)
+                .unwrap_or_else(|| "—".to_string())
         };
-        let card_edge = if wechat {
-            wecom_theme::panel_divider()
-        } else {
-            theme::edge()
-        };
-        let muted = if wechat {
-            wecom_theme::list_preview()
-        } else {
-            theme::ink_secondary()
-        };
-        let title_color = if wechat {
-            wecom_theme::chat_title()
-        } else {
-            theme::ink()
-        };
-        let tile = |value: String, label: &'static str| -> gpui::AnyElement {
+
+        let mut body = ui::page();
+
+        // ---- 概览：四张统计卡 ----
+        body = body.child(ui::section(i18n::t("概览"))).child(
             div()
-                .flex_1()
-                .min_w(px(0.))
-                .rounded(px(12.))
-                .border_1()
-                .border_color(card_edge)
-                .bg(card_bg)
-                .p(px(12.))
+                .w_full()
                 .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .font_family(theme::FONT_FAMILY)
-                        .text_size(px(22.))
-                        .line_height(px(28.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(title_color)
-                        .child(value),
-                )
-                .child(
-                    div()
-                        .font_family(theme::FONT_FAMILY)
-                        .text_size(px(11.))
-                        .line_height(px(16.))
-                        .text_color(muted)
-                        .child(i18n::t(label)),
-                )
-                .into_any_element()
-        };
-        let mut body = settings_page_body("用量");
-        let tiles = div()
-            .flex()
-            .gap(px(8.))
-            .child(tile(
-                summary
-                    .map(|usage| usage.turns.to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-                "回合",
-            ))
-            .child(tile(
-                summary
-                    .map(|usage| session_db::format_tokens(usage.total_tokens))
-                    .unwrap_or_else(|| "—".to_string()),
-                "总 tokens",
-            ))
-            .child(tile(
-                summary
-                    .map(|usage| session_db::format_tokens(usage.input_tokens))
-                    .unwrap_or_else(|| "—".to_string()),
-                "输入",
-            ))
-            .child(tile(
-                summary
-                    .map(|usage| session_db::format_tokens(usage.output_tokens))
-                    .unwrap_or_else(|| "—".to_string()),
-                "输出",
-            ));
-        body = body
-            .child(settings_section(i18n::t("概览")))
-            .child(tiles);
-        // 最近 7 天堆叠柱：输出 / 输入 / 缓存命中。
-        let max = daily
-            .iter()
-            .map(|(_, input, output, cache)| input + output + cache)
-            .max()
-            .unwrap_or(0)
-            .max(1);
-        let accent = if wechat {
-            wecom_theme::send_enabled()
-        } else {
-            theme::accent()
-        };
-        let cache_color = Rgba {
-            r: accent.r,
-            g: accent.g,
-            b: accent.b,
-            a: 0.18,
-        };
-        let mut columns = div().flex().items_end().gap(px(8.)).h(px(132.));
-        for (day, input, output, cache) in &daily {
-            let total = input + output + cache;
-            let bar_h = (total as f32 / max as f32 * 108.).max(if total > 0 { 2. } else { 0. });
-            let part = |value: i64, color: Rgba| {
-                let height = if total > 0 {
-                    bar_h * value as f32 / total as f32
-                } else {
-                    0.
-                };
-                div().w_full().h(px(height)).bg(color)
-            };
-            columns = columns.child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(108.))
-                            .flex()
-                            .flex_col()
-                            .justify_end()
-                            .overflow_hidden()
-                            .rounded(px(3.))
-                            .child(part(*cache, cache_color))
-                            .child(part(*input, theme::success()))
-                            .child(part(*output, accent)),
-                    )
-                    .child(
-                        div()
-                            .font_family(theme::FONT_FAMILY)
-                            .text_size(px(10.))
-                            .line_height(px(14.))
-                            .text_color(muted)
-                            .child(SharedString::from(
-                                day.get(5..).unwrap_or(day.as_str()).to_string(),
-                            )),
-                    ),
-            );
-        }
-        let legend_dot = |color: Rgba, label: &'static str| -> gpui::AnyElement {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .child(div().size(px(8.)).rounded_full().bg(color))
-                .child(
-                    div()
-                        .font_family(theme::FONT_FAMILY)
-                        .text_size(px(11.))
-                        .line_height(px(16.))
-                        .text_color(muted)
-                        .child(i18n::t(label)),
-                )
-                .into_any_element()
-        };
-        body = body.child(settings_section(i18n::t("最近 7 天")));
+                .gap(px(ui::S2))
+                .child(ui::stat_card(
+                    summary
+                        .map(|usage| usage.turns.to_string())
+                        .unwrap_or_else(|| "—".to_string()),
+                    i18n::t("回合"),
+                ))
+                .child(ui::stat_card(
+                    token(summary.map(|usage| usage.total_tokens)),
+                    i18n::t("总 tokens"),
+                ))
+                .child(ui::stat_card(
+                    token(summary.map(|usage| usage.input_tokens)),
+                    i18n::t("输入"),
+                ))
+                .child(ui::stat_card(
+                    token(summary.map(|usage| usage.output_tokens)),
+                    i18n::t("输出"),
+                )),
+        );
+
+        // ---- 最近 7 天堆叠柱 ----
+        body = body.child(ui::section(i18n::t("最近 7 天")));
         if daily
             .iter()
             .all(|(_, input, output, cache)| input + output + cache == 0)
         {
-            body = body.child(settings_empty(i18n::t("最近 7 天还没有用量。")));
+            body = body.child(ui::empty(i18n::t("最近 7 天还没有用量。")));
         } else {
-            body = body.child(
+            let max = daily
+                .iter()
+                .map(|(_, input, output, cache)| input + output + cache)
+                .max()
+                .unwrap_or(0)
+                .max(1);
+            let accent = ui::accent();
+            let cache_color = Rgba {
+                r: accent.r,
+                g: accent.g,
+                b: accent.b,
+                a: 0.18,
+            };
+            let mut columns = div().flex().items_end().gap(px(ui::S2)).h(px(132.));
+            for (day, input, output, cache) in &daily {
+                let total = input + output + cache;
+                let bar_h =
+                    (total as f32 / max as f32 * 108.).max(if total > 0 { 2. } else { 0. });
+                let part = |value: i64, color: Rgba| {
+                    let height = if total > 0 {
+                        bar_h * value as f32 / total as f32
+                    } else {
+                        0.
+                    };
+                    div().w_full().h(px(height)).bg(color)
+                };
+                columns = columns.child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(ui::S1))
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(108.))
+                                .flex()
+                                .flex_col()
+                                .justify_end()
+                                .overflow_hidden()
+                                .rounded(px(theme::RADIUS_TAG))
+                                .child(part(*cache, cache_color))
+                                .child(part(*input, theme::success()))
+                                .child(part(*output, accent)),
+                        )
+                        .child(ui::label(
+                            day.get(5..).unwrap_or(day.as_str()).to_string(),
+                        )),
+                );
+            }
+            let legend_dot = |color: Rgba, text: &'static str| -> gpui::AnyElement {
                 div()
-                    .w_full()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(card_edge)
-                    .bg(card_bg)
-                    .p(px(12.))
                     .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(columns)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(14.))
-                            .child(legend_dot(accent, "输出"))
-                            .child(legend_dot(theme::success(), "输入"))
-                            .child(legend_dot(cache_color, "缓存命中")),
-                    ),
-            );
+                    .items_center()
+                    .gap(px(ui::S1))
+                    .child(div().size(px(8.)).rounded_full().bg(color))
+                    .child(ui::label(text))
+                    .into_any_element()
+            };
+            body = body.child(ui::card(vec![
+                columns.into_any_element(),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(ui::S4))
+                    .child(legend_dot(accent, i18n::t("输出")))
+                    .child(legend_dot(theme::success(), i18n::t("输入")))
+                    .child(legend_dot(cache_color, i18n::t("缓存命中")))
+                    .into_any_element(),
+            ]));
         }
+
+        // ---- 当前会话明细 ----
         body = body
-            .child(settings_section(i18n::t("当前会话")))
-            .child(settings_group(vec![
-                kv_row(session, i18n::t("会话")).into_any_element(),
-                kv_row(
+            .child(ui::section(i18n::t("当前会话")))
+            .child(ui::card(vec![
+                ui::stat_row(session, i18n::t("会话")).into_any_element(),
+                ui::stat_row(
                     usage
                         .map(|usage| usage.turns.to_string())
                         .unwrap_or_else(|| "—".to_string()),
                     i18n::t("回合"),
                 )
                 .into_any_element(),
-                kv_row(
-                    usage
-                        .map(|usage| session_db::format_tokens(usage.total_tokens))
-                        .unwrap_or_else(|| "—".to_string()),
+                ui::stat_row(
+                    token(usage.map(|usage| usage.total_tokens)),
                     i18n::t("总 tokens"),
                 )
                 .into_any_element(),
-                kv_row(
+                ui::stat_row(
                     usage
                         .map(|usage| {
                             format!(
@@ -13219,7 +13201,7 @@ impl PilotApp {
                     i18n::t("输入 / 输出"),
                 )
                 .into_any_element(),
-                kv_row(
+                ui::stat_row(
                     usage
                         .and_then(|usage| usage.last_ttft_ms)
                         .map(|ms| format!("{ms} ms"))
@@ -13227,7 +13209,7 @@ impl PilotApp {
                     i18n::t("最近首 token"),
                 )
                 .into_any_element(),
-                kv_row(todo_count.to_string(), i18n::t("待办条数")).into_any_element(),
+                ui::stat_row(todo_count.to_string(), i18n::t("待办条数")).into_any_element(),
             ]));
         body.into_any_element()
     }
@@ -21298,30 +21280,13 @@ fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
 
 /// 设置页骨架：页标题 + 纵向间距（调用方继续 `.child` 内容）。
 fn settings_page_body(_title: &'static str) -> gpui::Div {
-    // 页标题由设置壳统一渲染（原版 SettingsModal 的 h2），页面只排内容。
-    // 外边距四向统一 10；区块间距（标题到卡片、卡片到下一标题）也统一 10。
-    div().w_full().flex().flex_col().gap(px(14.))
+    // 统一到 ui_kit：页标题由设置壳渲染，页面只排内容（间距 S4）。
+    crate::ui_kit::page()
 }
 
 /// 设置页分区标题（13/18 · 600）。
 fn settings_section(title: impl Into<SharedString>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
-    div()
-        .w_full()
-        .font_family(if wechat {
-            wecom_theme::FONT_FAMILY
-        } else {
-            theme::FONT_FAMILY
-        })
-        .text_size(px(13.))
-        .line_height(px(18.))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(if wechat {
-            wecom_theme::chat_title()
-        } else {
-            theme::ink()
-        })
-        .child(title.into())
+    crate::ui_kit::section(title)
 }
 
 /// 分区标题 + 右侧动作（对齐 DS `.bt-set-section` + 头部 soft 按钮）。
@@ -21399,14 +21364,7 @@ fn settings_action_button(
 
 /// 设置页空态：DS 的空态是卡片里一行 hint，不是裸文字。
 fn settings_empty(text: impl Into<SharedString>) -> impl IntoElement {
-    settings_group(vec![
-        div()
-            .w_full()
-            .px(px(12.))
-            .py(px(10.))
-            .child(settings_note(text))
-            .into_any_element(),
-    ])
+    crate::ui_kit::empty(text)
 }
 
 /// 连接器卡片里的文字动作（获取密钥/测试）：DS 卡片只保留轻量文字按钮。
@@ -21565,21 +21523,7 @@ fn connector_chip(
 
 /// 设置页说明文字（12/16 次级色）。
 fn settings_note(text: impl Into<SharedString>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
-    div()
-        .font_family(if wechat {
-            wecom_theme::FONT_FAMILY
-        } else {
-            theme::FONT_FAMILY
-        })
-        .text_size(px(12.))
-        .line_height(px(16.))
-        .text_color(if wechat {
-            wecom_theme::list_preview()
-        } else {
-            theme::ink_secondary()
-        })
-        .child(text.into())
+    crate::ui_kit::note(text)
 }
 
 /// 浏览器/电脑控制「使用范围」：总开关 + 每个 Bot 一行。
@@ -21665,18 +21609,7 @@ fn settings_tool_scope_section(
 
 /// 设置页错误说明（12/16 危险色；写路径失败不弹死框）。
 fn settings_error(text: impl Into<SharedString>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
-    div()
-        .w_full()
-        .font_family(if wechat {
-            wecom_theme::FONT_FAMILY
-        } else {
-            theme::FONT_FAMILY
-        })
-        .text_size(px(12.))
-        .line_height(px(16.))
-        .text_color(theme::danger())
-        .child(text.into())
+    crate::ui_kit::error(text)
 }
 
 /// 工作目录尾名（定时任务找不到归属 Bot 时的展示名）。
@@ -21927,15 +21860,6 @@ fn provider_initial_tile(name: &str, size: f32) -> gpui::AnyElement {
                 .child(initial),
         )
         .into_any_element()
-}
-
-/// 带前置图标的列表行（智能体引擎等）。
-fn settings_row_with_leading(
-    leading: impl IntoElement,
-    title: String,
-    detail: Option<String>,
-) -> gpui::Div {
-    settings_row_inner(Some(leading.into_any_element()), title, detail)
 }
 
 fn settings_row_inner(
