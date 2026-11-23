@@ -21252,34 +21252,13 @@ const SETTINGS_PAGES: [&str; 18] = [
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
 /// 智能体引擎图标：内置用应用图标，其余用品牌/语义徽章。
 fn agent_icon(id: &str) -> gpui::AnyElement {
-    fn badge(bg: gpui::Rgba, data: &'static [u8]) -> gpui::AnyElement {
-        div()
-            .size(px(26.))
-            .flex_shrink_0()
-            .rounded(px(7.))
-            .bg(bg)
-            .border_1()
-            .border_color(gpui::hsla(0., 0., 1., 0.12))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                gpui::svg()
-                    .data(data)
-                    .size(px(17.))
-                    .text_color(gpui::rgb(0xffffff)),
-            )
-            .into_any_element()
-    }
     match id {
         "mode" => avatar::app_icon(26., 6.),
-        "pi" | "pi-acp" => agent_icons::pi(26.),
-        "deepseek" => badge(
-            gpui::rgb(0x5786fe),
-            include_bytes!("../assets/icons/agents/deepseek.svg"),
-        ),
-        "hermes" => agent_icons::hermes(26.),
-        "zcode" => agent_icons::zcode(26.),
+        // 官方最新矢量标（Pi / Hermes / DeepSeek / ZCode），单色按品牌色染
+        "pi" | "pi-acp" | "deepseek" | "hermes" | "zcode" | "zcode-acp-server" => {
+            agent_icons::agent(id, 26., agent_icons::agent_color(id))
+                .unwrap_or_else(|| avatar::app_icon(26., 6.))
+        }
         _ => div()
             .size(px(26.))
             .flex_shrink_0()
@@ -21498,18 +21477,14 @@ fn connector_icon(id: &str, category: &str) -> gpui::AnyElement {
         .flex()
         .items_center()
         .justify_center();
-    // 多色品牌 logo：走位图管线保原色（GPUI 的 svg() 是 alpha 蒙版 + 单色叠加，
-    // 多色 SVG 会被压成一块纯色）。没有多色资产的（IM 平台）回落到单色分支。
+    // 连接器统一单色 currentColor，按品牌色染（近黑标在深色主题下回退到前景色，
+    // 见 brand_icons::color）。
     if let Some(key) = brand_icons::connector_key(id)
-        && let Some(logo) = brand_icons::connector_color(key, 16.)
+        && let (Some(data), Some(color)) = (brand_icons::asset(key), brand_icons::color(key))
     {
-        // GitHub / Linear 这类近黑标在深色底上几乎不可见，换成浅色底板
-        let container = if brand_icons::needs_light_plate(key) {
-            container.bg(theme::avatar_light_plate())
-        } else {
-            container
-        };
-        return container.child(logo).into_any_element();
+        return container
+            .child(gpui::svg().data(data).size(px(16.)).text_color(color))
+            .into_any_element();
     }
     if let Some(data) = brand_icons::asset(id)
         && let Some(color) = brand_icons::color(id)

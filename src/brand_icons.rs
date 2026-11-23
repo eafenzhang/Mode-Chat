@@ -1,10 +1,14 @@
 //! 第三方品牌图标（连接器 / IM 平台 / 模型厂商）。
 //!
-//! 连接器来自 Iconify `logos`（CC0），保留各家原生多色；模型厂商来自
-//! LobeHub（MIT），用 `-color` 变体。两者都由 `scripts/gen-icons-lobe.py` 生成。
+//! 三条线各自的风格约定：
 //!
-//! **染色方式**：多色 SVG 不能按 `currentColor` 染色，所以这里走 `img(Image::from_bytes(Svg))`
-//! 走位图管线，颜色保持原样。IM 平台（微信/企业微信）仍是单色 currentColor 资产。
+//! - **连接器**：统一单色 `currentColor`（simple-icons / mdi，playwright 从 logos 压平），
+//!   与侧栏图标同一套观感；颜色由 [`color`] 按品牌色染，深色主题下过暗的标回退到前景色。
+//! - **IM 频道**：手机端官方 logo（TDesign 的单色标），同样按品牌色染。
+//! - **模型厂商**：LobeHub 的 `-color` 变体，保留官方多色，走 `img()` 位图管线。
+//!
+//! **为什么分两种渲染**：GPUI 的 `svg()` 是 alpha 蒙版 + 单色叠加，多色 SVG 会被压平；
+//! 需要保色的资产只能走 `img(Image::from_bytes(ImageFormat::Svg))`。
 
 use std::sync::{Arc, OnceLock};
 
@@ -33,19 +37,10 @@ pub fn connector_key(id: &str) -> Option<&'static str> {
     }
 }
 
-/// 单色资产（IM 平台；按 `currentColor` 染色）。
+/// 单色资产（连接器 + IM 平台；按 `currentColor` 染色，风格统一）。
 pub fn asset(key: &str) -> Option<&'static [u8]> {
     Some(match key {
-        "wechat" => include_bytes!("../assets/icons/brands/wechat.svg"),
-        "wecom" => include_bytes!("../assets/icons/brands/wecom.svg"),
-        _ => return None,
-    })
-}
-
-/// 多色资产（连接器品牌；原样渲染，不能染色）。
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn color_asset(key: &str) -> Option<&'static [u8]> {
-    Some(match key {
+        // ---- 连接器 ----
         "github" => include_bytes!("../assets/icons/brands/github.svg"),
         "gitlab" => include_bytes!("../assets/icons/brands/gitlab.svg"),
         "notion" => include_bytes!("../assets/icons/brands/notion.svg"),
@@ -59,6 +54,9 @@ pub fn color_asset(key: &str) -> Option<&'static [u8]> {
         "redis" => include_bytes!("../assets/icons/brands/redis.svg"),
         "elasticsearch" => include_bytes!("../assets/icons/brands/elasticsearch.svg"),
         "brave" => include_bytes!("../assets/icons/brands/brave.svg"),
+        // ---- IM 平台 ----
+        "wechat" => include_bytes!("../assets/icons/brands/wechat.svg"),
+        "wecom" => include_bytes!("../assets/icons/brands/wecom.svg"),
         _ => return None,
     })
 }
@@ -110,6 +108,7 @@ pub fn provider_logo(provider_id: &str) -> Option<&'static [u8]> {
     })
 }
 
+/// 品牌主色（`#rrggbb`）。
 fn brand_hex(key: &str) -> Option<u32> {
     Some(match key {
         "github" => 0x181717,
@@ -138,7 +137,8 @@ pub fn raw_color(key: &str) -> Option<Rgba> {
 
 /// 前景用品牌色；暗色主题下亮度太低的品牌改用主题前景色。
 ///
-/// 只对单色资产（`asset`）有意义；多色 logo 走 `color_asset`，不经过这里。
+/// 单色连接器统一走这里——纯单色方案下这是唯一能兜住近黑标（GitHub / Linear /
+/// Notion）的手段，多色资产做不到。
 pub fn color(key: &str) -> Option<Rgba> {
     let hex = brand_hex(key)?;
     let r = ((hex >> 16) & 0xff) as f32 / 255.0;
@@ -152,7 +152,7 @@ pub fn color(key: &str) -> Option<Rgba> {
     }
 }
 
-// ---- 多色 SVG 渲染 ----------------------------------------------------------
+// ---- 多色 SVG 渲染（只用于模型厂商 logo）------------------------------------
 //
 // GPUI 的 `svg()` 走 alpha 蒙版 + 单色叠加，多色 SVG 会变成一块纯色。
 // 多色资产必须走 `img()` 的位图管线（内部用 resvg 渲染，保留原色）。
@@ -187,76 +187,13 @@ pub fn color_svg(image: &'static SvgImage, size: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// 深色品牌标在深色主题下背景要换成浅色板，否则几乎看不见。
-///
-/// 判据是品牌主色亮度：GitHub `#161614`、Linear `#222326` 这类近黑标的，
-/// 单色时代靠「回退到前景色」兜住，多色资产做不到——只能换底板。
-pub fn needs_light_plate(key: &str) -> bool {
-    let Some(hex) = brand_hex(key) else {
-        return false;
-    };
-    let r = ((hex >> 16) & 0xff) as f32 / 255.0;
-    let g = ((hex >> 8) & 0xff) as f32 / 255.0;
-    let b = (hex & 0xff) as f32 / 255.0;
-    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    !theme::is_light() && luminance < 0.28
-}
-
-/// 连接器品牌，多色渲染。没有多色资产的 key 返回 None。
-pub fn connector_color(key: &str, size: f32) -> Option<AnyElement> {
-    let image = connector_image(key)?;
-    Some(color_svg(image, size))
-}
-
-fn connector_image(key: &str) -> Option<&'static SvgImage> {
-    Some(match key {
-        "github" => &GITHUB,
-        "gitlab" => &GITLAB,
-        "notion" => &NOTION,
-        "slack" => &SLACK,
-        "postgres" => &POSTGRES,
-        "kubernetes" => &KUBERNETES,
-        "cloudflare" => &CLOUDFLARE,
-        "linear" => &LINEAR,
-        "figma" => &FIGMA,
-        "playwright" => &PLAYWRIGHT,
-        "redis" => &REDIS,
-        "elasticsearch" => &ELASTICSEARCH,
-        "brave" => &BRAVE,
-        _ => return None,
-    })
-}
-
-static GITHUB: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/github.svg"));
-static GITLAB: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/gitlab.svg"));
-static NOTION: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/notion.svg"));
-static SLACK: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/slack.svg"));
-static POSTGRES: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/postgres.svg"));
-static KUBERNETES: SvgImage =
-    SvgImage::new(include_bytes!("../assets/icons/brands/kubernetes.svg"));
-static CLOUDFLARE: SvgImage =
-    SvgImage::new(include_bytes!("../assets/icons/brands/cloudflare.svg"));
-static LINEAR: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/linear.svg"));
-static FIGMA: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/figma.svg"));
-static PLAYWRIGHT: SvgImage =
-    SvgImage::new(include_bytes!("../assets/icons/brands/playwright.svg"));
-static REDIS: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/redis.svg"));
-static ELASTICSEARCH: SvgImage =
-    SvgImage::new(include_bytes!("../assets/icons/brands/elasticsearch.svg"));
-static BRAVE: SvgImage = SvgImage::new(include_bytes!("../assets/icons/brands/brave.svg"));
-
 /// 模型厂商 logo，多色渲染。没有官方 logo 时返回 None。
 pub fn provider_color(provider_id: &str, size: f32) -> Option<AnyElement> {
     let bytes = provider_logo(provider_id)?;
-    let image = provider_image(bytes)?;
-    Some(color_svg(image, size))
-}
-
-fn provider_image(bytes: &'static [u8]) -> Option<&'static SvgImage> {
-    PROVIDER_IMAGES
+    let image = PROVIDER_IMAGES
         .iter()
-        .find(|image| std::ptr::eq(image.bytes, bytes))
-        .copied()
+        .find(|image| std::ptr::eq(image.bytes, bytes))?;
+    Some(color_svg(image, size))
 }
 
 /// 与 `provider_logo()` 的 match 臂一一对应的静态表，用于拿到稳定的
@@ -343,28 +280,46 @@ static P_TENCENT: SvgImage = SvgImage::new(include_bytes!("../assets/icons/provi
 mod tests {
     use super::*;
 
+    const CONNECTORS: [&str; 13] = [
+        "github",
+        "gitlab",
+        "notion",
+        "slack",
+        "postgres",
+        "kubernetes",
+        "cloudflare",
+        "linear",
+        "figma",
+        "playwright",
+        "redis",
+        "elasticsearch",
+        "brave",
+    ];
+
     #[test]
-    fn every_connector_key_has_a_color_asset() {
-        for id in [
-            "github",
-            "gitlab",
-            "notion",
-            "slack",
-            "postgres",
-            "kubernetes",
-            "cloudflare",
-            "linear",
-            "figma",
-            "playwright",
-            "redis",
-            "elasticsearch",
-            "brave-search",
-        ] {
-            let key = connector_key(id).expect("连接器应有 key");
-            let bytes = color_asset(key).expect("连接器应有多色资产");
+    fn every_connector_is_monochrome() {
+        // 统一风格的硬约束：连接器资产必须只含 currentColor，
+        // 否则同一条列表里会出现「有的单色、有的彩色」。
+        for key in CONNECTORS {
+            let bytes = asset(key).unwrap_or_else(|| panic!("{key} 缺资产"));
             let text = std::str::from_utf8(bytes).unwrap();
             assert!(text.starts_with("<svg"), "{key} 不是 svg");
+            assert!(text.contains("currentColor"), "{key} 不是单色");
+            assert!(
+                !text.contains("fill=\"#"),
+                "{key} 含硬编码颜色，会破坏统一风格"
+            );
+        }
+    }
+
+    #[test]
+    fn im_channels_have_brand_glyphs() {
+        for key in ["wechat", "wecom"] {
+            let bytes = asset(key).unwrap_or_else(|| panic!("{key} 缺 IM 图标"));
+            let text = std::str::from_utf8(bytes).unwrap();
+            assert!(text.contains("currentColor"), "{key} 不是单色");
             assert!(text.contains("viewBox"), "{key} 缺 viewBox");
+            assert!(raw_color(key).is_some(), "{key} 缺品牌色");
         }
     }
 
@@ -392,6 +347,5 @@ mod tests {
     #[test]
     fn unknown_provider_has_no_logo() {
         assert!(provider_logo("tokendance").is_none());
-        assert!(provider_image(b"not-a-real-svg").is_none());
     }
 }

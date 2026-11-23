@@ -10,6 +10,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 
 ARG = argparse.ArgumentParser()
@@ -107,21 +108,41 @@ MENU = {
 # 线框字重：regular 用作默认，light 用作「细线」场景（替代原来的 stroke-width 微调）
 LINE_WEIGHTS = ["", "-light"]
 
-# ---- 连接器品牌：Iconify logos ----------------------------------------------
+# ---- 连接器品牌 -------------------------------------------------------------
+# 统一成单色 currentColor（跟侧栏图标同一套风格），颜色由调用方按品牌色染。
+# 数据源优先 simple-icons（本身就是单色 24×24），个别没有的从 logos 压平。
+# (图标集, 图标名, 是否强制压成单色)
 CONNECTORS = {
-    "github": "github-icon",
-    "gitlab": "gitlab-icon",
-    "notion": "notion-icon",
-    "slack": "slack-icon",
-    "postgres": "postgresql",
-    "kubernetes": "kubernetes",
-    "cloudflare": "cloudflare-icon",
-    "linear": "linear-icon",
-    "figma": "figma",
-    "playwright": "playwright",
-    "redis": "redis",
-    "elasticsearch": "elasticsearch",
-    "brave": "brave",
+    "github": ("simple", "github", False),
+    "gitlab": ("simple", "gitlab", False),
+    "notion": ("simple", "notion", False),
+    # simple-icons 只有 slackware，Slack 取 mdi（单色 24×24）
+    "slack": ("mdi", "slack", False),
+    "postgres": ("simple", "postgresql", False),
+    "kubernetes": ("simple", "kubernetes", False),
+    "cloudflare": ("simple", "cloudflare", False),
+    "linear": ("simple", "linear", False),
+    "figma": ("simple", "figma", False),
+    # playwright 只有 logos/devicon 的多色版，强制压平
+    "playwright": ("logos", "playwright", True),
+    "redis": ("simple", "redis", False),
+    "elasticsearch": ("simple", "elasticsearch", False),
+    "brave": ("simple", "brave", False),
+}
+
+# ---- IM 频道：手机端官方 logo（TDesign 的单色标，按品牌色染）--------------------
+IM = {
+    "wechat": ("tdesign", "logo-wechat"),
+    "wecom": ("tdesign", "logo-wecom"),
+}
+
+# ---- 智能体引擎：官方最新标（LobeHub 单色矢量）----------------------------------
+AGENTS = {
+    "pi": ("lobe-src", "pi"),
+    "hermes": ("lobe-src", "hermesagent"),
+    "deepseek": ("lobe-src", "deepseek"),
+    # ZCode = 智谱 Z.ai 的编码产品，用 Z.ai 官方标
+    "zcode": ("lobe-src", "zai"),
 }
 
 # ---- 模型厂商：LobeHub ------------------------------------------------------
@@ -200,6 +221,7 @@ def main():
     ph_dir = os.path.join(ASSETS, "phosphor")
     br_dir = os.path.join(ASSETS, "brands")
     pv_dir = os.path.join(ASSETS, "providers")
+    agent_dir = os.path.join(ASSETS, "agents")
 
     # 清掉旧产物
     for d in (ph_dir, pv_dir):
@@ -232,12 +254,68 @@ def main():
                 else:
                     fail.append(("ph", name + w))
 
-    for key, name in CONNECTORS.items():
-        entry = logos.get(name)
-        if not entry:
-            fail.append(("logos", name))
+    # 单色源：simple-icons 按文件名、mdi/tdesign 走包内 icons.json
+    simple_dir = os.path.join(ARGS.icon_sets, "x-simple", "package", "icons")
+    mdi, mdi_w, mdi_h = load_set("mdi")
+    tdesign, td_w, td_h = load_set("tdesign")
+
+    def take(setname, name, force_mono):
+        """返回 (svg 文本, 失败原因)"""
+        if setname == "simple":
+            path = os.path.join(simple_dir, name + ".svg")
+            if not os.path.exists(path):
+                return None, f"simple-icons 缺 {name}"
+            text = open(path, encoding="utf-8").read()
+            # simple-icons 没有 fill 属性，靠父级 fill 继承；显式补 currentColor
+            if "fill=" not in text:
+                text = text.replace("<svg ", '<svg fill="currentColor" ', 1)
+            return text, None
+        if setname == "logos":
+            entry = logos.get(name)
+            if not entry:
+                return None, f"logos 缺 {name}"
+            text = iconify_svg(entry, logo_w, logo_h)
+            if not force_mono:
+                return text, None
+            mono = re.sub(r'fill="#[0-9a-fA-F]{3,8}"', 'fill="currentColor"', text)
+            mono = re.sub(r'fill="url\([^)]*\)"', 'fill="currentColor"', mono)
+            return mono, None
+        if setname == "mdi":
+            entry = mdi.get(name)
+            if not entry:
+                return None, f"mdi 缺 {name}"
+            return iconify_svg(entry, mdi_w, mdi_h), None
+        if setname == "tdesign":
+            entry = tdesign.get(name)
+            if not entry:
+                return None, f"tdesign 缺 {name}"
+            return iconify_svg(entry, td_w, td_h), None
+        return None, f"未知图标集 {setname}"
+
+    for key, (setname, name, force_mono) in CONNECTORS.items():
+        text, err = take(setname, name, force_mono)
+        if err:
+            fail.append((setname, err))
             continue
-        write(os.path.join(br_dir, key + ".svg"), iconify_svg(entry, logo_w, logo_h))
+        write(os.path.join(br_dir, key + ".svg"), text)
+        ok += 1
+
+    for key, (setname, name) in IM.items():
+        text, err = take(setname, name, False)
+        if err:
+            fail.append((setname, err))
+            continue
+        write(os.path.join(br_dir, key + ".svg"), text)
+        ok += 1
+
+    # 智能体：LobeHub 单色矢量（覆盖原先手拆三层 + PNG 位图的临时方案）
+    for key, (_src, name) in AGENTS.items():
+        src = os.path.join(ARGS.lobe, name + ".svg")
+        if not os.path.exists(src):
+            fail.append(("lobe-src", name))
+            continue
+        write(os.path.join(agent_dir, key + ".svg"),
+              open(src, encoding="utf-8").read())
         ok += 1
 
     for pid, name in PROVIDERS.items():

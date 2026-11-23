@@ -1,8 +1,11 @@
 MIT License
 Copyright (c) LobeHub
 
-The model-provider logos in assets/icons/providers/ come from LobeHub Icons
-(@lobehub/icons-static-svg), released under the MIT license.
+以下图标来自 LobeHub Icons（@lobehub/icons-static-svg），MIT 许可：
+
+- assets/icons/providers/  — 模型厂商彩色 logo（走多色位图管线）
+- assets/icons/agents/     — 本地智能体引擎的官方矢量标
+  （pi / hermesagent / deepseek / zai）
 
 Source: https://github.com/lobehub/lobe-icons
 License: https://github.com/lobehub/lobe-icons/blob/master/LICENSE
@@ -10,5 +13,3 @@ License: https://github.com/lobehub/lobe-icons/blob/master/LICENSE
 Note: model and provider names/logos are trademarks of their respective
 owners. This project uses them only to identify the corresponding services
 in its UI.
-
-用途：assets/icons/providers/ 下的模型厂商 logo。
