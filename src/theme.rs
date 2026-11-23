@@ -299,6 +299,16 @@ pub fn subtle_hover() -> Rgba {
     ink_alpha(0.10)
 }
 
+/// 近黑品牌标的浅色底板：深色主题下给 GitHub / Linear 这类 logo 垫底，
+/// 否则它们和 `#262626` 图标槽几乎同色（对比度 < 1.2:1）。
+pub fn avatar_light_plate() -> Rgba {
+    if is_light() {
+        rgba(0xec, 0xec, 0xec, 255)
+    } else {
+        rgba(0xf0, 0xf0, 0xf0, 255)
+    }
+}
+
 /// 占位文字（原版 `ink 36%`）。
 pub fn ink_placeholder() -> Rgba {
     ink_alpha(0.36)

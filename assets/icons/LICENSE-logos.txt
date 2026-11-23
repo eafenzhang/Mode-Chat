@@ -1,0 +1,13 @@
+CC0 1.0 Universal (Public Domain Dedication)
+
+The brand logos in assets/icons/brands/ come from the Iconify `logos` set
+(https://github.com/gilbarbara/logos), released under CC0 1.0.
+
+Source: https://github.com/gilbarbara/logos
+License: https://creativecommons.org/publicdomain/zero/1.0/
+
+Note: brand names and logos are trademarks of their respective owners.
+This project uses them only to identify the corresponding third-party
+products in its UI.
+
+用途：assets/icons/brands/ 下的连接器品牌图标（原色多色渲染）。

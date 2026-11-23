@@ -1,7 +1,10 @@
-//! 侧栏与设置菜单图标（自绘 24 网格，线性/面性成对）。
+//! 侧栏与设置菜单图标（Phosphor，regular / fill 成对）。
 //!
-//! 线性用于未选中，面性用于选中；侧栏 24px、设置菜单 16px 两种尺寸。
-//! 资产在 `assets/icons/menu/`，与全局 lucide 图标互不影响。
+//! 线性用于未选中，实心用于选中；侧栏 24px、设置菜单 18px 两种尺寸。
+//! 资产在 `assets/icons/phosphor/`（与全局 `icons::Icon` 共用同一套）。
+//!
+//! 旧版是手绘 24 网格 path（`assets/icons/menu/`），换 Phosphor 后线条与填色
+//! 来自同族几何，选中态不会再“跳形”。
 
 use gpui::{Hsla, IntoElement, Rgba, Styled, px, svg};
 
@@ -35,81 +38,164 @@ pub enum MenuIcon {
     More,
 }
 
+/// 每个菜单项一对 Phosphor 图标名：(线框, 实心)。
+///
+/// 成对是硬约束——取不到的实心会退回线框，选中态就没有视觉反馈了，
+/// 所以这里只挑 Phosphor 确实同时提供 regular 与 fill 的图标。
+const PAIRS: [(MenuIcon, &str, &str); 21] = [
+    // 「消息」沿用对话气泡+点（反馈原先的图标），「反馈」改成扩音器，两者不再撞脸
+    (MenuIcon::Chat, "chat-dots", "chat-dots-fill"),
+    (MenuIcon::Contacts, "users", "users-fill"),
+    (MenuIcon::Channels, "hash", "hash-fill"),
+    (MenuIcon::Gear, "gear", "gear-fill"),
+    (MenuIcon::Sliders, "faders", "faders-fill"),
+    (MenuIcon::Models, "stack", "stack-fill"),
+    (MenuIcon::Plugins, "puzzle-piece", "puzzle-piece-fill"),
+    (MenuIcon::Agents, "robot", "robot-fill"),
+    (MenuIcon::Bot, "robot", "robot-fill"),
+    (MenuIcon::Memory, "brain", "brain-fill"),
+    (MenuIcon::Im, "device-mobile", "device-mobile-fill"),
+    (MenuIcon::Connectors, "plugs-connected", "plugs-connected-fill"),
+    (MenuIcon::Schedules, "calendar-blank", "calendar-blank-fill"),
+    (MenuIcon::Keys, "key", "key-fill"),
+    (MenuIcon::Abilities, "lightning", "lightning-fill"),
+    (MenuIcon::Usage, "chart-line", "chart-line-fill"),
+    (MenuIcon::About, "info", "info-fill"),
+    (MenuIcon::Feedback, "megaphone", "megaphone-fill"),
+    (MenuIcon::Browser, "globe", "globe-fill"),
+    (MenuIcon::Computer, "desktop", "desktop-fill"),
+    (MenuIcon::More, "dots-three-vertical", "dots-three-vertical-fill"),
+];
+
 impl MenuIcon {
-    fn svg(self, solid: bool) -> &'static [u8] {
-        match (self, solid) {
-            (MenuIcon::Chat, false) => include_bytes!("../assets/icons/menu/chat.svg"),
-            (MenuIcon::Chat, true) => include_bytes!("../assets/icons/menu/chat-solid.svg"),
-            (MenuIcon::Contacts, false) => include_bytes!("../assets/icons/menu/contacts.svg"),
-            (MenuIcon::Contacts, true) => include_bytes!("../assets/icons/menu/contacts-solid.svg"),
-            (MenuIcon::Channels, false) => include_bytes!("../assets/icons/menu/channels.svg"),
-            (MenuIcon::Channels, true) => include_bytes!("../assets/icons/menu/channels-solid.svg"),
-            (MenuIcon::Gear, false) => include_bytes!("../assets/icons/menu/gear.svg"),
-            (MenuIcon::Gear, true) => include_bytes!("../assets/icons/menu/gear-solid.svg"),
-            (MenuIcon::Sliders, false) => include_bytes!("../assets/icons/menu/sliders.svg"),
-            (MenuIcon::Sliders, true) => include_bytes!("../assets/icons/menu/sliders-solid.svg"),
-            (MenuIcon::Models, false) => include_bytes!("../assets/icons/menu/models.svg"),
-            (MenuIcon::Models, true) => include_bytes!("../assets/icons/menu/models-solid.svg"),
-            (MenuIcon::Plugins, false) => include_bytes!("../assets/icons/menu/plugins.svg"),
-            (MenuIcon::Plugins, true) => include_bytes!("../assets/icons/menu/plugins-solid.svg"),
-            (MenuIcon::Agents, false) => include_bytes!("../assets/icons/menu/agents.svg"),
-            (MenuIcon::Agents, true) => include_bytes!("../assets/icons/menu/agents-solid.svg"),
-            (MenuIcon::Bot, false) => include_bytes!("../assets/icons/menu/bot.svg"),
-            (MenuIcon::Bot, true) => include_bytes!("../assets/icons/menu/bot-solid.svg"),
-            (MenuIcon::Memory, false) => include_bytes!("../assets/icons/menu/memory.svg"),
-            (MenuIcon::Memory, true) => include_bytes!("../assets/icons/menu/memory-solid.svg"),
-            (MenuIcon::Im, false) => include_bytes!("../assets/icons/menu/im.svg"),
-            (MenuIcon::Im, true) => include_bytes!("../assets/icons/menu/im-solid.svg"),
-            (MenuIcon::Connectors, false) => include_bytes!("../assets/icons/menu/connectors.svg"),
-            (MenuIcon::Connectors, true) => include_bytes!("../assets/icons/menu/connectors-solid.svg"),
-            (MenuIcon::Schedules, false) => include_bytes!("../assets/icons/menu/schedules.svg"),
-            (MenuIcon::Schedules, true) => include_bytes!("../assets/icons/menu/schedules-solid.svg"),
-            (MenuIcon::Keys, false) => include_bytes!("../assets/icons/menu/keys.svg"),
-            (MenuIcon::Keys, true) => include_bytes!("../assets/icons/menu/keys-solid.svg"),
-            (MenuIcon::Abilities, false) => include_bytes!("../assets/icons/menu/abilities.svg"),
-            (MenuIcon::Abilities, true) => include_bytes!("../assets/icons/menu/abilities-solid.svg"),
-            (MenuIcon::Usage, false) => include_bytes!("../assets/icons/menu/usage.svg"),
-            (MenuIcon::Usage, true) => include_bytes!("../assets/icons/menu/usage-solid.svg"),
-            (MenuIcon::About, false) => include_bytes!("../assets/icons/menu/about.svg"),
-            (MenuIcon::About, true) => include_bytes!("../assets/icons/menu/about-solid.svg"),
-            (MenuIcon::Feedback, false) => include_bytes!("../assets/icons/menu/feedback.svg"),
-            (MenuIcon::Feedback, true) => include_bytes!("../assets/icons/menu/feedback-solid.svg"),
-            (MenuIcon::Browser, false) => include_bytes!("../assets/icons/menu/browser.svg"),
-            (MenuIcon::Browser, true) => include_bytes!("../assets/icons/menu/browser-solid.svg"),
-            (MenuIcon::Computer, false) => include_bytes!("../assets/icons/menu/computer.svg"),
-            (MenuIcon::Computer, true) => include_bytes!("../assets/icons/menu/computer-solid.svg"),
-            (MenuIcon::More, false) => include_bytes!("../assets/icons/menu/more.svg"),
-            (MenuIcon::More, true) => include_bytes!("../assets/icons/menu/more-solid.svg"),
+    /// (线框文件名, 实心文件名)，不含 `.svg`。
+    fn names(self) -> (&'static str, &'static str) {
+        PAIRS
+            .iter()
+            .find(|(kind, _, _)| *kind == self)
+            .map(|(_, line, solid)| (*line, *solid))
+            .expect("PAIRS 覆盖了全部 MenuIcon")
+    }
+
+    fn line_svg(self) -> &'static [u8] {
+        match self.names().0 {
+            "chat-dots" => include_bytes!("../assets/icons/phosphor/chat-dots.svg"),
+            "users" => include_bytes!("../assets/icons/phosphor/users.svg"),
+            "hash" => include_bytes!("../assets/icons/phosphor/hash.svg"),
+            "gear" => include_bytes!("../assets/icons/phosphor/gear.svg"),
+            "faders" => include_bytes!("../assets/icons/phosphor/faders.svg"),
+            "stack" => include_bytes!("../assets/icons/phosphor/stack.svg"),
+            "puzzle-piece" => include_bytes!("../assets/icons/phosphor/puzzle-piece.svg"),
+            "robot" => include_bytes!("../assets/icons/phosphor/robot.svg"),
+            "brain" => include_bytes!("../assets/icons/phosphor/brain.svg"),
+            "device-mobile" => include_bytes!("../assets/icons/phosphor/device-mobile.svg"),
+            "plugs-connected" => include_bytes!("../assets/icons/phosphor/plugs-connected.svg"),
+            "calendar-blank" => include_bytes!("../assets/icons/phosphor/calendar-blank.svg"),
+            "key" => include_bytes!("../assets/icons/phosphor/key.svg"),
+            "lightning" => include_bytes!("../assets/icons/phosphor/lightning.svg"),
+            "chart-line" => include_bytes!("../assets/icons/phosphor/chart-line.svg"),
+            "info" => include_bytes!("../assets/icons/phosphor/info.svg"),
+            "megaphone" => include_bytes!("../assets/icons/phosphor/megaphone.svg"),
+            "globe" => include_bytes!("../assets/icons/phosphor/globe.svg"),
+            "desktop" => include_bytes!("../assets/icons/phosphor/desktop.svg"),
+            "dots-three-vertical" => {
+                include_bytes!("../assets/icons/phosphor/dots-three-vertical.svg")
+            }
+            other => panic!("未知的线框图标：{other}"),
+        }
+    }
+
+    fn fill_svg(self) -> &'static [u8] {
+        match self.names().1 {
+            "chat-dots-fill" => include_bytes!("../assets/icons/phosphor/chat-dots-fill.svg"),
+            "users-fill" => include_bytes!("../assets/icons/phosphor/users-fill.svg"),
+            "hash-fill" => include_bytes!("../assets/icons/phosphor/hash-fill.svg"),
+            "gear-fill" => include_bytes!("../assets/icons/phosphor/gear-fill.svg"),
+            "faders-fill" => include_bytes!("../assets/icons/phosphor/faders-fill.svg"),
+            "stack-fill" => include_bytes!("../assets/icons/phosphor/stack-fill.svg"),
+            "puzzle-piece-fill" => {
+                include_bytes!("../assets/icons/phosphor/puzzle-piece-fill.svg")
+            }
+            "robot-fill" => include_bytes!("../assets/icons/phosphor/robot-fill.svg"),
+            "brain-fill" => include_bytes!("../assets/icons/phosphor/brain-fill.svg"),
+            "device-mobile-fill" => {
+                include_bytes!("../assets/icons/phosphor/device-mobile-fill.svg")
+            }
+            "plugs-connected-fill" => {
+                include_bytes!("../assets/icons/phosphor/plugs-connected-fill.svg")
+            }
+            "calendar-blank-fill" => {
+                include_bytes!("../assets/icons/phosphor/calendar-blank-fill.svg")
+            }
+            "key-fill" => include_bytes!("../assets/icons/phosphor/key-fill.svg"),
+            "lightning-fill" => include_bytes!("../assets/icons/phosphor/lightning-fill.svg"),
+            "chart-line-fill" => include_bytes!("../assets/icons/phosphor/chart-line-fill.svg"),
+            "info-fill" => include_bytes!("../assets/icons/phosphor/info-fill.svg"),
+            "megaphone-fill" => include_bytes!("../assets/icons/phosphor/megaphone-fill.svg"),
+            "globe-fill" => include_bytes!("../assets/icons/phosphor/globe-fill.svg"),
+            "desktop-fill" => include_bytes!("../assets/icons/phosphor/desktop-fill.svg"),
+            "dots-three-vertical-fill" => {
+                include_bytes!("../assets/icons/phosphor/dots-three-vertical-fill.svg")
+            }
+            other => panic!("未知的实心图标：{other}"),
+        }
+    }
+
+    fn light_svg(self) -> &'static [u8] {
+        match self.names().0 {
+            "chat-dots" => include_bytes!("../assets/icons/phosphor/chat-dots-light.svg"),
+            "users" => include_bytes!("../assets/icons/phosphor/users-light.svg"),
+            "hash" => include_bytes!("../assets/icons/phosphor/hash-light.svg"),
+            "gear" => include_bytes!("../assets/icons/phosphor/gear-light.svg"),
+            "faders" => include_bytes!("../assets/icons/phosphor/faders-light.svg"),
+            "stack" => include_bytes!("../assets/icons/phosphor/stack-light.svg"),
+            "puzzle-piece" => include_bytes!("../assets/icons/phosphor/puzzle-piece-light.svg"),
+            "robot" => include_bytes!("../assets/icons/phosphor/robot-light.svg"),
+            "brain" => include_bytes!("../assets/icons/phosphor/brain-light.svg"),
+            "device-mobile" => include_bytes!("../assets/icons/phosphor/device-mobile-light.svg"),
+            "plugs-connected" => {
+                include_bytes!("../assets/icons/phosphor/plugs-connected-light.svg")
+            }
+            "calendar-blank" => include_bytes!("../assets/icons/phosphor/calendar-blank-light.svg"),
+            "key" => include_bytes!("../assets/icons/phosphor/key-light.svg"),
+            "lightning" => include_bytes!("../assets/icons/phosphor/lightning-light.svg"),
+            "chart-line" => include_bytes!("../assets/icons/phosphor/chart-line-light.svg"),
+            "info" => include_bytes!("../assets/icons/phosphor/info-light.svg"),
+            "megaphone" => include_bytes!("../assets/icons/phosphor/megaphone-light.svg"),
+            "globe" => include_bytes!("../assets/icons/phosphor/globe-light.svg"),
+            "desktop" => include_bytes!("../assets/icons/phosphor/desktop-light.svg"),
+            "dots-three-vertical" => {
+                include_bytes!("../assets/icons/phosphor/dots-three-vertical-light.svg")
+            }
+            other => panic!("未知的线框图标：{other}"),
         }
     }
 }
 
-/// 按状态渲染：`solid = true` 取面性图标，否则线性。
+/// 按状态渲染：`solid = true` 取实心，否则常规。
 pub fn menu_icon(kind: MenuIcon, solid: bool, size: f32, color: Rgba) -> impl IntoElement {
+    let data = if solid { kind.fill_svg() } else { kind.line_svg() };
     svg()
-        .data(kind.svg(solid))
+        .data(data)
         .size(px(size))
         .text_color(Hsla::from(color))
 }
 
-/// 线性图标可单独指定描边宽度（导轨比设置菜单更细）。
-pub fn menu_icon_with_stroke(
+/// 侧栏用：`light = true` 时取细线字重（比 regular 更轻，贴近旧手绘观感）。
+pub fn menu_icon_with_weight(
     kind: MenuIcon,
     solid: bool,
     size: f32,
     color: Rgba,
-    stroke: f32,
+    light: bool,
 ) -> gpui::AnyElement {
-    if solid {
-        return menu_icon(kind, true, size, color).into_any_element();
-    }
-    let data = String::from_utf8_lossy(kind.svg(false)).replace(
-        "stroke-width=\"1.6\"",
-        &format!("stroke-width=\"{stroke}\"")
-    );
-    let bytes = data.into_bytes();
+    let data = match (solid, light) {
+        (true, _) => kind.fill_svg(),
+        (false, true) => kind.light_svg(),
+        (false, false) => kind.line_svg(),
+    };
     svg()
-        .data(&bytes)
+        .data(data)
         .size(px(size))
         .text_color(Hsla::from(color))
         .into_any_element()
@@ -121,32 +207,33 @@ mod tests {
 
     #[test]
     fn every_variant_has_both_weights() {
-        let all = [
-            MenuIcon::Chat,
-            MenuIcon::Contacts,
-            MenuIcon::Channels,
-            MenuIcon::Gear,
-            MenuIcon::Sliders,
-            MenuIcon::Models,
-            MenuIcon::Plugins,
-            MenuIcon::Agents,
-            MenuIcon::Bot,
-            MenuIcon::Memory,
-            MenuIcon::Im,
-            MenuIcon::Connectors,
-            MenuIcon::Schedules,
-            MenuIcon::Keys,
-            MenuIcon::Abilities,
-            MenuIcon::Usage,
-            MenuIcon::About,
-            MenuIcon::Feedback,
-            MenuIcon::Browser,
-            MenuIcon::Computer,
-            MenuIcon::More,
-        ];
-        for icon in all {
-            assert!(!icon.svg(false).is_empty());
-            assert!(!icon.svg(true).is_empty());
+        for (kind, line, solid) in PAIRS {
+            let l = kind.line_svg();
+            let f = kind.fill_svg();
+            assert!(l.starts_with(b"<svg"), "{kind:?}({line}) 不是 svg");
+            assert!(f.starts_with(b"<svg"), "{kind:?}({solid}) 不是 svg");
+            assert_ne!(l, f, "{kind:?} 的实心与线框相同");
+            let text = std::str::from_utf8(l).unwrap();
+            assert!(text.contains("viewBox=\"0 0 256 256\""), "{kind:?} 缺 256 画布");
+        }
+    }
+
+    #[test]
+    fn feedback_is_not_a_chat_bubble() {
+        // 「反馈」必须和「消息」用不同图标，否则侧栏里两个气泡分不清
+        assert_ne!(MenuIcon::Feedback.names().0, MenuIcon::Chat.names().0);
+        assert_eq!(MenuIcon::Feedback.names().0, "megaphone");
+        assert_eq!(MenuIcon::Chat.names().0, "chat-dots");
+    }
+
+    #[test]
+    fn light_weight_differs_from_line() {
+        for (kind, name, _) in PAIRS {
+            assert_ne!(
+                kind.line_svg(),
+                kind.light_svg(),
+                "{kind:?}({name}) 的 light 与 regular 相同"
+            );
         }
     }
 }

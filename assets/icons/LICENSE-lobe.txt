@@ -1,0 +1,14 @@
+MIT License
+Copyright (c) LobeHub
+
+The model-provider logos in assets/icons/providers/ come from LobeHub Icons
+(@lobehub/icons-static-svg), released under the MIT license.
+
+Source: https://github.com/lobehub/lobe-icons
+License: https://github.com/lobehub/lobe-icons/blob/master/LICENSE
+
+Note: model and provider names/logos are trademarks of their respective
+owners. This project uses them only to identify the corresponding services
+in its UI.
+
+用途：assets/icons/providers/ 下的模型厂商 logo。

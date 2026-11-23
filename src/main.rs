@@ -10397,7 +10397,13 @@ impl PilotApp {
                 } else {
                     i18n::t("未设置 key")
                 };
-                let mut row = settings_row(
+                // 厂商 logo：有官方彩色标的走多色渲染，没有就回落首字母方块
+                let logo = brand_icons::provider_color(&provider.provider_id, 18.)
+                    .unwrap_or_else(|| {
+                        provider_initial_tile(&provider.provider_name, 18.)
+                    });
+                let mut row = settings_row_with_leading(
+                    logo,
                     format!("{} · {}", provider.provider_name, provider.provider_id),
                     Some(status.to_string()),
                 );
@@ -15661,7 +15667,20 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         for option in &options {
                             if option.provider_id != last_provider {
                                 last_provider = option.provider_id.clone();
-                                body = body.child(section_label(&option.provider_name));
+                                // 分组标题带厂商 logo（没有官方标的回落首字母方块）
+                                let logo = brand_icons::provider_color(&option.provider_id, 16.)
+                                    .unwrap_or_else(|| {
+                                        provider_initial_tile(&option.provider_name, 16.)
+                                    });
+                                body = body.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .pt(px(4.))
+                                        .child(logo)
+                                        .child(section_label(&option.provider_name)),
+                                );
                             }
                             let selected = current.as_ref().is_some_and(|model| {
                                 model.provider_id == option.provider_id
@@ -15863,7 +15882,20 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         for option in &options {
                             if option.provider_id != last_provider {
                                 last_provider = option.provider_id.clone();
-                                body = body.child(section_label(&option.provider_name));
+                                // 分组标题带厂商 logo（没有官方标的回落首字母方块）
+                                let logo = brand_icons::provider_color(&option.provider_id, 16.)
+                                    .unwrap_or_else(|| {
+                                        provider_initial_tile(&option.provider_name, 16.)
+                                    });
+                                body = body.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .pt(px(4.))
+                                        .child(logo)
+                                        .child(section_label(&option.provider_name)),
+                                );
                             }
                             let selected = current.as_ref().is_some_and(|model| {
                                 model.provider_id == option.provider_id
@@ -21466,8 +21498,21 @@ fn connector_icon(id: &str, category: &str) -> gpui::AnyElement {
         .flex()
         .items_center()
         .justify_center();
+    // 多色品牌 logo：走位图管线保原色（GPUI 的 svg() 是 alpha 蒙版 + 单色叠加，
+    // 多色 SVG 会被压成一块纯色）。没有多色资产的（IM 平台）回落到单色分支。
     if let Some(key) = brand_icons::connector_key(id)
-        && let (Some(data), Some(color)) = (brand_icons::asset(key), brand_icons::color(key))
+        && let Some(logo) = brand_icons::connector_color(key, 16.)
+    {
+        // GitHub / Linear 这类近黑标在深色底上几乎不可见，换成浅色底板
+        let container = if brand_icons::needs_light_plate(key) {
+            container.bg(theme::avatar_light_plate())
+        } else {
+            container
+        };
+        return container.child(logo).into_any_element();
+    }
+    if let Some(data) = brand_icons::asset(id)
+        && let Some(color) = brand_icons::color(id)
     {
         return container
             .child(gpui::svg().data(data).size(px(16.)).text_color(color))
@@ -21868,6 +21913,45 @@ fn value_box(value: String, label: Option<&'static str>) -> impl IntoElement {
 /// 设置页列表行：左标题 + 可选副标题，右侧放按钮（调用方 `.child`）。
 fn settings_row(title: String, detail: Option<String>) -> gpui::Div {
     settings_row_inner(None, title, detail)
+}
+
+/// 厂商首字母方块的底色：按色相取一个低饱和块，深浅主题各一档。
+fn provider_tile_bg(hue: f32) -> gpui::Rgba {
+    let (s, l) = if theme::is_light() {
+        (0.42, 0.90)
+    } else {
+        (0.36, 0.24)
+    };
+    let hsla = gpui::hsla(hue / 360.0, s, l, 1.);
+    hsla.into()
+}
+
+/// 没有官方 logo 的厂商：色块 + 首字母（与 IM 头像同一套观感）。
+fn provider_initial_tile(name: &str, size: f32) -> gpui::AnyElement {
+    let initial = name
+        .trim()
+        .chars()
+        .next()
+        .map(|ch| ch.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let hue = avatar::avatar_hue(name);
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded(px(size * 0.24))
+        .bg(provider_tile_bg(hue))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px((size * 0.48).max(9.)))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme::ink())
+                .child(initial),
+        )
+        .into_any_element()
 }
 
 /// 带前置图标的列表行（智能体引擎等）。
@@ -23463,16 +23547,11 @@ impl PilotApp {
                         this.toast(if this.topmost { i18n::t("窗口已置顶") } else { i18n::t("已取消置顶") }, cx);
                         cx.notify();
                     }))
-                    .child(icons::icon_with_stroke(
+                    .child(icons::icon_light(
                         icons::Icon::Pushpin,
                         16.,
-                        if topmost {
-                            wecom_theme::nav_text_active()
-                        } else {
-                            wecom_theme::icon()
-                        },
-                        0.9,
-                    )),
+                        if topmost { wecom_theme::nav_text_active() } else { wecom_theme::icon() },
+                        )),
             )
             .child(
                 div()
@@ -23526,13 +23605,18 @@ impl PilotApp {
         } else {
             base.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
         };
-        // 最小化/最大化的直线更密，单独细一档，和关闭图标观感一致。
-        let stroke = match glyph {
-            icons::Icon::Minus | icons::Icon::WindowMaximize | icons::Icon::WindowRestore => 0.9,
-            _ => 1.2,
+        // 最小化/最大化的直线更密，改用 light 字重，和关闭图标观感一致。
+        let light = matches!(
+            glyph,
+            icons::Icon::Minus | icons::Icon::WindowMaximize | icons::Icon::WindowRestore
+        );
+        let icon = if light {
+            icons::icon_light(glyph, 16., wecom_theme::icon()).into_any_element()
+        } else {
+            icons::icon(glyph, 16., wecom_theme::icon()).into_any_element()
         };
         base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
-            .child(icons::icon_with_stroke(glyph, 16., wecom_theme::icon(), stroke))
+            .child(icon)
     }
 
     /// 企业微信的彩色首字方块头像（10px 圆角）。
@@ -23730,7 +23814,7 @@ impl PilotApp {
                         this.ensure_wecom_selection(cx);
                         cx.notify();
                     }))
-                    .child(menu_icons::menu_icon_with_stroke(
+                    .child(menu_icons::menu_icon_with_weight(
                         icon,
                         active,
                         menu_icons::RAIL_SIZE,
@@ -23739,7 +23823,7 @@ impl PilotApp {
                         } else {
                             wecom_theme::nav_icon()
                         },
-                        1.3,
+                        true,
                     ))
                     .children((filter == WecomNav::All && total_unread > 0).then(|| {
                         div()
@@ -23783,7 +23867,7 @@ impl PilotApp {
                         this.open_settings_at(tab, _window, cx);
                         cx.notify();
                     }))
-                    .child(menu_icons::menu_icon_with_stroke(
+                    .child(menu_icons::menu_icon_with_weight(
                         settings_page_icon(tab),
                         active,
                         menu_icons::RAIL_SIZE,
@@ -23792,7 +23876,7 @@ impl PilotApp {
                         } else {
                             wecom_theme::nav_icon()
                         },
-                        1.3,
+                        true,
                     )),
             );
         }
@@ -23821,7 +23905,7 @@ impl PilotApp {
                     }
                     cx.notify();
                 }))
-                .child(menu_icons::menu_icon_with_stroke(
+                .child(menu_icons::menu_icon_with_weight(
                     menu_icons::MenuIcon::Gear,
                     self.settings_open,
                     menu_icons::RAIL_SIZE,
@@ -23830,7 +23914,7 @@ impl PilotApp {
                     } else {
                         wecom_theme::nav_icon()
                     },
-                    1.3,
+                    true,
                 )),
         )
     }
@@ -25446,12 +25530,11 @@ impl PilotApp {
                                 }
                                 cx.notify();
                             }))
-                            .child(icons::icon_with_stroke(
+                            .child(icons::icon_light(
                                 icons::Icon::Shield,
                                 18.,
                                 color,
-                                1.2,
-                            ))
+                                ))
                     }))
                     .children(can_interject.then(|| {
                         div()
@@ -25471,12 +25554,11 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.interject_current(window, cx);
                             }))
-                            .child(icons::icon_with_stroke(
+                            .child(icons::icon_light(
                                 icons::Icon::MessageSquare,
                                 14.,
                                 wecom_theme::icon(),
-                                1.2,
-                            ))
+                                ))
                             .child(
                                 div()
                                     .font_family(wecom_theme::FONT_FAMILY)
@@ -25506,7 +25588,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.stage_attachments(cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Folder, 18., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_light(icons::Icon::Folder, 18., wecom_theme::icon())),
                     )
                     .child(
                         div()
@@ -25521,7 +25603,7 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.start_screenshot_capture(cx);
                             }))
-                            .child(icons::icon_with_stroke(icons::Icon::Scissors, 18., wecom_theme::icon(), 1.2)),
+                            .child(icons::icon_light(icons::Icon::Scissors, 18., wecom_theme::icon())),
                     )
                     .child(
                         div()
@@ -25536,16 +25618,11 @@ impl PilotApp {
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.toggle_voice_typing(window, cx);
                             }))
-                            .child(icons::icon_with_stroke(
+                            .child(icons::icon_light(
                                 icons::Icon::Mic,
                                 18.,
-                                if self.voice_active {
-                                    ui_accent()
-                                } else {
-                                    wecom_theme::icon()
-                                },
-                                1.2,
-                            )),
+                                if self.voice_active { ui_accent() } else { wecom_theme::icon() },
+                                )),
                     )
                     .child(div().flex_1())
                     .child(
