@@ -581,41 +581,6 @@ struct SidebarSections {
     membership: HashMap<String, String>,
 }
 
-#[derive(Clone)]
-enum SectionDialogRequest {
-    New,
-    Rename(String),
-}
-
-struct SectionFormState {
-    editing_id: Option<String>,
-    input: Entity<SimpleInput>,
-    error: Option<String>,
-}
-
-impl Render for SectionFormState {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(settings_note(
-                i18n::t("分组只影响本机侧栏排列，不改团队数据；成员可在会话 ⋯ 菜单里移入/移出。"),
-            ))
-            .child(dialog_field("section-name", i18n::t("分组名称"), &self.input));
-        if let Some(error) = &self.error {
-            body = body.child(
-                div()
-                    .font_family(theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .text_color(theme::danger())
-                    .child(SharedString::from(error.clone())),
-            );
-        }
-        body
-    }
-}
-
 const SIDEBAR_SECTION_COLORS: [(&str, &str); 5] = [
     ("blue", "蓝"),
     ("orange", "橙"),
@@ -992,122 +957,6 @@ struct PaletteState {
 struct FindState {
     input: Entity<SimpleInput>,
     results: Vec<session_db::SearchHit>,
-}
-
-/// 「审批白名单」对话框状态（写回 approvalPolicy.allowlist）。
-struct AllowlistFormState {
-    bot_id: String,
-    entries: Vec<String>,
-    input: Entity<SimpleInput>,
-    error: Option<String>,
-}
-
-impl Render for AllowlistFormState {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div().flex().flex_col().gap(px(8.)).child(
-            div()
-                .font_family(theme::FONT_FAMILY)
-                .text_size(px(11.))
-                .line_height(px(16.))
-                .text_color(theme::ink_tertiary())
-                .child(i18n::t("白名单里的工具名在任意审批档位下都直接放行（Bash/MCP 不适用）。")),
-        );
-        if self.entries.is_empty() {
-            body = body.child(hint_row(i18n::t("还没有条目")));
-        } else {
-            for entry in self.entries.clone() {
-                let value = entry.clone();
-                body = body.child(
-                    div()
-                        .h(px(30.))
-                        .rounded(px(6.))
-                        .px(px(8.))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .font_family(theme::FONT_FAMILY)
-                                .text_size(px(12.))
-                                .text_color(theme::ink())
-                                .child(SharedString::from(entry)),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("allowlist-remove-{}", value)))
-                                .size(px(20.))
-                                .rounded(px(4.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .text_color(theme::danger())
-                                .hover(|style| style.bg(theme::hover()))
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
-                                    this.entries.retain(|item| item != &value);
-                                    cx.notify();
-                                }))
-                                .child(icons::icon(
-                                    icons::Icon::X,
-                                    12.,
-                                    theme::ink_secondary(),
-                                )),
-                        ),
-                );
-            }
-        }
-        body = body.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(div().flex_1().h(px(36.)).child(self.input.clone()))
-                .child(
-                    div()
-                        .id("allowlist-add-btn")
-                        .h(px(28.))
-                        .rounded(px(4.))
-                        .bg(theme::accent())
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .cursor_pointer()
-                        .hover(|style| style.opacity(0.9))
-                        .on_click(cx.listener(|this, _event, window, cx| {
-                            let value = this.input.read(cx).content().trim().to_string();
-                            if value.is_empty() {
-                                this.error = Some(i18n::t("请输入工具名").to_string());
-                            } else if this.entries.iter().any(|item| item == &value) {
-                                this.error = Some(i18n::t("条目已存在").to_string());
-                            } else {
-                                this.entries.push(value);
-                                this.error = None;
-                                let input = this.input.clone();
-                                input.update(cx, |input, cx| input.clear(window, cx));
-                            }
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .font_family(theme::FONT_FAMILY)
-                                .text_size(px(11.))
-                                .text_color(theme::accent_ink())
-                                .child(i18n::t("添加")),
-                        ),
-                ),
-        );
-        if let Some(error) = &self.error {
-            body = body.child(
-                div()
-                    .font_family(theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .text_color(theme::danger())
-                    .child(SharedString::from(error.clone())),
-            );
-        }
-        body
-    }
 }
 
 /// 「新建定时任务」表单（DS 的 + 新建任务）。
@@ -3035,9 +2884,7 @@ struct PilotApp {
     _connector_search_sub: gpui::Subscription,
     /// 群聊对话框打开后要不要把焦点交给名称输入框（只请求一次）。
     /// 模型选择对话框。
-    pending_model_dialog: Option<String>,
     /// 审批白名单编辑对话框。
-    pending_allowlist_dialog: Option<String>,
     /// 群目标编辑对话框（group id）。
     pending_group_goal_dialog: Option<String>,
     /// 群任务台账对话框（group id）。
@@ -3050,6 +2897,8 @@ struct PilotApp {
     settings_detail_input: Option<Entity<SimpleInput>>,
     /// 详情面板的错误提示。
     settings_detail_error: Option<String>,
+    /// 详情面板里的列表项（白名单这类可增删的集合）。
+    settings_detail_entries: Vec<String>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
     /// 每个群在当前用户回合里已发生的 Bot 交接次数（上限 4，防止互相 @ 无限循环）。
@@ -3151,7 +3000,6 @@ struct PilotApp {
     /// 微信侧栏分组（本机 UI 偏好，存 prefs.json）。
     sidebar_sections: SidebarSections,
     /// 新建/重命名分组对话框。
-    pending_section_dialog: Option<SectionDialogRequest>,
     tool_expanded: std::collections::HashSet<String>,
     /// 工具分组的展开态（键 = 组内首个 call_id）。
     tool_group_expanded: std::collections::HashSet<String>,
@@ -3528,14 +3376,13 @@ impl PilotApp {
             pending_group_dialog: None,
             automations_view: None,
             usage_totals_view: None,
-            pending_model_dialog: None,
-            pending_allowlist_dialog: None,
             pending_group_goal_dialog: None,
             pending_group_tasks_dialog: None,
             settings_detail: None,
             chat_detail: None,
             settings_detail_input: None,
             settings_detail_error: None,
+            settings_detail_entries: Vec::new(),
             question_free_active: None,
             question_free_input,
             group_task_turns: HashMap::new(),
@@ -3594,7 +3441,6 @@ impl PilotApp {
             runtime_status: HashMap::new(),
             mirror_reply_sessions: HashSet::new(),
             sidebar_sections: load_sidebar_sections(),
-            pending_section_dialog: None,
             tool_expanded: std::collections::HashSet::new(),
             tool_group_expanded: std::collections::HashSet::new(),
             wecom_last_row_fingerprint: 0,
@@ -7721,13 +7567,22 @@ impl PilotApp {
             }
             PaletteCmd::PickModel => {
                 if let Some(bot) = self.selected_bot() {
-                    self.pending_model_dialog = Some(bot.id.clone());
+                    self.settings_detail = Some(SettingsDetail::Model {
+                        bot_id: bot.id.clone(),
+                    });
+                    self.settings_detail_input = None;
+                    self.settings_open = true;
                 }
                 cx.notify();
             }
             PaletteCmd::EditAllowlist => {
                 if let Some(bot) = self.selected_bot() {
-                    self.pending_allowlist_dialog = Some(bot.id.clone());
+                    self.settings_detail = Some(SettingsDetail::Allowlist {
+                        bot_id: bot.id.clone(),
+                    });
+                    self.settings_detail_entries.clear();
+                    self.settings_detail_input = None;
+                    self.settings_open = true;
                 }
                 cx.notify();
             }
@@ -8882,10 +8737,17 @@ impl PilotApp {
         let viewport = window.viewport_size();
         let viewport_width = f32::from(viewport.width);
         let viewport_height = f32::from(viewport.height);
-        let card_width = (viewport_width - 48.).min(1100.);
+        // 详情面板是真正的第三列：面板打开时卡片同步加宽，
+        // 主内容随之重排，右侧按钮不会被盖住。
+        let panel_width = if self.settings_detail.is_some() {
+            ui_kit::PANEL_W
+        } else {
+            0.
+        };
+        let card_width = (viewport_width - 48.).min(1100. + panel_width);
         let card_height = (viewport_height - 64.).min(780.);
         let nav = self.settings_nav(cx);
-        let content_width = (card_width - NAV_WIDTH - 46.).max(280.);
+        let content_width = (card_width - NAV_WIDTH - 46. - panel_width).max(280.);
         let page = self.settings_page(content_width, cx);
         let card = div()
             .id("settings-card")
@@ -9263,10 +9125,7 @@ impl PilotApp {
 
         let detail = self.settings_detail.clone()?;
         // 会话专用的两种形态由 chat_detail_panel 渲染，这里不处理。
-        if matches!(
-            detail,
-            SettingsDetail::RunStatus { .. } | SettingsDetail::ChatFind { .. }
-        ) {
+        if matches!(detail, SettingsDetail::RunStatus { .. }) {
             return None;
         }
         let (title, subtitle, body) = match &detail {
@@ -9361,8 +9220,237 @@ impl PilotApp {
                 )
             }
             // 上面已提前返回，这里只为 match 完备性保留
-            SettingsDetail::RunStatus { .. } | SettingsDetail::ChatFind { .. } => {
+            SettingsDetail::RunStatus { .. } => {
                 return None;
+            }
+            SettingsDetail::RenameSession {
+                session_id,
+                current_title,
+            } => {
+                let input = self.ensure_detail_input(cx, "显示名", current_title, "");
+                (
+                    i18n::t("重命名会话").to_string(),
+                    Some(i18n::t(
+                        "只影响显示名（存在 state.json）；留空保存 = 恢复默认短名。",
+                    ).to_string()),
+                    ui::DetailPanel::new(i18n::t("重命名会话"))
+                        .subtitle(i18n::t("只影响显示名，不改会话库里的标题"))
+                        .body(ui::form_field("detail-rename", i18n::t("显示名"), &input))
+                        .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                            cx.listener(move |this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                cx.notify();
+                            }),
+                        ))
+                        .action(ui::button("detail-save", i18n::t("保存")).on_click(
+                            cx.listener({
+                                let session_id = session_id.clone();
+                                move |this, _event, _window, cx| {
+                                    let Some(input) = this.settings_detail_input.clone() else {
+                                        return;
+                                    };
+                                    let title = input.read(cx).content().trim().to_string();
+                                    if this.sessions.set_title(&session_id, &title) {
+                                        this.sessions.save();
+                                    }
+                                    this.toast(
+                                        if title.is_empty() {
+                                            i18n::t("已恢复默认名")
+                                        } else {
+                                            i18n::t("已重命名")
+                                        },
+                                        cx,
+                                    );
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    cx.notify();
+                                }
+                            }),
+                        )),
+                )
+            }
+            SettingsDetail::Section {
+                editing_id,
+                current_name,
+            } => {
+                let input = self.ensure_detail_input(cx, "分组名", current_name, "");
+                let editing = editing_id.is_some();
+                let id = editing_id.clone();
+                (
+                    if editing {
+                        i18n::t("重命名分组").to_string()
+                    } else {
+                        i18n::t("新建分组").to_string()
+                    },
+                    None,
+                    ui::DetailPanel::new(if editing {
+                        i18n::t("重命名分组")
+                    } else {
+                        i18n::t("新建分组")
+                    })
+                    .body(ui::form_field("detail-section", i18n::t("分组名"), &input))
+                    .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_input = None;
+                            cx.notify();
+                        }),
+                    ))
+                    .action(ui::button("detail-save", i18n::t("保存")).on_click(cx.listener({
+                        move |this, _event, _window, cx| {
+                            let Some(input) = this.settings_detail_input.clone() else {
+                                return;
+                            };
+                            let name = input.read(cx).content().trim().to_string();
+                            if name.is_empty() {
+                                this.settings_detail_error = Some(i18n::t("名字不能为空").to_string());
+                                cx.notify();
+                                return;
+                            }
+                            match &id {
+                                Some(id) => this.rename_sidebar_section(id, &name),
+                                None => {
+                                    this.create_sidebar_section(&name);
+                                }
+                            }
+                            this.settings_detail = None;
+                            this.settings_detail_input = None;
+                            this.settings_detail_error = None;
+                            cx.notify();
+                        }
+                    }))),
+                )
+            }
+            SettingsDetail::Allowlist { bot_id } => {
+                let bot_id = bot_id.clone();
+                if self.settings_detail_entries.is_empty()
+                    && self.settings_detail_input.is_none()
+                {
+                    self.settings_detail_entries = self
+                        .roster
+                        .bot_by_id(&bot_id)
+                        .map(|bot| bot.approval_allowlist.clone())
+                        .unwrap_or_default();
+                }
+                let input = self.ensure_detail_input(cx, "如 Write / Edit", "", "");
+                let entries: Vec<(usize, String)> = self
+                    .settings_detail_entries
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .collect();
+                let count = entries.len();
+                let mut list = ui::card(vec![]);
+                if entries.is_empty() {
+                    list = list.child(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S2))
+                            .child(ui::note(i18n::t("还没有条目"))),
+                    );
+                }
+                for (index, entry) in entries {
+                    let value = entry.clone();
+                    list = list.child(ui::card_row(
+                        div()
+                            .w_full()
+                            .px(px(ui::S3))
+                            .py(px(ui::S2))
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S2))
+                            .child(ui::body_muted(value.clone()))
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("allowlist-rm-{index}")))
+                                    .size(px(22.))
+                                    .rounded(px(theme::RADIUS_CHIP))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.settings_detail_entries
+                                            .retain(|item| item != &value);
+                                        cx.notify();
+                                    }))
+                                    .child(icons::icon(
+                                        icons::Icon::X,
+                                        12.,
+                                        theme::ink_tertiary(),
+                                    )),
+                            ),
+                        index + 1 == count,
+                    ));
+                }
+                let panel = ui::DetailPanel::new(i18n::t("审批白名单"))
+                    .subtitle(i18n::t("这些工具名在任何审批档位下都直接放行"))
+                    .body(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S2))
+                            .child(div().flex_1().child(ui::form_field(
+                                "detail-allowlist",
+                                i18n::t("加一条"),
+                                &input,
+                            )))
+                            .child(
+                                ui::button("allowlist-add", i18n::t("添加")).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        let Some(input) = this.settings_detail_input.clone()
+                                        else {
+                                            return;
+                                        };
+                                        let value = input.read(cx).content().trim().to_string();
+                                        if value.is_empty() {
+                                            return;
+                                        }
+                                        if !this.settings_detail_entries.contains(&value) {
+                                            this.settings_detail_entries.push(value);
+                                        }
+                                        this.settings_detail_input = None;
+                                        cx.notify();
+                                    }),
+                                ),
+                            ),
+                    )
+                    .body(list)
+                    .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_input = None;
+                            this.settings_detail_entries.clear();
+                            cx.notify();
+                        }),
+                    ))
+                    .action(ui::button("detail-save", i18n::t("保存")).on_click(cx.listener({
+                        move |this, _event, _window, cx| {
+                            let entries = this.settings_detail_entries.clone();
+                            match data::set_bot_allowlist(&bot_id, entries) {
+                                Ok(()) => {
+                                    let keep = selected_ids(this);
+                                    this.roster = Roster::load();
+                                    this.reselect_after_roster_change(
+                                        keep.0.as_deref(),
+                                        keep.1.as_deref(),
+                                    );
+                                    this.toast(i18n::t("白名单已保存"), cx);
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_entries.clear();
+                                    this.settings_detail_error = None;
+                                }
+                                Err(message) => this.settings_detail_error = Some(message),
+                            }
+                            cx.notify();
+                        }
+                    })));
+                (i18n::t("审批白名单").to_string(), None, panel)
             }
             SettingsDetail::Model { bot_id } => {
                 let bot_id = bot_id.clone();
@@ -9483,6 +9571,7 @@ impl PilotApp {
         initial: &str,
         _hint: &'static str,
     ) -> Entity<SimpleInput> {
+        // 切到另一个面板时由调用方把 settings_detail_input 置空，这里只负责首次创建。
         if let Some(input) = &self.settings_detail_input {
             return input.clone();
         }
@@ -9810,8 +9899,19 @@ impl PilotApp {
                             i18n::t("改名"),
                         )
                         .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.pending_section_dialog =
-                                Some(SectionDialogRequest::Rename(id_rename.clone()));
+                            let current_name = this
+                                .sidebar_sections
+                                .sections
+                                .iter()
+                                .find(|section| section.id == id_rename)
+                                .map(|section| section.name.clone())
+                                .unwrap_or_default();
+                            this.settings_detail = Some(SettingsDetail::Section {
+                                editing_id: Some(id_rename.clone()),
+                                current_name,
+                            });
+                            this.settings_detail_input = None;
+                            this.settings_open = true;
                             cx.notify();
                         })),
                     )
@@ -9843,7 +9943,12 @@ impl PilotApp {
         body = body.child(div().flex().justify_end().child(
             settings_button(SharedString::from("section-new"), i18n::t("新建分组")).on_click(
                 cx.listener(|this, _event, _window, cx| {
-                    this.pending_section_dialog = Some(SectionDialogRequest::New);
+                    this.settings_detail = Some(SettingsDetail::Section {
+                        editing_id: None,
+                        current_name: String::new(),
+                    });
+                    this.settings_detail_input = None;
+                    this.settings_open = true;
                     cx.notify();
                 }),
             ),
@@ -14236,69 +14341,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         });
     }
 
-    /// 会话重命名对话框（只改试点 state.json 的显示名，不动产品会话库）。
-    fn open_rename_session_dialog(
-        &mut self,
-        session_id: String,
-        current_title: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input = cx.new(|cx| SimpleInput::new(i18n::t("显示名"), theme::ink_tertiary, cx));
-        input.update(cx, |input, cx| input.set_content(current_title, cx));
-        let handle = input.read(cx).focus_handle(cx);
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let input = input.clone();
-            let input_ok = input.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            let session_id = session_id.clone();
-            alert
-                .title(i18n::t("重命名会话"))
-                .description(i18n::t("只影响试点里的显示名（存在 state.json），不改产品会话库里的标题；留空保存 = 恢复默认短名。"))
-                .width(px(400.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| {
-                    content.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(12.))
-                                    .text_color(theme::ink_secondary())
-                                    .child(i18n::t("显示名")),
-                            )
-                            .child(div().h(px(36.)).child(input.clone())),
-                    )
-                })
-                .on_ok(move |_, _, cx| {
-                    let title = input_ok.read(cx).content().trim().to_string();
-                    let _ = weak.update(cx, |this, cx| {
-                        let changed = this.sessions.set_title(&session_id, &title);
-                        if changed {
-                            this.sessions.save();
-                        }
-                        if title.is_empty() {
-                            this.toast(i18n::t("已恢复默认名"), cx);
-                        } else {
-                            this.toast(i18n::t("已重命名会话"), cx);
-                        }
-                    });
-                    true
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
     /// 删除确认 Overlay。
     fn delete_bot_and_reselect(&mut self, bot_id: &str, cx: &mut Context<Self>) {
         if let Err(message) = data::delete_bot(bot_id) {
@@ -14860,8 +14902,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         self.menu_selected = 0;
         if self.pending_bot_dialog.is_none()
             && self.pending_group_dialog.is_none()
-            && self.pending_allowlist_dialog.is_none()
-            && self.pending_model_dialog.is_none()
             && self.pending_group_goal_dialog.is_none()
             && self.pending_group_tasks_dialog.is_none()
         {
@@ -15247,8 +15287,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             item("new-menu-section", icons::Icon::Folder, i18n::t("新建分组")).on_click(
                                 cx.listener(|this, _event, _window, cx| {
                                     this.new_menu_open = false;
-                                    this.pending_section_dialog =
-                                        Some(SectionDialogRequest::New);
+                                    this.settings_detail = Some(SettingsDetail::Section {
+                                        editing_id: None,
+                                        current_name: String::new(),
+                                    });
+                                    this.settings_detail_input = None;
+                                    this.settings_open = true;
                                     cx.notify();
                                 }),
                             ),
@@ -16421,145 +16465,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     }
                 })
                 .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
-    /// 新建/重命名侧栏分组。
-    fn open_section_dialog(
-        &mut self,
-        request: SectionDialogRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (editing_id, title, text) = match request {
-            SectionDialogRequest::New => (None, i18n::t("新建分组"), String::new()),
-            SectionDialogRequest::Rename(id) => {
-                let name = self
-                    .sidebar_sections
-                    .sections
-                    .iter()
-                    .find(|section| section.id == id)
-                    .map(|section| section.name.clone())
-                    .unwrap_or_default();
-                (Some(id), i18n::t("重命名分组"), name)
-            }
-        };
-        let input = cx.new(|cx| SimpleInput::new("分组名称", theme::ink_tertiary, cx));
-        input.update(cx, |input, cx| input.set_content(text, cx));
-        let handle = input.read(cx).focus_handle(cx);
-        let form = cx.new(|_| SectionFormState {
-            editing_id,
-            input,
-            error: None,
-        });
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(title)
-                .width(px(420.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let name = form_ok.read(cx).input.read(cx).content().trim().to_string();
-                    if name.is_empty() {
-                        form_ok.update(cx, |form, cx| {
-                            form.error = Some(i18n::t("分组名称不能为空").to_string());
-                            cx.notify();
-                        });
-                        return false;
-                    }
-                    let editing_id = form_ok.read(cx).editing_id.clone();
-                    let _ = weak.update(cx, |this, cx| {
-                        match &editing_id {
-                            Some(id) => this.rename_sidebar_section(id, &name),
-                            None => {
-                                this.create_sidebar_section(&name);
-                            }
-                        }
-                        cx.notify();
-                    });
-                    true
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
-    /// 审批白名单：kit AlertDialog + 实体列表（增删先在表单内改，保存时一次写盘）。
-    fn open_allowlist_dialog(
-        &mut self,
-        bot_id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let entries = self
-            .roster
-            .bot_by_id(&bot_id)
-            .map(|bot| bot.approval_allowlist.clone())
-            .unwrap_or_default();
-        let input = cx.new(|cx| SimpleInput::new(i18n::t("如 Write / Edit"), theme::ink_tertiary, cx));
-        let form = cx.new(|_| AllowlistFormState {
-            bot_id: bot_id.clone(),
-            entries,
-            input,
-            error: None,
-        });
-        let handle = form.read(cx).input.read(cx).focus_handle(cx);
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            alert
-                .title(i18n::t("审批白名单"))
-                .width(px(420.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_close(move |event, window, cx| restore(event, window, cx))
-                .on_ok(move |_, _, cx| {
-                    let (bot_id, entries) = {
-                        let form = form_ok.read(cx);
-                        (form.bot_id.clone(), form.entries.clone())
-                    };
-                    let outcome = weak.update(cx, |this, cx| -> Result<(), String> {
-                        data::set_bot_allowlist(&bot_id, entries)?;
-                        let keep = selected_ids(this);
-                        this.roster = Roster::load();
-                        this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
-                        this.toast(i18n::t("白名单已保存"), cx);
-                        cx.notify();
-                        Ok(())
-                    });
-                    match outcome {
-                        Ok(Ok(())) => true,
-                        Ok(Err(message)) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                        Err(_) => false,
-                    }
-                })
         });
         window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
@@ -19179,7 +19084,11 @@ fn bot_details(
             .on_click(cx.listener({
                 let bot_id = bot.id.clone();
                 move |this, _event, _window, cx| {
-                    this.pending_model_dialog = Some(bot_id.clone());
+                    this.settings_detail = Some(SettingsDetail::Model {
+                        bot_id: bot_id.clone(),
+                    });
+                    this.settings_detail_input = None;
+                    this.settings_open = true;
                     cx.notify();
                 }
             }))
@@ -19263,7 +19172,12 @@ fn bot_details(
                 .on_click(cx.listener({
                     let bot_id = bot.id.clone();
                     move |this, _event, _window, cx| {
-                        this.pending_allowlist_dialog = Some(bot_id.clone());
+                        this.settings_detail = Some(SettingsDetail::Allowlist {
+                            bot_id: bot_id.clone(),
+                        });
+                        this.settings_detail_entries.clear();
+                        this.settings_detail_input = None;
+                        this.settings_open = true;
                         cx.notify();
                     }
                 }))
@@ -19392,12 +19306,14 @@ fn bot_details(
                                         .title(&rename_id)
                                         .unwrap_or_default()
                                         .to_string();
-                                    this.open_rename_session_dialog(
-                                        rename_id.clone(),
-                                        current,
-                                        window,
-                                        cx,
-                                    );
+                                    let _ = window;
+                                    this.settings_detail = Some(SettingsDetail::RenameSession {
+                                        session_id: rename_id.clone(),
+                                        current_title: current,
+                                    });
+                                    this.settings_detail_input = None;
+                                    this.settings_open = true;
+                                    cx.notify();
                                 }))
                                 .child(i18n::t("改名")),
                         )
@@ -21357,7 +21273,7 @@ const SETTINGS_PAGES: [&str; 18] = [
 ///
 /// 规范 §8：选择类与表单类走侧栏，破坏性删除仍用居中确认框。
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SettingsDetail {
+enum SettingsDetail {
     ProviderKey {
         provider_id: String,
         provider_name: String,
@@ -21374,9 +21290,19 @@ pub enum SettingsDetail {
     RunStatus {
         key: String,
     },
-    /// 会话右栏：会话内查找。
-    ChatFind {
-        key: String,
+    /// 重命名会话（单输入）。
+    RenameSession {
+        session_id: String,
+        current_title: String,
+    },
+    /// 审批白名单（列表 + 添加框）。
+    Allowlist {
+        bot_id: String,
+    },
+    /// 侧栏分组新建/重命名（单输入）。`editing_id` 为空 = 新建。
+    Section {
+        editing_id: Option<String>,
+        current_name: String,
     },
 }
 
@@ -23538,6 +23464,11 @@ impl PilotApp {
                     body = body
                         .child(self.wecom_list(window, cx))
                         .child(self.wecom_settings_view(window, cx));
+                    // 详情面板是横向第三列，必须挂在 body 上，而不是设置视图内部
+                    // （设置视图是 flex_col，挂进去会被竖着堆到最下面）。
+                    if self.settings_detail.is_some() {
+                        body = body.children(self.settings_detail_panel(window, cx));
+                    }
                 } else {
                     body = body
                         .child(self.wecom_list(window, cx))
@@ -24396,8 +24327,13 @@ impl PilotApp {
         let content_width = (f32::from(window.viewport_size().width)
             - wecom_theme::NAV_WIDTH
             - 198.
-            - 28.)
-            .max(280.);
+            - 28.
+            - if self.settings_detail.is_some() {
+                ui_kit::PANEL_W
+            } else {
+                0.
+            })
+        .max(280.);
         let page = self.settings_page(content_width, cx);
         div()
             .relative()
@@ -24491,7 +24427,6 @@ impl PilotApp {
                             ),
                     ),
             )
-            .children(self.settings_detail_panel(window, cx))
     }
 
     /// 会话右侧详情栏（DS bot 风格）：模型、引擎、运行状态、最近一轮用量。
@@ -26340,20 +26275,11 @@ impl Render for PilotApp {
         if let Some(request) = self.pending_group_dialog.take() {
             self.open_group_form_dialog(request, window, cx);
         }
-        if let Some(bot_id) = self.pending_allowlist_dialog.take() {
-            self.open_allowlist_dialog(bot_id, window, cx);
-        }
-        if let Some(bot_id) = self.pending_model_dialog.take() {
-            self.open_model_dialog(bot_id, window, cx);
-        }
         if let Some(group_id) = self.pending_group_goal_dialog.take() {
             self.open_group_goal_dialog(group_id, window, cx);
         }
         if let Some(group_id) = self.pending_group_tasks_dialog.take() {
             self.open_group_tasks_dialog(group_id, window, cx);
-        }
-        if let Some(request) = self.pending_section_dialog.take() {
-            self.open_section_dialog(request, window, cx);
         }
         let mut root = div();
         root.text_style().font_fallbacks = Some(theme::font_fallbacks());

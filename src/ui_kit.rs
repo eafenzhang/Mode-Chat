@@ -793,18 +793,16 @@ impl DetailPanel {
             body = body.child(element);
         }
 
-        // 绝对定位贴右侧：设置卡宽度固定，塞第三列会把主内容压没。
+        // 真正的第三列（不是浮层）：设置卡在面板打开时会同步加宽，
+        // 主内容因此能重排，右侧按钮不会被盖住。
         let mut panel = div()
             .id("detail-panel")
-            .absolute()
-            .top(px(0.))
-            .right(px(0.))
-            .bottom(px(0.))
             .w(px(PANEL_W))
+            .flex_shrink_0()
+            .h_full()
             .border_l_1()
             .border_color(edge())
             .bg(card_bg())
-            .shadow(theme::shadow_3())
             .flex()
             .flex_col()
             .child(head);
