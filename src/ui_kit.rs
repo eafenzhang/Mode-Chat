@@ -14,6 +14,10 @@ use gpui::{
     div, px, AnyElement, Div, Hsla, IntoElement, ParentElement, Rgba, SharedString, Stateful,
 };
 
+use gpui::{App, Context, Entity, Window};
+
+use crate::i18n;
+use crate::simple_input::SimpleInput;
 use crate::theme;
 use crate::wecom_theme;
 
@@ -654,6 +658,185 @@ pub fn segment(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, ac
 /// 把 `Rgba` 转成 `Hsla`（给需要直接设文字色的地方用）。
 pub fn hsla(color: Rgba) -> Hsla {
     Hsla::from(color)
+}
+
+// ---- 侧栏详情面板（规范 §7.2 / §8）------------------------------------------
+
+/// 详情栏宽度（设置页内部与会话右栏共用同一档）。
+pub const PANEL_W: f32 = 340.;
+
+/// 侧栏详情面板的骨架：标题行（返回 + 标题 + 关闭）+ 可滚动内容 + 底部动作。
+///
+/// 多级页面用它替代弹窗：一级页在左侧保持不动，二级内容从右侧滑入。
+/// 破坏性确认（删除）仍然用 `open_alert_dialog`，规则见规范 §8。
+pub struct DetailPanel {
+    title: SharedString,
+    subtitle: Option<SharedString>,
+    body: Vec<AnyElement>,
+    actions: Vec<AnyElement>,
+}
+
+
+/// 详情面板右上角的关闭按钮（点击交给面板自己处理）。
+fn ui_close_button() -> Stateful<Div> {
+    div()
+        .id("detail-close-x")
+        .size(px(22.))
+        .flex_shrink_0()
+        .rounded(px(theme::RADIUS_CHIP))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::hover()))
+        .child(crate::icons::icon(
+            crate::icons::Icon::X,
+            14.,
+            ink_tertiary(),
+        ))
+}
+
+impl DetailPanel {
+    pub fn new(caption: impl Into<SharedString>) -> Self {
+        Self {
+            title: caption.into(),
+            subtitle: None,
+            body: Vec::new(),
+            actions: Vec::new(),
+        }
+    }
+
+    pub fn subtitle(mut self, text: impl Into<SharedString>) -> Self {
+        self.subtitle = Some(text.into());
+        self
+    }
+
+    pub fn body(mut self, element: impl IntoElement) -> Self {
+        self.body.push(element.into_any_element());
+        self
+    }
+
+    pub fn action(mut self, element: impl IntoElement) -> Self {
+        self.actions.push(element.into_any_element());
+        self
+    }
+
+    /// 渲染成右侧栏（宽度 `PANEL_W`，左侧 1px 分隔）。
+    pub fn render(
+        self,
+        on_back: impl Fn(&mut Window, &mut App) + 'static,
+        cx: &mut Context<crate::PilotApp>,
+    ) -> AnyElement {
+        // render(self) 拿走所有权后，先把字段取成局部变量：
+        // 否则 `title` 会解析到模块级 fn title()。
+        let caption = self.title.clone();
+        let subtitle = self.subtitle.clone();
+        let close_button = ui_close_button();
+        let head = div()
+            .flex_shrink_0()
+            .px(px(S3))
+            .py(px(S2))
+            .flex()
+            .items_center()
+            .gap(px(S2))
+            .border_b_1()
+            .border_color(edge())
+            .child(
+                button_ghost("detail-back", i18n::t("返回"))
+                    .on_click(cx.listener(move |_this, _event, window, cx| {
+                        on_back(window, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .font_family(font())
+                    .text_size(px(T_TITLE))
+                    .line_height(px(T_TITLE_LH))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(ink())
+                    .truncate()
+                    .child(caption),
+            )
+            .child(close_button);
+
+        let mut body = div()
+            .id("detail-panel-body")
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .scrollbar_width(px(6.))
+            .px(px(S3))
+            .py(px(S3))
+            .flex()
+            .flex_col()
+            .gap(px(S3));
+        if let Some(subtitle) = subtitle {
+            body = body.child(
+                div()
+                    .font_family(font())
+                    .text_size(px(T_LABEL))
+                    .line_height(px(T_LABEL_LH))
+                    .text_color(ink_tertiary())
+                    .child(subtitle),
+            );
+        }
+        for element in self.body {
+            body = body.child(element);
+        }
+
+        // 绝对定位贴右侧：设置卡宽度固定，塞第三列会把主内容压没。
+        let mut panel = div()
+            .id("detail-panel")
+            .absolute()
+            .top(px(0.))
+            .right(px(0.))
+            .bottom(px(0.))
+            .w(px(PANEL_W))
+            .border_l_1()
+            .border_color(edge())
+            .bg(card_bg())
+            .shadow(theme::shadow_3())
+            .flex()
+            .flex_col()
+            .child(head);
+        panel = panel.child(body);
+        if !self.actions.is_empty() {
+            let mut actions = div()
+                .flex_shrink_0()
+                .px(px(S3))
+                .py(px(S2))
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(S2))
+                .border_t_1()
+                .border_color(edge());
+            for action in self.actions {
+                actions = actions.child(action);
+            }
+            panel = panel.child(actions);
+        }
+        panel.into_any_element()
+    }
+}
+
+/// 表单字段：标签 + 输入框（详情栏内用）。
+pub fn form_field(id: &'static str, label_text: &'static str, input: &Entity<SimpleInput>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(S1))
+        .child(
+            div()
+                .font_family(font())
+                .text_size(px(T_LABEL))
+                .line_height(px(T_LABEL_LH))
+                .text_color(ink_secondary())
+                .child(i18n::t(label_text)),
+        )
+        .child(div().id(id).h(px(34.)).child(input.clone()))
 }
 
 #[cfg(test)]

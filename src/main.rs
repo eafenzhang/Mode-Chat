@@ -2105,66 +2105,6 @@ impl Render for GroupTasksState {
     }
 }
 
-/// Provider API Key 编辑对话框（只写不读，保存后不回显值）。
-struct ProviderKeyState {
-    input: Entity<SimpleInput>,
-    error: Option<String>,
-}
-
-impl Render for ProviderKeyState {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(settings_note(
-                i18n::t("只更新 provider_config.json 的 access.apiKey；已有值不回显。"),
-            ))
-            .child(dialog_field(
-                "provider-key-input",
-                i18n::t("新的 API Key"),
-                &self.input,
-            ));
-        if let Some(error) = &self.error {
-            body = body.child(
-                div()
-                    .font_family(theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .text_color(theme::danger())
-                    .child(SharedString::from(error.clone())),
-            );
-        }
-        body
-    }
-}
-
-/// Provider API 地址编辑（只改 config.api.baseUrl）。
-struct ProviderUrlState {
-    input: Entity<SimpleInput>,
-    error: Option<String>,
-}
-
-impl Render for ProviderUrlState {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(settings_note(i18n::t("只改 config.api.baseUrl；模板默认地址会预填。")))
-            .child(dialog_field("provider-url-input", i18n::t("API 地址"), &self.input));
-        if let Some(error) = &self.error {
-            body = body.child(
-                div()
-                    .font_family(theme::FONT_FAMILY)
-                    .text_size(px(11.))
-                    .text_color(theme::danger())
-                    .child(SharedString::from(error.clone())),
-            );
-        }
-        body
-    }
-}
-
 /// 从内置模板新增 provider。
 struct ProviderAddState {
     templates: Vec<data::ProviderTemplate>,
@@ -3102,10 +3042,12 @@ struct PilotApp {
     pending_group_goal_dialog: Option<String>,
     /// 群任务台账对话框（group id）。
     pending_group_tasks_dialog: Option<String>,
-    /// Provider API Key 编辑对话框（provider id, name）。
-    pending_provider_key_dialog: Option<(String, String)>,
-    /// Provider API 地址编辑对话框（provider id, name, base_url）。
-    pending_provider_url_dialog: Option<(String, String, String)>,
+    /// 设置页右侧详情面板（替代 Provider Key/URL、模型选择等弹窗）。
+    settings_detail: Option<SettingsDetail>,
+    /// 详情面板里的输入框（按需创建；切面板时重建）。
+    settings_detail_input: Option<Entity<SimpleInput>>,
+    /// 详情面板的错误提示。
+    settings_detail_error: Option<String>,
     /// 本轮群发言的任务映射：UI key → 根任务 + 成员名到子任务 id。
     group_task_turns: HashMap<String, GroupTaskTurn>,
     /// 每个群在当前用户回合里已发生的 Bot 交接次数（上限 4，防止互相 @ 无限循环）。
@@ -3588,8 +3530,9 @@ impl PilotApp {
             pending_allowlist_dialog: None,
             pending_group_goal_dialog: None,
             pending_group_tasks_dialog: None,
-            pending_provider_key_dialog: None,
-            pending_provider_url_dialog: None,
+            settings_detail: None,
+            settings_detail_input: None,
+            settings_detail_error: None,
             question_free_active: None,
             question_free_input,
             group_task_turns: HashMap::new(),
@@ -6973,6 +6916,12 @@ impl PilotApp {
         } else if self.footer_menu_open {
             self.footer_menu_open = false;
             return;
+        } else if self.settings_open && self.settings_detail.is_some() {
+            // 详情面板：Esc 只收起面板，不关设置。
+            self.settings_detail = None;
+            self.settings_detail_input = None;
+            self.settings_detail_error = None;
+            self.settings_focus.focus(window, cx);
         } else if self.settings_open && (self.im_create.is_some() || self.im_qr_page.is_some()) {
             // IM 子页面：Esc 只返回上级页，不直接关设置。
             if self.im_qr_page.take().is_none() {
@@ -9062,6 +9011,7 @@ impl PilotApp {
                             ),
                     ),
             )
+            .children(self.settings_detail_panel(window, cx))
             .child(
                 div()
                     .id("settings-close")
@@ -9187,6 +9137,244 @@ impl PilotApp {
             );
         }
         nav
+    }
+
+    /// 设置页的右侧详情面板（替代弹窗，规范 §7.2 / §8）。
+    fn settings_detail_panel(
+        &mut self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        use crate::ui_kit as ui;
+
+        let detail = self.settings_detail.clone()?;
+        let (title, subtitle, body) = match &detail {
+            SettingsDetail::ProviderKey {
+                provider_id,
+                provider_name,
+            } => {
+                let input = self.ensure_detail_input(
+                    cx,
+                    "sk-…",
+                    "",
+                    "只更新 provider_config.json 的 access.apiKey；已有值不回显。",
+                );
+                (
+                    tri!("改 API Key", "Change API key").to_string(),
+                    Some(provider_name.clone()),
+                    ui::DetailPanel::new(tri!(
+                        "改 API Key · {provider_name}",
+                        "Change API key · {provider_name}"
+                    ))
+                    .subtitle(i18n::t("只更新 access.apiKey；已有值不回显。"))
+                    .body(ui::form_field("detail-provider-key", i18n::t("新的 API Key"), &input))
+                    .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_input = None;
+                            cx.notify();
+                        }),
+                    ))
+                    .action(ui::button("detail-save", i18n::t("保存")).on_click(cx.listener({
+                        let provider_id = provider_id.clone();
+                        move |this, _event, _window, cx| {
+                            let Some(input) = this.settings_detail_input.clone() else {
+                                return;
+                            };
+                            let value = input.read(cx).content().to_string();
+                            match data::set_provider_api_key(&provider_id, &value) {
+                                Ok(()) => {
+                                    this.toast(i18n::t("已更新 API Key"), cx);
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_error = None;
+                                }
+                                Err(message) => this.settings_detail_error = Some(message),
+                            }
+                            cx.notify();
+                        }
+                    }))),
+                )
+            }
+            SettingsDetail::ProviderUrl {
+                provider_id,
+                provider_name,
+                base_url,
+            } => {
+                let input = self.ensure_detail_input(cx, "https://…", base_url, "");
+                (
+                    tri!("改 API 地址", "Change API address").to_string(),
+                    Some(provider_name.clone()),
+                    ui::DetailPanel::new(tri!(
+                        "改 API 地址 · {provider_name}",
+                        "Change API address · {provider_name}"
+                    ))
+                    .subtitle(i18n::t("只改 config.api.baseUrl。"))
+                    .body(ui::form_field("detail-provider-url", i18n::t("API 地址"), &input))
+                    .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_input = None;
+                            cx.notify();
+                        }),
+                    ))
+                    .action(ui::button("detail-save", i18n::t("保存")).on_click(cx.listener({
+                        let provider_id = provider_id.clone();
+                        move |this, _event, _window, cx| {
+                            let Some(input) = this.settings_detail_input.clone() else {
+                                return;
+                            };
+                            let value = input.read(cx).content().to_string();
+                            match data::set_provider_base_url(&provider_id, &value) {
+                                Ok(()) => {
+                                    this.toast(i18n::t("已更新 API 地址"), cx);
+                                    this.settings_detail = None;
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_error = None;
+                                }
+                                Err(message) => this.settings_detail_error = Some(message),
+                            }
+                            cx.notify();
+                        }
+                    }))),
+                )
+            }
+            SettingsDetail::Model { bot_id } => {
+                let bot_id = bot_id.clone();
+                let current = self
+                    .roster
+                    .bot_by_id(&bot_id)
+                    .and_then(|bot| bot.model.clone());
+                let options = data::available_models();
+                let mut panel = ui::DetailPanel::new(i18n::t("选择运行时"))
+                    .subtitle(i18n::t("点条目立即生效并收起面板"));
+                if options.is_empty() {
+                    panel = panel.body(ui::note(i18n::t(
+                        "没读到 provider_config.json；先在数据根 v2 下配置 provider",
+                    )));
+                }
+                let mut last_provider = String::new();
+                for option in &options {
+                    if option.provider_id != last_provider {
+                        last_provider = option.provider_id.clone();
+                        panel = panel.body(ui::section(option.provider_name.clone()));
+                    }
+                    let selected = current.as_ref().is_some_and(|model| {
+                        model.provider_id == option.provider_id
+                            && model.model_id == option.model_id
+                    });
+                    let model = data::ModelSpec {
+                        provider_id: option.provider_id.clone(),
+                        model_id: option.model_id.clone(),
+                        reasoning_level: None,
+                    };
+                    let tone = if selected {
+                        ui::Tone::Accent
+                    } else {
+                        ui::Tone::Neutral
+                    };
+                    let row = ui::list_row(
+                        option.model_id.clone(),
+                        Some(
+                            if selected {
+                                i18n::t("当前")
+                            } else {
+                                ""
+                            }
+                            .to_string()
+                            .into(),
+                        ),
+                    )
+                    .child(ui::badge(
+                        if selected { i18n::t("使用中") } else { "" },
+                        tone,
+                    ));
+                    panel = panel.body(
+                        ui::button_ghost(
+                            SharedString::from(format!(
+                                "detail-model-{}-{}",
+                                option.provider_id, option.model_id
+                            )),
+                            "",
+                        )
+                        .on_click(cx.listener({
+                            let bot_id = bot_id.clone();
+                            let model = model.clone();
+                            move |this, _event, _window, cx| {
+                                this.apply_model_choice(&bot_id, Some(model.clone()), cx);
+                                this.settings_detail = None;
+                                cx.notify();
+                            }
+                        }))
+                        .child(row),
+                    );
+                }
+                (
+                    i18n::t("选择运行时").to_string(),
+                    None,
+                    panel.action(ui::button("detail-close", i18n::t("关闭")).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            cx.notify();
+                        }),
+                    )),
+                )
+            }
+        };
+
+        let _ = (title, subtitle);
+        let rendered = body.render(
+            move |_window: &mut Window, _cx: &mut App| {},
+            cx,
+        );
+        // 错误提示追加到面板底部。
+        if let Some(error) = self.settings_detail_error.clone() {
+            Some(
+                div()
+                    .w_full()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(rendered)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(ui::S3))
+                            .pb(px(ui::S2))
+                            .child(ui::error(error)),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            Some(rendered)
+        }
+    }
+
+    /// 详情面板的输入框：首次进入时创建，切面板时重建。
+    fn ensure_detail_input(
+        &mut self,
+        cx: &mut Context<Self>,
+        placeholder: &'static str,
+        initial: &str,
+        _hint: &'static str,
+    ) -> Entity<SimpleInput> {
+        if let Some(input) = &self.settings_detail_input {
+            return input.clone();
+        }
+        let input = cx.new(|cx| SimpleInput::new(i18n::t(placeholder), theme::ink_tertiary, cx));
+        if !initial.is_empty() {
+            input.update(cx, |input, cx| input.set_content(initial, cx));
+        }
+        self.settings_detail_input = Some(input.clone());
+        let handle = input.read(cx).focus_handle(cx);
+        let weak = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = weak.update(cx, |_this, cx| {
+                let _ = &handle;
+                cx.notify();
+            });
+        });
+        input
     }
 
     fn settings_page(&mut self, content_width: f32, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -10445,8 +10633,13 @@ impl PilotApp {
                         i18n::t("地址"),
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.pending_provider_url_dialog =
-                            Some((pid.clone(), pname.clone(), base_url.clone()));
+                        this.settings_detail = Some(SettingsDetail::ProviderUrl {
+                            provider_id: pid.clone(),
+                            provider_name: pname.clone(),
+                            base_url: base_url.clone(),
+                        });
+                        this.settings_detail_input = None;
+                        this.settings_detail_error = None;
                         cx.notify();
                     })),
                 );
@@ -10460,7 +10653,12 @@ impl PilotApp {
                         i18n::t("改密钥"),
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.pending_provider_key_dialog = Some((pid.clone(), pname.clone()));
+                        this.settings_detail = Some(SettingsDetail::ProviderKey {
+                            provider_id: pid.clone(),
+                            provider_name: pname.clone(),
+                        });
+                        this.settings_detail_input = None;
+                        this.settings_detail_error = None;
                         cx.notify();
                     })),
                 );
@@ -15972,118 +16170,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         cx.notify();
     }
 
-    /// Provider API Key：kit AlertDialog + 单输入；保存后只写 JSON，不回读值。
-    fn open_provider_key_dialog(
-        &mut self,
-        provider_id: String,
-        provider_name: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input = cx.new(|cx| SimpleInput::new("sk-…", theme::ink_tertiary, cx));
-        let form = cx.new(|_| ProviderKeyState {
-            input,
-            error: None,
-        });
-        let handle = form.read(cx).input.read(cx).focus_handle(cx);
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            let provider_id = provider_id.clone();
-            alert
-                .title(tri!("改 API Key · {provider_name}", "Change API key · {provider_name}"))
-                .width(px(460.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let key = form_ok.read(cx).input.read(cx).content();
-                    match data::set_provider_api_key(&provider_id, key) {
-                        Ok(()) => {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.toast(i18n::t("已更新 API Key"), cx);
-                            });
-                            true
-                        }
-                        Err(message) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
-    /// Provider API 地址：kit AlertDialog + 单输入，只改 config.api.baseUrl。
-    fn open_provider_url_dialog(
-        &mut self,
-        provider_id: String,
-        provider_name: String,
-        base_url: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input = cx.new(|cx| SimpleInput::new("https://…", theme::ink_tertiary, cx));
-        input.update(cx, |input, cx| input.set_content(base_url, cx));
-        let handle = input.read(cx).focus_handle(cx);
-        let form = cx.new(|_| ProviderUrlState {
-            input,
-            error: None,
-        });
-        let form_content = form.clone();
-        let form_ok = form.clone();
-        let weak = cx.weak_entity();
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let form_content = form_content.clone();
-            let form_ok = form_ok.clone();
-            let weak = weak.clone();
-            let restore = restore.clone();
-            let provider_id = provider_id.clone();
-            alert
-                .title(tri!("改 API 地址 · {provider_name}", "Change API address · {provider_name}"))
-                .width(px(500.))
-                .centered()
-                .ok_text(i18n::t("保存"))
-                .cancel_text(i18n::t("取消"))
-                .show_cancel(true)
-                .content(move |content, _, _| content.child(form_content.clone()))
-                .on_ok(move |_, _, cx| {
-                    let url = form_ok.read(cx).input.read(cx).content().to_string();
-                    match data::set_provider_base_url(&provider_id, &url) {
-                        Ok(()) => {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.toast(i18n::t("已更新 API 地址"), cx);
-                            });
-                            true
-                        }
-                        Err(message) => {
-                            form_ok.update(cx, |form, cx| {
-                                form.error = Some(message);
-                                cx.notify();
-                            });
-                            false
-                        }
-                    }
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-        window.defer(cx, move |window, cx| handle.focus(window, cx));
-    }
-
     /// 删除 provider（规则/排序/模型规则一起清）。
     fn open_delete_provider_dialog(
         &mut self,
@@ -21231,6 +21317,25 @@ const SETTINGS_PAGES: [&str; 18] = [
     "更多",
 ];
 
+/// 设置页的二级详情面板（替代原先的弹窗）。
+///
+/// 规范 §8：选择类与表单类走侧栏，破坏性删除仍用居中确认框。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SettingsDetail {
+    ProviderKey {
+        provider_id: String,
+        provider_name: String,
+    },
+    ProviderUrl {
+        provider_id: String,
+        provider_name: String,
+        base_url: String,
+    },
+    Model {
+        bot_id: String,
+    },
+}
+
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
 /// 智能体引擎图标：内置用应用图标，其余用品牌/语义徽章。
 fn agent_icon(id: &str) -> gpui::AnyElement {
@@ -24247,6 +24352,7 @@ impl PilotApp {
             .max(280.);
         let page = self.settings_page(content_width, cx);
         div()
+            .relative()
             .flex_1()
             .min_w(px(0.))
             .h_full()
@@ -24337,6 +24443,7 @@ impl PilotApp {
                             ),
                     ),
             )
+            .children(self.settings_detail_panel(window, cx))
     }
 
     fn wecom_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -25641,16 +25748,8 @@ impl Render for PilotApp {
         if let Some(group_id) = self.pending_group_tasks_dialog.take() {
             self.open_group_tasks_dialog(group_id, window, cx);
         }
-        if let Some((provider_id, provider_name)) = self.pending_provider_key_dialog.take() {
-            self.open_provider_key_dialog(provider_id, provider_name, window, cx);
-        }
         if let Some(request) = self.pending_section_dialog.take() {
             self.open_section_dialog(request, window, cx);
-        }
-        if let Some((provider_id, provider_name, base_url)) =
-            self.pending_provider_url_dialog.take()
-        {
-            self.open_provider_url_dialog(provider_id, provider_name, base_url, window, cx);
         }
         let mut root = div();
         root.text_style().font_fallbacks = Some(theme::font_fallbacks());
