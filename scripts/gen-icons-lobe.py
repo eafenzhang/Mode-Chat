@@ -86,11 +86,13 @@ MENU = {
     "sliders": ("faders", "faders-fill"),
     "models": ("stack", "stack-fill"),
     "plugins": ("puzzle-piece", "puzzle-piece-fill"),
-    "agents": ("robot", "robot-fill"),
+    # 智能体用电路图，Bot 用机器人：两个都用 robot 会撞脸（设置菜单里上下相邻）
+    "agents": ("circuitry", "circuitry-fill"),
     "bot": ("robot", "robot-fill"),
     "memory": ("brain", "brain-fill"),
     "im": ("device-mobile", "device-mobile-fill"),
-    "connectors": ("plugs-connected", "plugs-connected-fill"),
+    # 连接器用插头（插件页已占用拼图，两者语义也更容易区分）
+    "connectors": ("plug", "plug-fill"),
     "schedules": ("calendar-blank", "calendar-blank-fill"),
     "keys": ("key", "key-fill"),
     "abilities": ("lightning", "lightning-fill"),

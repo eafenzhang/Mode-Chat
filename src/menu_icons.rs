@@ -51,11 +51,11 @@ const PAIRS: [(MenuIcon, &str, &str); 21] = [
     (MenuIcon::Sliders, "faders", "faders-fill"),
     (MenuIcon::Models, "stack", "stack-fill"),
     (MenuIcon::Plugins, "puzzle-piece", "puzzle-piece-fill"),
-    (MenuIcon::Agents, "robot", "robot-fill"),
+    (MenuIcon::Agents, "circuitry", "circuitry-fill"),
     (MenuIcon::Bot, "robot", "robot-fill"),
     (MenuIcon::Memory, "brain", "brain-fill"),
     (MenuIcon::Im, "device-mobile", "device-mobile-fill"),
-    (MenuIcon::Connectors, "plugs-connected", "plugs-connected-fill"),
+    (MenuIcon::Connectors, "plug", "plug-fill"),
     (MenuIcon::Schedules, "calendar-blank", "calendar-blank-fill"),
     (MenuIcon::Keys, "key", "key-fill"),
     (MenuIcon::Abilities, "lightning", "lightning-fill"),
@@ -87,9 +87,10 @@ impl MenuIcon {
             "stack" => include_bytes!("../assets/icons/phosphor/stack.svg"),
             "puzzle-piece" => include_bytes!("../assets/icons/phosphor/puzzle-piece.svg"),
             "robot" => include_bytes!("../assets/icons/phosphor/robot.svg"),
+            "circuitry" => include_bytes!("../assets/icons/phosphor/circuitry.svg"),
+            "plug" => include_bytes!("../assets/icons/phosphor/plug.svg"),
             "brain" => include_bytes!("../assets/icons/phosphor/brain.svg"),
             "device-mobile" => include_bytes!("../assets/icons/phosphor/device-mobile.svg"),
-            "plugs-connected" => include_bytes!("../assets/icons/phosphor/plugs-connected.svg"),
             "calendar-blank" => include_bytes!("../assets/icons/phosphor/calendar-blank.svg"),
             "key" => include_bytes!("../assets/icons/phosphor/key.svg"),
             "lightning" => include_bytes!("../assets/icons/phosphor/lightning.svg"),
@@ -117,12 +118,11 @@ impl MenuIcon {
                 include_bytes!("../assets/icons/phosphor/puzzle-piece-fill.svg")
             }
             "robot-fill" => include_bytes!("../assets/icons/phosphor/robot-fill.svg"),
+            "circuitry-fill" => include_bytes!("../assets/icons/phosphor/circuitry-fill.svg"),
+            "plug-fill" => include_bytes!("../assets/icons/phosphor/plug-fill.svg"),
             "brain-fill" => include_bytes!("../assets/icons/phosphor/brain-fill.svg"),
             "device-mobile-fill" => {
                 include_bytes!("../assets/icons/phosphor/device-mobile-fill.svg")
-            }
-            "plugs-connected-fill" => {
-                include_bytes!("../assets/icons/phosphor/plugs-connected-fill.svg")
             }
             "calendar-blank-fill" => {
                 include_bytes!("../assets/icons/phosphor/calendar-blank-fill.svg")
@@ -151,11 +151,10 @@ impl MenuIcon {
             "stack" => include_bytes!("../assets/icons/phosphor/stack-light.svg"),
             "puzzle-piece" => include_bytes!("../assets/icons/phosphor/puzzle-piece-light.svg"),
             "robot" => include_bytes!("../assets/icons/phosphor/robot-light.svg"),
+            "circuitry" => include_bytes!("../assets/icons/phosphor/circuitry-light.svg"),
+            "plug" => include_bytes!("../assets/icons/phosphor/plug-light.svg"),
             "brain" => include_bytes!("../assets/icons/phosphor/brain-light.svg"),
             "device-mobile" => include_bytes!("../assets/icons/phosphor/device-mobile-light.svg"),
-            "plugs-connected" => {
-                include_bytes!("../assets/icons/phosphor/plugs-connected-light.svg")
-            }
             "calendar-blank" => include_bytes!("../assets/icons/phosphor/calendar-blank-light.svg"),
             "key" => include_bytes!("../assets/icons/phosphor/key-light.svg"),
             "lightning" => include_bytes!("../assets/icons/phosphor/lightning-light.svg"),
