@@ -273,6 +273,9 @@ pub fn list_row_leading(
 }
 
 /// 键值行：左标签 11px，右值 12px。
+///
+/// 值一侧强制可收缩 + 省略号：会话 ID、工作目录这类长文本在窄栏里
+/// 否则会把整行撑出面板。
 pub fn stat_row(label_text: impl Into<SharedString>, value: impl Into<SharedString>) -> Div {
     div()
         .w_full()
@@ -283,9 +286,13 @@ pub fn stat_row(label_text: impl Into<SharedString>, value: impl Into<SharedStri
         .items_center()
         .justify_between()
         .gap(px(S3))
-        .child(label(label_text))
+        .child(div().flex_shrink_0().child(label(label_text)))
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.))
+                .text_right()
+                .truncate()
                 .font_family(font())
                 .text_size(px(T_BODY))
                 .line_height(px(T_BODY_LH))

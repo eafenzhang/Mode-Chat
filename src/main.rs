@@ -3044,6 +3044,8 @@ struct PilotApp {
     pending_group_tasks_dialog: Option<String>,
     /// 设置页右侧详情面板（替代 Provider Key/URL、模型选择等弹窗）。
     settings_detail: Option<SettingsDetail>,
+    /// 会话右栏的二级详情（运行状态等）。
+    chat_detail: Option<SettingsDetail>,
     /// 详情面板里的输入框（按需创建；切面板时重建）。
     settings_detail_input: Option<Entity<SimpleInput>>,
     /// 详情面板的错误提示。
@@ -3531,6 +3533,7 @@ impl PilotApp {
             pending_group_goal_dialog: None,
             pending_group_tasks_dialog: None,
             settings_detail: None,
+            chat_detail: None,
             settings_detail_input: None,
             settings_detail_error: None,
             question_free_active: None,
@@ -9140,6 +9143,117 @@ impl PilotApp {
     }
 
     /// 设置页的右侧详情面板（替代弹窗，规范 §7.2 / §8）。
+    /// 会话右栏的详情面板：运行状态等只读明细。
+    fn chat_detail_panel(
+        &mut self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        use crate::ui_kit as ui;
+
+        let detail = self.chat_detail.clone()?;
+        let SettingsDetail::RunStatus { key } = detail else {
+            return None;
+        };
+
+        let bot_id = key.strip_prefix("bot:");
+        let group = key
+            .strip_prefix("group:")
+            .and_then(|id| self.roster.groups.iter().find(|group| group.id == id));
+        let title = bot_id
+            .and_then(|id| self.roster.bot_by_id(id))
+            .map(|bot| bot.name.clone())
+            .or_else(|| group.map(|group| group.name.clone()))
+            .unwrap_or_else(|| "Mode Chat".to_string());
+        let engine = bot_id
+            .and_then(|id| self.sessions.engine_of(id))
+            .unwrap_or("mode");
+        let engine_label = if group.is_some() {
+            i18n::t("群聊 · 按成员").to_string()
+        } else if engine.is_empty() || engine.eq_ignore_ascii_case("mode") {
+            "Pi-Rust（内置）".to_string()
+        } else {
+            engine.to_string()
+        };
+        let model = bot_id
+            .and_then(|id| self.roster.bot_by_id(id))
+            .and_then(|bot| bot.model.as_ref())
+            .map(|model| model.label())
+            .unwrap_or_else(|| i18n::t("默认模型").to_string());
+        let workspace = bot_id
+            .and_then(|id| self.roster.bot_by_id(id))
+            .map(|bot| bot.directory.clone())
+            .or_else(|| group.and_then(|group| group.directory.clone()))
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or_else(|| i18n::t("未设置").to_string());
+        let chat = self.chats.get(&key);
+        let session = chat
+            .and_then(|chat| chat.session_id.as_deref())
+            .map(display_session_id)
+            .unwrap_or_else(|| i18n::t("尚未建立").to_string());
+        let status = chat
+            .map(|chat| {
+                if chat.streaming {
+                    i18n::t("运行中").to_string()
+                } else if chat.status.trim().is_empty() {
+                    i18n::t("就绪").to_string()
+                } else {
+                    chat.status.clone()
+                }
+            })
+            .unwrap_or_else(|| i18n::t("未连接").to_string());
+        let messages = chat.map(|chat| chat.messages.len()).unwrap_or(0);
+        let queued = chat.map(|chat| chat.queued.len()).unwrap_or(0);
+        let pending = chat
+            .map(|chat| chat.permissions.len() + chat.questions.len() + chat.elicitations.len())
+            .unwrap_or(0);
+        let turn = chat
+            .and_then(|chat| chat.last_turn.as_ref())
+            .map(|report| {
+                format!(
+                    "{} · ↑{} ↓{}",
+                    elapsed_label(report.duration_ms),
+                    compact_tokens(report.usage.input),
+                    compact_tokens(report.usage.output)
+                )
+            })
+            .unwrap_or_else(|| "—".to_string());
+
+        let rows = [
+            (i18n::t("会话").to_string(), title),
+            (i18n::t("引擎").to_string(), engine_label),
+            (i18n::t("模型").to_string(), model),
+            (i18n::t("工作目录").to_string(), workspace),
+            (i18n::t("会话 ID").to_string(), session),
+            (i18n::t("状态").to_string(), status),
+            (i18n::t("消息数").to_string(), messages.to_string()),
+            (i18n::t("排队消息").to_string(), queued.to_string()),
+            (i18n::t("待处理审批/提问").to_string(), pending.to_string()),
+            (i18n::t("最近一轮").to_string(), turn),
+        ];
+
+        let mut body = ui::card(vec![]);
+        let count = rows.len();
+        for (index, (label, value)) in rows.into_iter().enumerate() {
+            body = body.child(ui::card_row(
+                ui::stat_row(label, value),
+                index + 1 == count,
+            ));
+        }
+
+        let panel = ui::DetailPanel::new(i18n::t("运行状态"))
+            .subtitle(i18n::t("只读明细；不改变会话状态"))
+            .body(body)
+            .action(ui::button("chat-detail-close", i18n::t("关闭")).on_click(
+                cx.listener(move |this, _event, _window, cx| {
+                    this.chat_detail = None;
+                    cx.notify();
+                }),
+            ));
+
+        Some(panel.render(move |_window: &mut Window, _cx: &mut App| {}, cx))
+    }
+
     fn settings_detail_panel(
         &mut self,
         _window: &Window,
@@ -9148,6 +9262,13 @@ impl PilotApp {
         use crate::ui_kit as ui;
 
         let detail = self.settings_detail.clone()?;
+        // 会话专用的两种形态由 chat_detail_panel 渲染，这里不处理。
+        if matches!(
+            detail,
+            SettingsDetail::RunStatus { .. } | SettingsDetail::ChatFind { .. }
+        ) {
+            return None;
+        }
         let (title, subtitle, body) = match &detail {
             SettingsDetail::ProviderKey {
                 provider_id,
@@ -9238,6 +9359,10 @@ impl PilotApp {
                         }
                     }))),
                 )
+            }
+            // 上面已提前返回，这里只为 match 完备性保留
+            SettingsDetail::RunStatus { .. } | SettingsDetail::ChatFind { .. } => {
+                return None;
             }
             SettingsDetail::Model { bot_id } => {
                 let bot_id = bot_id.clone();
@@ -14707,7 +14832,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 self.open_chat_find(window, cx);
             }
             DetailMenuAction::RunStatus(key) => {
-                self.open_run_status_dialog(key, window, cx);
+                // 只读明细走右侧详情栏（规范 §8），不再弹框。
+                self.chat_detail = Some(SettingsDetail::RunStatus { key });
+                self.right_panel_open = true;
+                self.active_tab = 0;
+                cx.notify();
             }
             DetailMenuAction::CopySessionId(key) => {
                 if let Some(session_id) = self
@@ -16678,110 +16807,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         });
     }
 
-    /// 运行状态：只读列出引擎/模型/会话/队列/本轮用量（无后台子代理时的等价面板）。
-    fn open_run_status_dialog(
-        &mut self,
-        key: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let bot_id = key.strip_prefix("bot:");
-        let group = key
-            .strip_prefix("group:")
-            .and_then(|id| self.roster.groups.iter().find(|group| group.id == id));
-        let title = bot_id
-            .and_then(|id| self.roster.bot_by_id(id))
-            .map(|bot| bot.name.clone())
-            .or_else(|| group.map(|group| group.name.clone()))
-            .unwrap_or_else(|| "Mode Chat".to_string());
-        let engine = bot_id
-            .and_then(|id| self.sessions.engine_of(id))
-            .unwrap_or("mode");
-        let engine_label = if group.is_some() {
-            i18n::t("群聊 · 按成员").to_string()
-        } else if engine.is_empty() || engine.eq_ignore_ascii_case("mode") {
-            "Pi-Rust（内置）".to_string()
-        } else {
-            engine.to_string()
-        };
-        let model = bot_id
-            .and_then(|id| self.roster.bot_by_id(id))
-            .and_then(|bot| bot.model.as_ref())
-            .map(|model| model.label())
-            .unwrap_or_else(|| i18n::t("默认模型").to_string());
-        let workspace = bot_id
-            .and_then(|id| self.roster.bot_by_id(id))
-            .map(|bot| bot.directory.clone())
-            .or_else(|| group.and_then(|group| group.directory.clone()))
-            .filter(|path| !path.trim().is_empty())
-            .unwrap_or_else(|| i18n::t("未设置").to_string());
-        let chat = self.chats.get(&key);
-        let session = chat
-            .and_then(|chat| chat.session_id.as_deref())
-            .map(display_session_id)
-            .unwrap_or_else(|| i18n::t("尚未建立").to_string());
-        let status = chat
-            .map(|chat| {
-                if chat.streaming {
-                    i18n::t("运行中").to_string()
-                } else if chat.status.trim().is_empty() {
-                    i18n::t("就绪").to_string()
-                } else {
-                    chat.status.clone()
-                }
-            })
-            .unwrap_or_else(|| i18n::t("未连接").to_string());
-        let messages = chat.map(|chat| chat.messages.len()).unwrap_or(0);
-        let queued = chat.map(|chat| chat.queued.len()).unwrap_or(0);
-        let pending = chat
-            .map(|chat| {
-                chat.permissions.len() + chat.questions.len() + chat.elicitations.len()
-            })
-            .unwrap_or(0);
-        let turn = chat
-            .and_then(|chat| chat.last_turn.as_ref())
-            .map(|report| {
-                format!(
-                    "{} · ↑{} ↓{}",
-                    elapsed_label(report.duration_ms),
-                    compact_tokens(report.usage.input),
-                    compact_tokens(report.usage.output)
-                )
-            })
-            .unwrap_or_else(|| "—".to_string());
-        let rows = vec![
-            (i18n::t("会话").to_string(), title),
-            (i18n::t("引擎").to_string(), engine_label),
-            (i18n::t("模型").to_string(), model),
-            (i18n::t("工作目录").to_string(), workspace),
-            (i18n::t("会话 ID").to_string(), session),
-            (i18n::t("状态").to_string(), status),
-            (i18n::t("消息数").to_string(), messages.to_string()),
-            (i18n::t("排队消息").to_string(), queued.to_string()),
-            (i18n::t("待处理审批/提问").to_string(), pending.to_string()),
-            (i18n::t("最近一轮").to_string(), turn),
-        ];
-        let restore = self.dialog_focus_restore(cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let restore = restore.clone();
-            let rows = rows.clone();
-            alert
-                .title(i18n::t("运行状态"))
-                .width(px(560.))
-                .centered()
-                .ok_text(i18n::t("关闭"))
-                .show_cancel(false)
-                .content(move |content, _, _| {
-                    let mut body = div().w_full().flex().flex_col().gap(px(6.));
-                    for (label, value) in &rows {
-                        body = body.child(settings_row(label.clone(), Some(value.clone())));
-                    }
-                    content.child(body)
-                })
-                .on_close(move |event, window, cx| restore(event, window, cx))
-        });
-    }
-
     fn delete_automation(&mut self, target: &AutomationDeleteTarget, cx: &mut Context<Self>) {
         let db_path = automations::db_path(&self.roster.data_root);
         match automations::delete(&db_path, &target.automation_id, &target.workspace_key) {
@@ -18593,7 +18618,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             )
     }
 
-    fn right_panel(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn right_panel(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bot = self.selected_bot().cloned();
         let group = self.selected_group().cloned();
         let (name, subtitle, avatar_id, is_group) = if let Some(bot) = &bot {
@@ -18733,6 +18758,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         };
 
         div()
+            .relative()
             .w(px(PANEL_WIDTH))
             .flex_shrink_0()
             .h_full()
@@ -18942,6 +18968,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .scrollbar_width(px(6.))
                     .children(detail),
             )
+            // 会话二级详情（运行状态等）：从右栏内部再叠一层面板。
+            .children(self.chat_detail_panel(window, cx))
     }
 }
 
@@ -21334,6 +21362,14 @@ pub enum SettingsDetail {
     Model {
         bot_id: String,
     },
+    /// 会话右栏：运行状态（只读明细）。
+    RunStatus {
+        key: String,
+    },
+    /// 会话右栏：会话内查找。
+    ChatFind {
+        key: String,
+    },
 }
 
 /// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
@@ -23498,6 +23534,10 @@ impl PilotApp {
                     body = body
                         .child(self.wecom_list(window, cx))
                         .child(self.wecom_chat(window, cx));
+                    // DS bot 的布局：会话右侧常驻详情栏（模型 / 运行状态 / 文件改动）
+                    if self.right_panel_open {
+                        body = body.child(self.chat_info_panel(window, cx));
+                    }
                 }
                 body
             })
@@ -24444,6 +24484,157 @@ impl PilotApp {
                     ),
             )
             .children(self.settings_detail_panel(window, cx))
+    }
+
+    /// 会话右侧详情栏（DS bot 风格）：模型、引擎、运行状态、最近一轮用量。
+    ///
+    /// 与设置页的 `DetailPanel` 同一套视觉，但内容是会话实时状态而不是表单。
+    fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::ui_kit as ui;
+
+        let key = self.active_key().unwrap_or_default();
+        let bot = self.selected_bot().cloned();
+        let group = self.selected_group().cloned();
+        let chat = self.chats.get(&key);
+
+        let title = bot
+            .as_ref()
+            .map(|bot| bot.name.clone())
+            .or_else(|| group.as_ref().map(|group| group.name.clone()))
+            .unwrap_or_else(|| "Mode Chat".to_string());
+        let engine = bot
+            .as_ref()
+            .and_then(|bot| self.sessions.engine_of(&bot.id))
+            .unwrap_or("mode")
+            .to_string();
+        let engine_label = if group.is_some() {
+            i18n::t("群聊 · 按成员").to_string()
+        } else if engine.is_empty() || engine.eq_ignore_ascii_case("mode") {
+            "Pi-Rust".to_string()
+        } else {
+            engine.clone()
+        };
+        let model = bot
+            .as_ref()
+            .and_then(|bot| bot.model.as_ref())
+            .map(model_label)
+            .unwrap_or_else(|| i18n::t("默认模型").to_string());
+        let ready = chat.is_some_and(|chat| chat.ready);
+        let streaming = chat.is_some_and(|chat| chat.streaming);
+        let status = if streaming {
+            i18n::t("运行中")
+        } else if !ready {
+            i18n::t("连接中")
+        } else {
+            i18n::t("就绪")
+        };
+        let session = chat
+            .and_then(|chat| chat.session_id.as_deref())
+            .map(display_session_id)
+            .unwrap_or_else(|| i18n::t("尚未建立").to_string());
+        let messages = chat.map(|chat| chat.messages.len()).unwrap_or(0);
+        let queued = chat.map(|chat| chat.queued.len()).unwrap_or(0);
+        let pending = chat
+            .map(|chat| chat.permissions.len() + chat.questions.len() + chat.elicitations.len())
+            .unwrap_or(0);
+        let turn = chat
+            .and_then(|chat| chat.last_turn.as_ref())
+            .map(|report| {
+                format!(
+                    "{} · ↑{} ↓{}",
+                    elapsed_label(report.duration_ms),
+                    compact_tokens(report.usage.input),
+                    compact_tokens(report.usage.output)
+                )
+            })
+            .unwrap_or_else(|| "—".to_string());
+
+        let status_tone = if streaming {
+            ui::Tone::Accent
+        } else if ready {
+            ui::Tone::Success
+        } else {
+            ui::Tone::Neutral
+        };
+
+        let mut rows = vec![
+            ui::stat_row(i18n::t("引擎"), engine_label).into_any_element(),
+            ui::stat_row(i18n::t("模型"), model).into_any_element(),
+            ui::stat_row(i18n::t("会话 ID"), session).into_any_element(),
+            ui::stat_row(i18n::t("消息数"), messages.to_string()).into_any_element(),
+            ui::stat_row(i18n::t("排队消息"), queued.to_string()).into_any_element(),
+            ui::stat_row(i18n::t("待处理"), pending.to_string()).into_any_element(),
+            ui::stat_row(i18n::t("最近一轮"), turn).into_any_element(),
+        ];
+        if let Some(bot) = &bot {
+            rows.push(ui::stat_row(i18n::t("工作目录"), bot.directory.clone()).into_any_element());
+        }
+        let count = rows.len();
+        let mut card = ui::card(vec![]);
+        for (index, row) in rows.into_iter().enumerate() {
+            card = card.child(ui::card_row(row, index + 1 == count));
+        }
+
+        let mut body = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(ui::S3))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(ui::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(wecom_theme::chat_title())
+                            .child(SharedString::from(title)),
+                    )
+                    .child(ui::badge(status, status_tone)),
+            )
+            .child(card);
+
+        // 快捷动作：与「⋯」菜单里的常用项对齐
+        if let Some(bot_id) = bot.as_ref().map(|bot| bot.id.clone()) {
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(ui::S1))
+                    .child(
+                        ui::button("info-model", i18n::t("切换模型"))
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                this.open_model_dialog(bot_id.clone(), window, cx);
+                            })),
+                    ),
+            );
+        }
+
+        div()
+            .relative()
+            .w(px(wecom_theme::PANEL_WIDTH.max(260.)))
+            .flex_shrink_0()
+            .h_full()
+            .border_l_1()
+            .border_color(wecom_theme::panel_divider())
+            .bg(wecom_theme::panel_bg())
+            .px(px(12.))
+            .py(px(12.))
+            .child(
+                div()
+                    .id("chat-info-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(6.))
+                    .child(body),
+            )
     }
 
     fn wecom_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
