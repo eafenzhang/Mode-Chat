@@ -9393,6 +9393,64 @@ impl PilotApp {
                     )));
                 (i18n::t("新建定时任务").to_string(), None, panel)
             }
+            SettingsDetail::AddModel {
+                provider_id,
+                provider_name,
+            } => {
+                let (input,) = {
+                    let fields = self.ensure_detail_fields(
+                        cx,
+                        &[(("模型 ID，如 deepseek-chat"), String::new())],
+                    );
+                    (fields[0].clone(),)
+                };
+                let pid_for_save = provider_id.clone();
+                let panel = ui::DetailPanel::new(tri!(
+                    "添加模型 · {provider_name}",
+                    "Add model · {provider_name}"
+                ))
+                .subtitle(i18n::t(
+                    "只校验格式；模型是否真实存在请用「测试」按钮验证。",
+                ))
+                .body(ui::form_field("detail-model-id", i18n::t("模型 ID"), &input))
+                .action(
+                    ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
+                        move |this, _event, _window, cx| {
+                            this.settings_detail = None;
+                            this.settings_detail_input = None;
+                            this.settings_detail_extra.clear();
+                            cx.notify();
+                        },
+                    )),
+                )
+                .action(ui::button("detail-add-model", i18n::t("添加")).on_click(
+                    cx.listener(move |this, _event, _window, cx| {
+                        let Some(input) = this.settings_detail_input.clone() else {
+                            return;
+                        };
+                        let model_id = input.read(cx).content().trim().to_string();
+                        match data::add_model(&pid_for_save, &model_id) {
+                            Ok(()) => {
+                                this.toast(
+                                    tri!("已添加模型 {model_id}", "Added model {model_id}"),
+                                    cx,
+                                );
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_error = None;
+                            }
+                            Err(message) => this.settings_detail_error = Some(message),
+                        }
+                        cx.notify();
+                    }),
+                ));
+                (
+                    tri!("添加模型 · {provider_name}", "Add model · {provider_name}")
+                        .to_string(),
+                    None,
+                    panel,
+                )
+            }
             SettingsDetail::AddProvider => {
                 let templates = data::provider_templates();
                 if templates.is_empty() {
@@ -11886,6 +11944,28 @@ impl PilotApp {
             );
 
             // ---- 卡内模型列表 ----
+            // 「+ 模型」：给这个 provider 追加一个模型 ID。
+            {
+                let pid = provider.provider_id.clone();
+                let pname = provider.provider_name.clone();
+                actions = actions.child(
+                    ui::button_ghost(
+                        SharedString::from(format!("provider-add-model-{}", pid)),
+                        i18n::t("+ 模型"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.settings_detail = Some(SettingsDetail::AddModel {
+                            provider_id: pid.clone(),
+                            provider_name: pname.clone(),
+                        });
+                        this.settings_detail_input = None;
+                        this.settings_detail_extra.clear();
+                        this.settings_detail_error = None;
+                        cx.notify();
+                    })),
+                );
+            }
+
             let model_rows = data::provider_model_rows(&provider.provider_id);
             let mut inner: Vec<gpui::AnyElement> = Vec::new();
             for model in model_rows {
@@ -11953,6 +12033,24 @@ impl PilotApp {
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 if let Err(message) = data::move_model(&pid, &mid, 1) {
                                     this.toast(message, cx);
+                                }
+                                cx.notify();
+                            }))
+                        })
+                        .child({
+                            let pid = pid.clone();
+                            let mid = mid.clone();
+                            ui::button_ghost(
+                                SharedString::from(format!("model-del-{pid}-{mid}")),
+                                i18n::t("删除"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                match data::remove_model(&pid, &mid) {
+                                    Ok(()) => this.toast(
+                                        tri!("已删除模型 {mid}", "Removed model {mid}"),
+                                        cx,
+                                    ),
+                                    Err(message) => this.toast(message, cx),
                                 }
                                 cx.notify();
                             }))
@@ -21594,6 +21692,11 @@ enum SettingsDetail {
     NewSchedule,
     /// 从模板添加 provider。
     AddProvider,
+    /// 给某个 provider 追加模型。
+    AddModel {
+        provider_id: String,
+        provider_name: String,
+    },
     /// 新建 Bot 默认模型（列表选择）。
     NewBotModel,
     /// 群目标（复用 GroupGoalState 视图，挂在侧栏里）。

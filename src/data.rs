@@ -1247,6 +1247,109 @@ pub fn set_model_enabled(
     write_provider_value(&value)
 }
 
+/// 给 provider 追加一个模型（写到 modelOrder 末尾）。
+pub fn add_model(provider_id: &str, model_id: &str) -> Result<(), String> {
+    let mut value = read_provider_value()?;
+    add_model_in(&mut value, provider_id, model_id)?;
+    write_provider_value(&value)
+}
+
+/// 从 provider 的 modelOrder 里删掉一个模型。
+pub fn remove_model(provider_id: &str, model_id: &str) -> Result<(), String> {
+    let mut value = read_provider_value()?;
+    remove_model_in(&mut value, provider_id, model_id)?;
+    write_provider_value(&value)
+}
+
+/// 纯 JSON 版：把一个模型 ID 追加到 provider 的 modelOrder。
+///
+/// 拆出来是为了可测——文件版会读全局配置，测试并行时会互相干扰。
+fn add_model_in(
+    value: &mut serde_json::Value,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return Err("模型 ID 不能为空".to_string());
+    }
+    if !model_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':')
+    {
+        return Err("模型 ID 只能包含字母、数字、- _ . :".to_string());
+    }
+    let Some(rule) = provider_rules_mut(value).and_then(|rules| {
+        rules.iter_mut().find(|rule| {
+            rule.get("providerId").and_then(serde_json::Value::as_str) == Some(provider_id)
+        })
+    }) else {
+        return Err(format!("找不到 provider：{provider_id}"));
+    };
+    let Some(config) = rule.get_mut("config").and_then(|c| c.as_object_mut()) else {
+        return Err("provider 缺少 config".to_string());
+    };
+    let order = config
+        .entry("modelOrder")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| "provider 的 modelOrder 不是数组".to_string())?;
+    if order.iter().any(|item| item.as_str() == Some(model_id)) {
+        return Err(format!("模型已存在：{model_id}"));
+    }
+    order.push(serde_json::Value::String(model_id.to_string()));
+    Ok(())
+}
+
+/// 纯 JSON 版：从 provider 的 modelOrder 里移除一个模型。
+fn remove_model_in(
+    value: &mut serde_json::Value,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return Err("模型 ID 不能为空".to_string());
+    }
+    let Some(rule) = provider_rules_mut(value).and_then(|rules| {
+        rules.iter_mut().find(|rule| {
+            rule.get("providerId").and_then(serde_json::Value::as_str) == Some(provider_id)
+        })
+    }) else {
+        return Err(format!("找不到 provider：{provider_id}"));
+    };
+    let Some(order) = rule
+        .get_mut("config")
+        .and_then(|config| config.get_mut("modelOrder"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Err("provider 缺少 modelOrder".to_string());
+    };
+    let before = order.len();
+    order.retain(|item| item.as_str() != Some(model_id));
+    if order.len() == before {
+        return Err(format!("modelOrder 里找不到模型：{model_id}"));
+    }
+    clear_model_rule(value, provider_id, model_id);
+    Ok(())
+}
+
+/// 删掉 `modelConfigRules.providerModelRules` 里针对该模型的规则。
+fn clear_model_rule(value: &mut serde_json::Value, provider_id: &str, model_id: &str) {
+    let Some(rules) = value
+        .get_mut("config")
+        .and_then(|config| config.get_mut("modelConfigRules"))
+        .and_then(|rules| rules.get_mut("providerModelRules"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    rules.retain(|rule| {
+        !(rule.get("providerId").and_then(serde_json::Value::as_str) == Some(provider_id)
+            && rule.get("modelId").and_then(serde_json::Value::as_str) == Some(model_id))
+    });
+}
+
 /// 在 provider 的 modelOrder 里上/下移一格（delta = -1 / +1）。
 pub fn move_model(provider_id: &str, model_id: &str, delta: isize) -> Result<(), String> {
     let mut value = read_provider_value()?;
@@ -2201,6 +2304,73 @@ impl GroupJson {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 模型增删：直接测纯 JSON 版本，不碰文件、不设环境变量，
+    /// 因此可以和其它测试并行跑。
+    #[test]
+    fn add_and_remove_model_roundtrip() {
+        let mut value = serde_json::json!({
+            "config": {
+                "providerConfigRules": {
+                    "providerRules": [{
+                        "providerId": "probe",
+                        "providerName": "Probe",
+                        "config": {
+                            "access": { "type": "api-key", "apiKey": "k" },
+                            "modelOrder": ["existing"]
+                        }
+                    }]
+                },
+                "modelConfigRules": {
+                    "providerModelRules": [{
+                        "providerId": "probe",
+                        "modelId": "existing",
+                        "config": { "enabled": false }
+                    }]
+                }
+            }
+        });
+
+        // 新增两个，追加到末尾
+        add_model_in(&mut value, "probe", "new-a").expect("add a");
+        add_model_in(&mut value, "probe", "new-b").expect("add b");
+        let order: Vec<String> = value["config"]["providerConfigRules"]["providerRules"][0]
+            ["config"]["modelOrder"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|item| item.as_str().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(order, vec!["existing", "new-a", "new-b"]);
+
+        // 重复 ID 与非法字符都要拒绝
+        assert!(add_model_in(&mut value, "probe", "new-a").is_err());
+        assert!(add_model_in(&mut value, "probe", "bad id").is_err());
+        assert!(add_model_in(&mut value, "probe", "").is_err());
+        // 不存在的 provider
+        assert!(add_model_in(&mut value, "nope", "x").is_err());
+
+        // 删除：连启用规则一起清掉
+        remove_model_in(&mut value, "probe", "existing").expect("remove existing");
+        let order: Vec<String> = value["config"]["providerConfigRules"]["providerRules"][0]
+            ["config"]["modelOrder"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|item| item.as_str().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(order, vec!["new-a", "new-b"]);
+        let rules = value["config"]["modelConfigRules"]["providerModelRules"]
+            .as_array()
+            .expect("array");
+        assert!(
+            rules.iter().all(|rule| rule["modelId"] != "existing"),
+            "删除模型时启用/停用规则也要一起清掉"
+        );
+
+        // 再删同一个应报错
+        assert!(remove_model_in(&mut value, "probe", "existing").is_err());
+    }
 
     /// 群聊写路径端到端：新建 → 编辑 → 归档 → 恢复 → 删除（隔离 data root）。
     ///
