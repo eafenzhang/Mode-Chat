@@ -6626,7 +6626,11 @@ impl PilotApp {
     }
 
     /// 搜索命中属于谁（私聊 Bot / 群聊成员）。
-    fn find_owner_of_session(&self, session_id: &str) -> Option<Selection> {
+    /// 找出某个 session 属于谁。
+    ///
+    /// 返回 `(Selection, 命中的群成员 id)`：群成员会话要带上成员 id，
+    /// 否则 UI 只能切到群、定位不到具体成员。
+    fn find_owner_of_session(&self, session_id: &str) -> Option<(Selection, Option<String>)> {
         for (index, bot) in self.roster.bots.iter().enumerate() {
             if self.sessions.get(&bot.id).as_deref() == Some(session_id)
                 || self
@@ -6635,14 +6639,14 @@ impl PilotApp {
                     .iter()
                     .any(|id| id == session_id)
             {
-                return Some(Selection::Bot(index));
+                return Some((Selection::Bot(index), None));
             }
         }
         for (index, group) in self.roster.groups.iter().enumerate() {
             for member_id in &group.member_ids {
                 let slot = backend::member_session_key(&group_key(&group.id), member_id);
                 if self.sessions.get(&slot).as_deref() == Some(session_id) {
-                    return Some(Selection::Group(index));
+                    return Some((Selection::Group(index), Some(member_id.clone())));
                 }
             }
         }
@@ -6719,7 +6723,10 @@ impl PilotApp {
         let session_id = hit.session_id.clone();
         // JSONL 历史会话可能不在当前 Bot 的会话映射里（不同 Bot/旧槽位）：退回当前
         // 选中的 Bot 打开它，否则用户只能看到搜索结果却点不动。
-        let owner = self.find_owner_of_session(&session_id).or(match self.selection {
+        let found = self.find_owner_of_session(&session_id);
+        // 群成员会话：切到群之后要把该成员的输出行滚到可见位置。
+        let jump_member = found.as_ref().and_then(|(_, member)| member.clone());
+        let owner = found.map(|(selection, _)| selection).or(match self.selection {
             selection @ Some(Selection::Bot(_)) => selection,
             _ => None,
         });
@@ -6780,9 +6787,24 @@ impl PilotApp {
                 cx.notify();
             }
             Some(Selection::Group(index)) => {
-                // 群聊成员会话：切到该群聊（成员会话切换不在本批范围）。
                 self.find_dialog = None;
                 self.select_group(index, cx);
+                // 命中群成员会话时，把该成员的输出行滚到可见位置。
+                if let Some(member_id) = jump_member
+                    && let Some(group) = self.roster.groups.get(index)
+                {
+                    let gkey = group_key(&group.id);
+                    let member_name = self
+                        .roster
+                        .bot_by_id(&member_id)
+                        .map(|bot| bot.name.clone());
+                    if let Some(name) = member_name
+                        && let Some(chat) = self.chats.get(&gkey)
+                        && let Some(pos) = chat.member_stream.get(&name).copied()
+                    {
+                        self.scroll.scroll_to_item(pos);
+                    }
+                }
             }
             None => {
                 // 名册里找不到归属（旧会话/已删 Bot）：只关闭对话框。
@@ -16608,7 +16630,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         } else {
             let selected = self.find_selected.min(results.len().saturating_sub(1));
             for (index, hit) in results.iter().enumerate() {
-                let owner = self.find_owner_of_session(&hit.session_id);
+                let owner = self
+                    .find_owner_of_session(&hit.session_id)
+                    .map(|(selection, _)| selection);
                 let owner_label = match owner {
                     Some(Selection::Bot(index)) => self
                         .roster
