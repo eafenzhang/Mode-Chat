@@ -1,16 +1,18 @@
-//! 图标（Boxicons，MIT）。
+//! 图标（Lucide，ISC）。
 //!
 //! 为什么用 SVG 原文而不是手绘 path：GPUI 的 `svg().data()` 直接渲染同源 SVG，
 //! 几何/线宽/圆角与设计稿一致，不需要近似重画。
 //!
 //! 资产在 `assets/icons/ui/`，由 `scripts/gen-icons-lobe.py` 一次性生成
-//! （不进构建链）。画布是 24×24。线框无后缀，实心加 `-filled`。
+//! （不进构建链）。画布 24×24，stroke-width 2，round cap/join。
+//!
+//! **纯线框，没有实心变体**：选中态靠颜色和底色区分，不再切换字形。
 //!
 //! 颜色走 `currentColor`：调用方用 `text_color` 指定，悬停换色不重新栅格化。
 //!
-//! 选型历程：Phosphor（实心、方）→ Remix（线框、圆）→ **Boxicons**。
-//! Boxicons 圆润度实测 35.3%（Remix 18.2%、Phosphor 57.1%），
-//! 且 1884 组 line/fill 严格成对，菜单选中态可照旧切换。
+//! 选型历程：Phosphor（实心、方）→ Remix（线框、圆）→ Boxicons → **Lucide**。
+//! Lucide 圆润度实测 8%（全场最低＝最圆），复杂度 39 命令，ISC 许可，
+//! 且整个库只有线框一种风格。
 
 use gpui::{px, svg, Hsla, IntoElement, Rgba, Styled};
 
@@ -173,12 +175,12 @@ impl Icon {
         match self {
             Icon::Search => include_bytes!("../assets/icons/ui/search.svg"),
             Icon::Plus => include_bytes!("../assets/icons/ui/plus.svg"),
-            Icon::Ellipsis => include_bytes!("../assets/icons/ui/dots-horizontal.svg"),
-            Icon::Settings => include_bytes!("../assets/icons/ui/gear.svg"),
+            Icon::Ellipsis => include_bytes!("../assets/icons/ui/ellipsis.svg"),
+            Icon::Settings => include_bytes!("../assets/icons/ui/settings.svg"),
             Icon::X => include_bytes!("../assets/icons/ui/x.svg"),
             Icon::Check => include_bytes!("../assets/icons/ui/check.svg"),
             Icon::ArrowUp => include_bytes!("../assets/icons/ui/arrow-up.svg"),
-            Icon::Stop => include_bytes!("../assets/icons/ui/stop.svg"),
+            Icon::Stop => include_bytes!("../assets/icons/ui/circle-stop.svg"),
             Icon::ChevronLeft => include_bytes!("../assets/icons/ui/chevron-left.svg"),
             Icon::ChevronRight => include_bytes!("../assets/icons/ui/chevron-right.svg"),
             Icon::ChevronDown => include_bytes!("../assets/icons/ui/chevron-down.svg"),
@@ -186,56 +188,57 @@ impl Icon {
             Icon::Minus => include_bytes!("../assets/icons/ui/minus.svg"),
             Icon::WindowMaximize => include_bytes!("../assets/icons/ui/square.svg"),
             Icon::WindowRestore => include_bytes!("../assets/icons/ui/copy.svg"),
-            Icon::PanelRight => include_bytes!("../assets/icons/ui/sidebar.svg"),
-            Icon::Hash => include_bytes!("../assets/icons/ui/hashtag.svg"),
+            Icon::PanelRight => include_bytes!("../assets/icons/ui/panel-right.svg"),
+            Icon::Hash => include_bytes!("../assets/icons/ui/hash.svg"),
             Icon::Pin => include_bytes!("../assets/icons/ui/pin.svg"),
             Icon::Star => include_bytes!("../assets/icons/ui/star.svg"),
             Icon::Crown => include_bytes!("../assets/icons/ui/crown.svg"),
             Icon::Pencil => include_bytes!("../assets/icons/ui/pencil.svg"),
             Icon::Trash => include_bytes!("../assets/icons/ui/trash.svg"),
-            Icon::EyeOff => include_bytes!("../assets/icons/ui/eye-slash.svg"),
+            Icon::EyeOff => include_bytes!("../assets/icons/ui/eye-off.svg"),
             Icon::Archive => include_bytes!("../assets/icons/ui/archive.svg"),
             Icon::Chart => include_bytes!("../assets/icons/ui/chart-line.svg"),
-            Icon::Cpu => include_bytes!("../assets/icons/ui/chip.svg"),
-            Icon::Plug => include_bytes!("../assets/icons/ui/plug-connect.svg"),
+            Icon::Cpu => include_bytes!("../assets/icons/ui/cpu.svg"),
+            Icon::Plug => include_bytes!("../assets/icons/ui/plug.svg"),
             Icon::Calendar => include_bytes!("../assets/icons/ui/calendar.svg"),
-            Icon::Refresh => include_bytes!("../assets/icons/ui/refresh-ccw.svg"),
-            Icon::Download => include_bytes!("../assets/icons/ui/save.svg"),
+            Icon::Refresh => include_bytes!("../assets/icons/ui/refresh-cw.svg"),
+            Icon::Download => include_bytes!("../assets/icons/ui/download.svg"),
             Icon::MessageCircle => include_bytes!("../assets/icons/ui/message-circle.svg"),
-            Icon::Bot => include_bytes!("../assets/icons/ui/robot.svg"),
-            Icon::ListChecks => include_bytes!("../assets/icons/ui/task.svg"),
+            Icon::Bot => include_bytes!("../assets/icons/ui/bot.svg"),
+            Icon::ListChecks => include_bytes!("../assets/icons/ui/list-checks.svg"),
             Icon::Building => include_bytes!("../assets/icons/ui/building.svg"),
             Icon::Smile => include_bytes!("../assets/icons/ui/smile.svg"),
             Icon::Shield => include_bytes!("../assets/icons/ui/shield.svg"),
             Icon::Terminal => include_bytes!("../assets/icons/ui/terminal.svg"),
             Icon::Folder => include_bytes!("../assets/icons/ui/folder.svg"),
-            Icon::Scissors => include_bytes!("../assets/icons/ui/cut.svg"),
-            Icon::Mic => include_bytes!("../assets/icons/ui/microphone.svg"),
-            Icon::BellOff => include_bytes!("../assets/icons/ui/notification-slash.svg"),
+            Icon::Scissors => include_bytes!("../assets/icons/ui/scissors.svg"),
+            Icon::Mic => include_bytes!("../assets/icons/ui/mic.svg"),
+            Icon::BellOff => include_bytes!("../assets/icons/ui/bell-off.svg"),
             Icon::Key => include_bytes!("../assets/icons/ui/key.svg"),
-            Icon::Info => include_bytes!("../assets/icons/ui/info-circle.svg"),
-            Icon::MessageSquare => include_bytes!("../assets/icons/ui/message.svg"),
-            Icon::Sparkles => include_bytes!("../assets/icons/ui/sparkle.svg"),
-            Icon::Contacts => include_bytes!("../assets/icons/ui/group.svg"),
-            Icon::MessageCircleFilled => include_bytes!("../assets/icons/ui/message-circle-filled.svg"),
+            Icon::Info => include_bytes!("../assets/icons/ui/info.svg"),
+            Icon::MessageSquare => include_bytes!("../assets/icons/ui/message-square.svg"),
+            Icon::Sparkles => include_bytes!("../assets/icons/ui/sparkles.svg"),
+            Icon::Contacts => include_bytes!("../assets/icons/ui/users.svg"),
+            Icon::MessageCircleFilled => include_bytes!("../assets/icons/ui/message-circle.svg"),
             Icon::Brain => include_bytes!("../assets/icons/ui/brain.svg"),
             Icon::Pushpin => include_bytes!("../assets/icons/ui/pin.svg"),
             Icon::Sun => include_bytes!("../assets/icons/ui/sun.svg"),
             Icon::Moon => include_bytes!("../assets/icons/ui/moon.svg"),
             Icon::Monitor => include_bytes!("../assets/icons/ui/monitor.svg"),
-            Icon::SidebarExpand => include_bytes!("../assets/icons/ui/sidebar.svg"),
-            Icon::SidebarCollapse => include_bytes!("../assets/icons/ui/sidebar-right.svg"),
-            Icon::PaneCollapse => include_bytes!("../assets/icons/ui/sidebar-right.svg"),
-            Icon::PaneExpand => include_bytes!("../assets/icons/ui/arrow-to-left.svg"),
+            Icon::SidebarExpand => include_bytes!("../assets/icons/ui/panel-left.svg"),
+            Icon::SidebarCollapse => include_bytes!("../assets/icons/ui/panel-right.svg"),
+            Icon::PaneCollapse => include_bytes!("../assets/icons/ui/chevrons-right.svg"),
+            Icon::PaneExpand => include_bytes!("../assets/icons/ui/chevrons-left.svg"),
         }
     }
 
-    /// 细线变体。Boxicons 没有轻字重，线框本身就比实心轻，
+    /// 细线变体。Lucide 只有一档字重，线框本身就是最轻的，
     /// 因此这里与 regular 相同；保留接口是为了不动调用方。
     fn light_svg(self) -> &'static [u8] {
         self.regular_svg()
     }
 }
+
 
 
 

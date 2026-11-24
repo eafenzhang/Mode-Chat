@@ -1,4 +1,4 @@
-"""生成图标资产：Boxicons(通用线框+实心) + Iconify logos(连接器) + LobeHub(模型厂商)。"""
+"""生成图标资产：Lucide(纯线框) + Iconify logos(连接器) + LobeHub(模型厂商)。"""
 import argparse
 import json
 import os
@@ -14,19 +14,21 @@ APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(APP, "assets", "icons")
 
 # ---- Phosphor：Rust 枚举名 → 图标名 -----------------------------------------
-# ---- Boxicons：Icon 枚举名 -> Boxicons 图标名（线框；实心自动加 -filled）----------
+# ---- Lucide：Icon 枚举名 -> Lucide 图标名 -------------------------------------
 #
-# Boxicons 是 24×24 网格、MIT、line/fill 严格成对（1884 对）。
-# 线框版无后缀，实心版加 `-filled`。
-BOX = {
+# Lucide 是 24×24 网格、stroke-width 2、round cap/join 的**纯线框**图标库（ISC）。
+# 没有实心变体——选中态靠颜色和底色区分，不再切换字形。
+#
+# 唯一不能直接对应的是 `stop`：Lucide 没有裸方块，用 `circle-stop`（圆内方块）。
+LU = {
     "Search": "search",
     "Plus": "plus",
-    "Ellipsis": "dots-horizontal",
-    "Settings": "gear",
+    "Ellipsis": "ellipsis",
+    "Settings": "settings",
     "X": "x",
     "Check": "check",
     "ArrowUp": "arrow-up",
-    "Stop": "stop",
+    "Stop": "circle-stop",
     "ChevronLeft": "chevron-left",
     "ChevronRight": "chevron-right",
     "ChevronDown": "chevron-down",
@@ -34,75 +36,75 @@ BOX = {
     "Minus": "minus",
     "WindowMaximize": "square",
     "WindowRestore": "copy",
-    "PanelRight": "sidebar",
-    "Hash": "hashtag",
+    "PanelRight": "panel-right",
+    "Hash": "hash",
     "Pin": "pin",
     "Star": "star",
     "Crown": "crown",
     "Pencil": "pencil",
     "Trash": "trash",
-    "EyeOff": "eye-slash",
+    "EyeOff": "eye-off",
     "Archive": "archive",
     "Chart": "chart-line",
-    "Cpu": "chip",
-    "Plug": "plug-connect",
+    "Cpu": "cpu",
+    "Plug": "plug",
     "Calendar": "calendar",
-    "Refresh": "refresh-ccw",
-    "Download": "save",
+    "Refresh": "refresh-cw",
+    "Download": "download",
     "MessageCircle": "message-circle",
-    "Bot": "robot",
-    "ListChecks": "task",
+    "Bot": "bot",
+    "ListChecks": "list-checks",
     "Building": "building",
     "Smile": "smile",
     "Shield": "shield",
     "Terminal": "terminal",
     "Folder": "folder",
-    "Scissors": "cut",
-    "Mic": "microphone",
-    "BellOff": "notification-slash",
+    "Scissors": "scissors",
+    "Mic": "mic",
+    "BellOff": "bell-off",
     "Key": "key",
-    "Info": "info-circle",
-    "MessageSquare": "message",
-    "Sparkles": "sparkle",
-    "Contacts": "group",
-    "MessageCircleFilled": "message-circle-filled",
+    "Info": "info",
+    "MessageSquare": "message-square",
+    "Sparkles": "sparkles",
+    "Contacts": "users",
+    # 纯线框：Filled 变体与普通版共用同一资产
+    "MessageCircleFilled": "message-circle",
     "Brain": "brain",
     "Pushpin": "pin",
     "Sun": "sun",
     "Moon": "moon",
     "Monitor": "monitor",
-    "SidebarExpand": "sidebar",
-    # 折叠 = 箭头指向右边缘；展开 = 指向左
-    "SidebarCollapse": "sidebar-right",
-    "PaneCollapse": "sidebar-right",
-    "PaneExpand": "arrow-to-left",
+    "SidebarExpand": "panel-left",
+    "SidebarCollapse": "panel-right",
+    "PaneCollapse": "chevrons-right",
+    "PaneExpand": "chevrons-left",
 }
 
 # 侧栏 / 设置菜单：21 组，(线, 面)
 MENU = {
-    "chat": ("message-circle", "message-circle-filled"),
-    "contacts": ("group", "group-filled"),
-    "channels": ("hashtag", "hashtag-filled"),
-    "gear": ("gear", "gear-filled"),
-    "sliders": ("slider", "slider-filled"),
-    "models": ("layers", "layers-filled"),
-    "plugins": ("puzzle", "puzzle-filled"),
-    # 智能体用 CPU，「Bot」用机器人：两个都用 robot 会撞脸
-    "agents": ("chip", "chip-filled"),
-    "bot": ("robot", "robot-filled"),
-    "team": ("community", "community-filled"),
-    "memory": ("brain", "brain-filled"),
-    "im": ("mobile", "mobile-filled"),
-    "connectors": ("plug-connect", "plug-connect-filled"),
-    "schedules": ("calendar", "calendar-filled"),
-    "keys": ("key", "key-filled"),
-    "abilities": ("bolt", "bolt-filled"),
-    "usage": ("bar-chart", "bar-chart-filled"),
-    "about": ("info-circle", "info-circle-filled"),
-    "feedback": ("megaphone", "megaphone-filled"),
-    "browser": ("globe", "globe-filled"),
-    "computer": ("desktop", "desktop-filled"),
-    "more": ("dots-horizontal", "dots-horizontal-filled"),
+    "chat": ("message-circle", "message-circle"),
+    "contacts": ("users", "users"),
+    "channels": ("hash", "hash"),
+    "gear": ("settings", "settings"),
+    "sliders": ("sliders-horizontal", "sliders-horizontal"),
+    "models": ("layers", "layers"),
+    "plugins": ("puzzle", "puzzle"),
+    # 智能体用 CPU，「Bot」用机器人：两个都用 bot 会撞脸
+    "agents": ("cpu", "cpu"),
+    "bot": ("bot", "bot"),
+    "team": ("users-round", "users-round"),
+    "memory": ("brain", "brain"),
+    "im": ("smartphone", "smartphone"),
+    "connectors": ("plug", "plug"),
+    "schedules": ("calendar", "calendar"),
+    "keys": ("key", "key"),
+    "abilities": ("zap", "zap"),
+    "usage": ("chart-column", "chart-column"),
+    "about": ("info", "info"),
+    "feedback": ("megaphone", "megaphone"),
+    "browser": ("globe", "globe"),
+    "computer": ("monitor", "monitor"),
+    "more": ("ellipsis", "ellipsis"),
 }
 
 # 线框字重：regular 用作默认，light 用作「细线」场景（替代原来的 stroke-width 微调）
@@ -215,7 +217,7 @@ def write(path, text):
 
 
 def main():
-    box, box_w, box_h = load_set("boxicons")
+    lu, lu_w, lu_h = load_set("lucide")
     logos, logo_w, logo_h = load_set("logos")
 
     ui_dir = os.path.join(ASSETS, "ui")
@@ -232,7 +234,7 @@ def main():
             if d == old_ph:
                 os.rmdir(d)
 
-    wanted = set(BOX.values())
+    wanted = set(LU.values())
     for line, solid in MENU.values():
         wanted.add(line)
         wanted.add(solid)
@@ -240,11 +242,11 @@ def main():
     ok, fail = 0, []
 
     for name in sorted(wanted):
-        entry = box.get(name)
+        entry = lu.get(name)
         if not entry:
-            fail.append(("boxicons", name))
+            fail.append(("lucide", name))
             continue
-        write(os.path.join(ui_dir, name + ".svg"), iconify_svg(entry, box_w, box_h))
+        write(os.path.join(ui_dir, name + ".svg"), iconify_svg(entry, lu_w, lu_h))
         ok += 1
 
     # 单色源：simple-icons 按文件名、mdi/tdesign 走包内 icons.json
