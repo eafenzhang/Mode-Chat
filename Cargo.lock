@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "atomic-file"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "windows-sys 0.61.2",
@@ -551,7 +551,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "automation-repo"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "model-selection",
  "rusqlite",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "automation-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "automation-repo",
  "automation-schedule",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "automation-schedule"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "automation-service"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "automation-repo",
  "automation-schedule",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "bot-gpui-pilot"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes",
  "arboard",
@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "bot-team"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "bots-service"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "atomic-file",
  "base64 0.22.1",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "connectors-service"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "atomic-file",
  "serde",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "credential-store"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "atomic-file",
  "libc",
@@ -4188,7 +4188,7 @@ dependencies = [
 
 [[package]]
 name = "model-selection"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7029,7 +7029,7 @@ checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
 
 [[package]]
 name = "tasks-db"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -8953,7 +8953,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workspace-identity"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "sha2 0.10.9",
 ]
