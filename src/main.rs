@@ -10216,6 +10216,57 @@ impl PilotApp {
                         )
                 }));
 
+                // 实时预览：`describe` 是纯格式化（不校验、不读时钟、不落盘），
+                // 直接喂用户当下填的值即可；字段没填完时给一句人话而不是"每  09:00"。
+                let rule_preview = {
+                    use crate::schedule_builder::{describe, When};
+                    let time_text = time_input.read(cx).content().trim().to_string();
+                    let every_text = every_input.read(cx).content().trim().to_string();
+                    let parsed = parse_hhmm(&time_text);
+                    let when = match mode {
+                        0 => Some(When::Once { at_ms: 0 }),
+                        3 => every_text
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|minutes| (1..=10_080).contains(minutes))
+                            .map(|minutes| When::Every { minutes }),
+                        _ => {
+                            let weekdays: Vec<u32> = days
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, on)| **on)
+                                .map(|(index, _)| index as u32 + 1)
+                                .collect();
+                            match parsed {
+                                None => None,
+                                Some(_) if mode == 2 && weekdays.is_empty() => None,
+                                Some((hour, minute)) if mode == 2 => Some(When::Weekly {
+                                    weekdays,
+                                    hour,
+                                    minute,
+                                }),
+                                Some((hour, minute)) => Some(When::Daily { hour, minute }),
+                            }
+                        }
+                    };
+                    match when {
+                        // `at_ms: 0` 只用于占位；真实的绝对时间在创建时按"几小时后"算。
+                        Some(When::Once { .. }) => {
+                            tri!("{once_hours} 小时后跑一次", "Runs once in {once_hours}h").to_string()
+                        }
+                        Some(when) => describe(&when),
+                        None => {
+                            if mode == 3 {
+                                i18n::t("填写 1–10080 分钟").to_string()
+                            } else if mode == 2 && days.iter().all(|on| !*on) {
+                                i18n::t("至少选一天").to_string()
+                            } else {
+                                i18n::t("时间格式是 HH:mm，例如 09:30").to_string()
+                            }
+                        }
+                    }
+                };
+
                 let panel = ui::DetailPanel::new(i18n::t("新建定时任务"))
                     .subtitle(format!(
                         "{} · {}",
@@ -10234,15 +10285,7 @@ impl PilotApp {
                         &prompt_input,
                         120.,
                     ))
-                    .body(ui::note(tri!(
-                        "规则：{}",
-                        "Rule: {}",
-                        crate::schedule_builder::describe(&match mode {
-                            0 => crate::schedule_builder::When::Once { at_ms: 0 },
-                            3 => crate::schedule_builder::When::Every { minutes: 60 },
-                            _ => crate::schedule_builder::When::Daily { hour: 9, minute: 0 },
-                        })
-                    )))
+                    .body(ui::note(tri!("规则：{}", "Rule: {}", rule_preview)))
                     .action(
                         ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
                             move |this, _event, _window, cx| {
