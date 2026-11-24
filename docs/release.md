@@ -6,8 +6,9 @@
 自动更新清单也从同仓读。
 
 > 历史：2026-11-24 之前是「私有源码库 + 公开更新源库」双仓结构
-> （`Mode-Chat` + `Mode-Chat-Releases`）。合并后 `Mode-Chat-Releases` 仅保留
-> 历史版本供老客户端过渡，不再更新。
+> （`Mode-Chat` + `Mode-Chat-Releases`）。合并后 `Mode-Chat-Releases`
+> **已归档为只读**，仅保留 v0.2.1 及更早版本的资产，供旧客户端升级过渡。
+> 归档不影响 Release 下载：已实测 v0.2.1 / v0.2.0 清单仍可匿名获取（HTTP 200）。
 
 ## CI（首选）
 
