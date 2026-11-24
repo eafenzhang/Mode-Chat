@@ -845,6 +845,112 @@ fn provider_rules_mut(value: &mut serde_json::Value) -> Option<&mut Vec<serde_js
         .as_array_mut()
 }
 
+/// 读某个 provider 的完整配置（测试连接用）。
+///
+/// 返回 `(base_url, api_key)`；缺任意一项都返回 None——
+/// 没有 key 就没法测，没有地址就只能用模板默认值。
+pub fn provider_endpoint(provider_id: &str) -> Option<(String, String)> {
+    let bytes = std::fs::read(provider_config_path()).ok()?;
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    let rules = provider_rules(&value)?;
+    let rule = rules.iter().find(|rule| {
+        rule.get("providerId").and_then(|v| v.as_str()) == Some(provider_id)
+    })?;
+    let config = rule.get("config")?;
+    let access = config.get("access")?;
+    let api_key = access.get("apiKey").and_then(|v| v.as_str())?.trim();
+    if api_key.is_empty() {
+        return None;
+    }
+    // 地址可能挂在 provider 上，也可能在模板里；取不到就回落到官方默认。
+    let base_url = config
+        .get("baseUrl")
+        .or_else(|| config.get("apiBase"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_base_url(provider_id));
+    Some((base_url, api_key.to_string()))
+}
+
+/// 各 provider 的默认 API 地址（与官方文档一致）。
+fn default_base_url(provider_id: &str) -> String {
+    match provider_id {
+        "deepseek" => "https://api.deepseek.com".to_string(),
+        "openai" => "https://api.openai.com".to_string(),
+        "anthropic" => "https://api.anthropic.com".to_string(),
+        "moonshot" => "https://api.moonshot.cn".to_string(),
+        "zhipu" | "zhipu-coding-plan" => "https://open.bigmodel.cn/api/paas/v4".to_string(),
+        "qwen" | "dashscope" => "https://dashscope.aliyuncs.com/compatible-mode".to_string(),
+        "siliconflow" => "https://api.siliconflow.cn".to_string(),
+        other => format!("https://api.{other}.com"),
+    }
+}
+
+/// 测试 provider 连通性：发一个最小请求，按状态码判定。
+///
+/// 为什么用 /chat/completions 而不是 /models：不是所有 provider 都实现
+/// `/models`，但都能跑一次补全。用 1 token + 极短 prompt，成本可忽略。
+pub async fn probe_provider(provider_id: &str) -> Result<String, String> {
+    let Some((base_url, api_key)) = provider_endpoint(provider_id) else {
+        return Err("没有配置 API Key，无法测试".to_string());
+    };
+    let base = base_url.trim_end_matches('/');
+    // 有些 provider 的 baseUrl 已经带 /v1，避免拼成 /v1/v1。
+    let url = if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    };
+    let body = serde_json::json!({
+        "model": "nonexistent-probe-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("创建 HTTP 客户端失败：{error}"))?;
+    let payload = serde_json::to_vec(&body).unwrap_or_default();
+    let response = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .body(payload)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let detail = if error.is_timeout() {
+                "请求超时（15 秒）".to_string()
+            } else if error.is_connect() {
+                "连接失败，地址不可达".to_string()
+            } else {
+                error.to_string()
+            };
+            return Err(format!("测试失败：{detail}"));
+        }
+    };
+    let status = response.status();
+    match status.as_u16() {
+        // 2xx：通了
+        200..=299 => Ok(format!("连通（HTTP {}）", status.as_u16())),
+        // 400/422：key 有效，只是请求体被挑刺（模型名不存在是最常见原因）
+        400 | 422 => Ok(format!(
+            "连通，认证有效（HTTP {}，模型名按预期被拒）",
+            status.as_u16()
+        )),
+        401 | 403 => Err("API Key 无效或被拒绝（HTTP 401/403）".to_string()),
+        404 => Err(format!(
+            "地址不存在（HTTP 404）：请检查 base URL 是否正确（当前 {url}）"
+        )),
+        429 => Ok("连通，但触发限流（HTTP 429）；说明认证有效".to_string()),
+        other => Err(format!("服务端返回 HTTP {other}")),
+    }
+}
+
 pub fn provider_entries() -> Vec<ProviderEntry> {
     let Ok(bytes) = std::fs::read(provider_config_path()) else {
         return Vec::new();

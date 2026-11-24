@@ -11785,6 +11785,42 @@ impl PilotApp {
                     })),
                 );
             }
+            // 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+            if has_key {
+                let pid = provider.provider_id.clone();
+                actions = actions.child(
+                    ui::button_ghost(
+                        SharedString::from(format!("provider-test-{}", pid)),
+                        i18n::t("测试"),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        let pid = pid.clone();
+                        this.toast(i18n::t("正在测试连接…"), cx);
+                        // reqwest 要 tokio runtime；GPUI 的 background_executor
+                        // 不是 tokio，必须用 tokio_block_on 落到项目自建的 runtime。
+                        let task = cx.background_executor().spawn(async move {
+                            tokio_block_on(data::probe_provider(&pid))
+                        });
+                        cx.spawn(async move |this, cx| {
+                            let result = task.await;
+                            let _ = this.update(cx, |this, cx| {
+                                match result {
+                                    Ok(detail) => this.toast(
+                                        tri!("连接正常：{detail}", "Connected: {detail}"),
+                                        cx,
+                                    ),
+                                    Err(message) => this.toast(
+                                        tri!("测试失败：{message}", "Test failed: {message}"),
+                                        cx,
+                                    ),
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                    })),
+                );
+            }
             if editable {
                 let pid = provider.provider_id.clone();
                 let pname = provider.provider_name.clone();
@@ -14750,10 +14786,6 @@ impl PilotApp {
     /// 宿主能力缺口 + 数据目录入口。
     fn settings_page_more(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let rows = vec![
-            (
-                i18n::t("Provider 测试连接"),
-                i18n::t("协议没有统一探测接口，暂未实现"),
-            ),
             (
                 i18n::t("连接器 OAuth"),
                 i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据"),
