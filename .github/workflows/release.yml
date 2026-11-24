@@ -3,6 +3,14 @@ name: Mode Chat Release (Windows)
 on:
   push:
     branches: [main]
+    # 只改文档 / 图标许可 / 忽略文件时不需要发版，否则每推一次就多一个 patch 版本。
+    # 要发版就改代码，或用 workflow_dispatch 显式指定版本。
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".gitignore"
+      - "assets/icons/LICENSE*"
     tags: ["v*"]
   workflow_dispatch:
     inputs:
