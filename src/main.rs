@@ -3270,7 +3270,7 @@ impl PilotApp {
             bot_team_tab: 0,
             settings_focus: cx.focus_handle(),
             tab_focus: {
-                let names = [
+                let mut names = vec![
                     "side-new",
                     "header-capsule",
                     "composer-plus",
@@ -3282,6 +3282,14 @@ impl PilotApp {
                     "panel-tab-1",
                     "panel-tab-2",
                 ];
+                // 设置页导航是固定 15 项，逐个登记即可让 Tab 走过去。
+                // 列表行（Bot/群聊）数量动态，改用上下键切换，不进这张表。
+                for index in 0..15 {
+                    names.push(settings_nav_focus_key(index));
+                }
+                for index in 0..32 {
+                    names.push(sidebar_row_focus_key(index));
+                }
                 names
                     .into_iter()
                     .map(|name| (name, cx.focus_handle().tab_stop(true)))
@@ -17098,10 +17106,20 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             let bot = &bots[index];
             let active = selection == Some(Selection::Bot(index));
             bot_rows = bot_rows.child(
-                nav_row(("bot-row", index), active)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.select_bot(index, cx);
-                    }))
+                {
+                    let focus = self.tab_focus[sidebar_row_focus_key(index)].clone();
+                    let focused = focus.is_focused(window);
+                    nav_row(("bot-row", index), active)
+                        .with_focus(
+                            &focus,
+                            focused,
+                            move |this, _window, cx| this.select_bot(index, cx),
+                            cx,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.select_bot(index, cx);
+                        }))
+                }
                     .child(
                         div()
                             .relative()
@@ -21342,6 +21360,16 @@ fn truncate_chars(text: &str, limit: usize) -> String {
     result
 }
 
+/// 焦点指示：贴在元素左侧的 3px 内阴影。
+///
+/// 用 inset 阴影而不是 `border_l_3()`：边框会占布局空间，把固定宽度的
+/// 侧栏/设置导航撑破；阴影只在绘制层，不影响布局。
+fn focus_ring_left(color: Rgba) -> gpui::BoxShadow {
+    gpui::BoxShadow::new(px(3.), px(0.), Hsla::from(color))
+        .inset()
+        .spread_radius(px(0.))
+}
+
 fn nav_row(id: impl Into<gpui::ElementId>, active: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
@@ -21356,6 +21384,44 @@ fn nav_row(id: impl Into<gpui::ElementId>, active: bool) -> gpui::Stateful<gpui:
         .cursor_pointer()
         .bg(if active { theme::selected() } else { theme::panel() })
         .hover(|style| style.bg(theme::hover()))
+}
+
+/// 给侧栏行挂焦点 + 焦点描边 + Enter 激活。
+///
+/// 抽成扩展 trait 而不是改 `nav_row` 签名：`nav_row` 用在侧栏、设置页、
+/// 群成员等多个位置，其中有些不需要 Tab；用 trait 只在需要的地方加。
+trait NavRowFocus: Sized {
+    /// `focused` 为当前是否持有焦点；`activate` 是 Enter 时要干的事。
+    fn with_focus(
+        self,
+        handle: &gpui::FocusHandle,
+        focused: bool,
+        activate: impl Fn(&mut crate::PilotApp, &mut Window, &mut Context<crate::PilotApp>)
+            + 'static,
+        cx: &mut Context<crate::PilotApp>,
+    ) -> Self;
+}
+
+impl NavRowFocus for gpui::Stateful<gpui::Div> {
+    fn with_focus(
+        self,
+        handle: &gpui::FocusHandle,
+        focused: bool,
+        activate: impl Fn(&mut crate::PilotApp, &mut Window, &mut Context<crate::PilotApp>)
+            + 'static,
+        cx: &mut Context<crate::PilotApp>,
+    ) -> Self {
+        // 焦点态：浅底 + inset 左侧强调条（border 会撑宽容器，不能用）。
+        let mut el = self.track_focus(handle).key_context("TabStop");
+        if focused {
+            el = el
+                .bg(theme::accent_soft())
+                .shadow(vec![focus_ring_left(theme::accent())]);
+        }
+        el.on_action(cx.listener(move |this, _: &ActivateTabStop, window, cx| {
+            activate(this, window, cx);
+        }))
+    }
 }
 
 fn two_line(title: String, subtitle: String, active: bool, pinned: bool) -> impl IntoElement {
@@ -21533,6 +21599,46 @@ fn agent_icon(id: &str) -> gpui::AnyElement {
 ///
 /// 「Bot团队」用 `Community`（人群轮廓）而不是 `Bot`（机器人）：
 /// 这一页同时管 Bot、群聊和侧栏分组，单个机器人图标表达不了「团队」。
+/// 设置页导航行的焦点句柄 key（`tab_focus` 是 `HashMap<&'static str, _>`，
+/// 所以必须用静态字符串，不能 format!）。
+/// 侧栏行焦点池的 key（`tab_focus` 要静态字符串）。
+///
+/// 侧栏行数量动态，没法像设置导航那样逐项登记；这里开一个 32 位的池子，
+/// 超出部分（极少见）退回无焦点，不影响可用性。
+fn sidebar_row_focus_key(index: usize) -> &'static str {
+    const KEYS: [&str; 32] = [
+        "sidebar-row-0", "sidebar-row-1", "sidebar-row-2", "sidebar-row-3",
+        "sidebar-row-4", "sidebar-row-5", "sidebar-row-6", "sidebar-row-7",
+        "sidebar-row-8", "sidebar-row-9", "sidebar-row-10", "sidebar-row-11",
+        "sidebar-row-12", "sidebar-row-13", "sidebar-row-14", "sidebar-row-15",
+        "sidebar-row-16", "sidebar-row-17", "sidebar-row-18", "sidebar-row-19",
+        "sidebar-row-20", "sidebar-row-21", "sidebar-row-22", "sidebar-row-23",
+        "sidebar-row-24", "sidebar-row-25", "sidebar-row-26", "sidebar-row-27",
+        "sidebar-row-28", "sidebar-row-29", "sidebar-row-30", "sidebar-row-31",
+    ];
+    KEYS[index % KEYS.len()]
+}
+
+fn settings_nav_focus_key(index: usize) -> &'static str {
+    match index {
+        0 => "settings-nav-0",
+        1 => "settings-nav-1",
+        2 => "settings-nav-2",
+        3 => "settings-nav-3",
+        4 => "settings-nav-4",
+        5 => "settings-nav-5",
+        6 => "settings-nav-6",
+        7 => "settings-nav-7",
+        8 => "settings-nav-8",
+        9 => "settings-nav-9",
+        10 => "settings-nav-10",
+        11 => "settings-nav-11",
+        12 => "settings-nav-12",
+        13 => "settings-nav-13",
+        _ => "settings-nav-14",
+    }
+}
+
 fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     match index {
         0 => menu_icons::MenuIcon::Sliders,
@@ -24269,7 +24375,7 @@ impl PilotApp {
         rows
     }
 
-    fn wecom_list(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn wecom_list(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 设置页菜单与会话列表同宽（246），切页时左列不跳变。
         let list = div()
             .w(px(wecom_theme::LIST_WIDTH))
@@ -24302,9 +24408,30 @@ impl PilotApp {
                 }
                 // 尾部信息页照 DS 用次级色（关于/反馈/浏览器/电脑操控/更多）。
                 let secondary = index >= 12;
+                let nav_focus = self.tab_focus[settings_nav_focus_key(index)].clone();
+                let nav_focused = nav_focus.is_focused(window);
                 rows = rows.child(
                     div()
                         .id(SharedString::from(format!("wechat-set-{index}")))
+                        .track_focus(&nav_focus)
+                        .key_context("TabStop")
+                        // 焦点态只用底色 + inset 阴影：border 会增加元素宽度，
+                        // 把固定 246px 宽的侧栏撑破（实测整体错位 3px）。
+                        .when(nav_focused, |el| {
+                            el.bg(wecom_theme::nav_item_hover_bg())
+                                .shadow(vec![focus_ring_left(wecom_theme::send_enabled())])
+                        })
+                        .on_action(cx.listener(
+                            move |this, _: &ActivateTabStop, window, cx| {
+                                this.settings_tab = index;
+                                this.im_create = None;
+                                this.im_qr_page = None;
+                                this.automations_view = None;
+                                this.usage_totals_view = None;
+                                this.settings_focus.focus(window, cx);
+                                cx.notify();
+                            },
+                        ))
                         .h(px(40.))
                         // 滚动条槽占 6px：反向抵消，选中/悬浮底色才铺到面板右缘。
                         .mr(px(-6.))
