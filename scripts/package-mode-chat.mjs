@@ -5,7 +5,7 @@
  * 产物（dist/mode-chat/）：
  *   - `ModeChat-v<版本>-windows-x64.zip`：`ModeChat.exe` + `README.md`
  *   - `ModeChat-v<版本>-setup.exe`：NSIS 按用户安装（%LOCALAPPDATA%\Programs\ModeChat）
- *   - `gpui-latest.json`：更新清单（指向 Mode-Chat-Releases 的 zip + sha256/size）
+ *   - `gpui-latest.json`：更新清单（指向 Mode-Chat 的 zip + sha256/size）
  *
  * 用法：
  *   node scripts/package-mode-chat.mjs
@@ -249,7 +249,7 @@ function sha256File(path) {
 const zipSha256 = sha256File(zipPath);
 const releaseBase = (
   process.env.MODE_CHAT_RELEASE_BASE_URL ??
-  `https://github.com/eafenzhang/Mode-Chat-Releases/releases/download/v${version}`
+  `https://github.com/eafenzhang/Mode-Chat/releases/download/v${version}`
 ).replace(/\/+$/, "");
 const manifestPath = join(distDir, "gpui-latest.json");
 writeFileSync(

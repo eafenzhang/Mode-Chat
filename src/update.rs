@@ -1,6 +1,6 @@
 //! 更新：探测 + 下载校验 + 自替换（P4-3 / L5）。
 //!
-//! 清单是 Mode-Chat-Releases 的 `gpui-latest.json`（`platforms.windows-x86_64`）
+//! 清单是 Mode-Chat 的 `gpui-latest.json`（`platforms.windows-x86_64`）
 //! （兼容 `windows-x64`）下读 `url` / `sha256` / `size`。没有 sha256 的清单只做探测，
 //! 不提供自更新（fail closed）。
 //!
@@ -19,10 +19,10 @@ use sha2::{Digest, Sha256};
 
 /// 更新源清单端点：GPUI 专用清单（与壳的 Tauri `latest.json` 分开，避免互相覆盖）。
 pub const MANIFEST_ENDPOINT: &str =
-    "https://github.com/eafenzhang/Mode-Chat-Releases/releases/latest/download/gpui-latest.json";
+    "https://github.com/eafenzhang/Mode-Chat/releases/latest/download/gpui-latest.json";
 
 /// 发布页（人工下载入口）。
-pub const RELEASES_PAGE: &str = "https://github.com/eafenzhang/Mode-Chat-Releases/releases/latest";
+pub const RELEASES_PAGE: &str = "https://github.com/eafenzhang/Mode-Chat/releases/latest";
 
 /// 可下载的更新目标。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,7 +488,7 @@ mod tests {
         // 与 Tauri 的 latest.json 分开，否则会读到壳的清单（没有 GPUI 包的 sha256）。
         assert_eq!(
             MANIFEST_ENDPOINT,
-            "https://github.com/eafenzhang/Mode-Chat-Releases/releases/latest/download/gpui-latest.json"
+            "https://github.com/eafenzhang/Mode-Chat/releases/latest/download/gpui-latest.json"
         );
     }
 
