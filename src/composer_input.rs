@@ -11,7 +11,7 @@ use gpui::{
     Subscription, Window, div, px,
 };
 
-use crate::{theme, wecom_theme};
+use crate::{theme, ui_kit, wecom_theme};
 
 gpui::actions!(composer, [Send, SendSecondary]);
 
@@ -185,7 +185,7 @@ impl Render for ComposerInput {
                     } else {
                         theme::FONT_FAMILY
                     })
-                    .text_size(px(14.))
+                    .text_size(px(ui_kit::T_PAGE))
                     .line_height(px(22.)),
             )
     }

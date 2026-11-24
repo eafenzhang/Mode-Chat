@@ -113,6 +113,26 @@ pub fn accent() -> Rgba {
     }
 }
 
+// ---- 可点击 ----
+
+/// 可点击元素的唯一入口（规范 §6：页面不许自己写 `.cursor_pointer()`）。
+///
+/// 由 `scripts/ui-lint.ps1` 规则 1 强制：`cursor_pointer` 只允许出现在本文件。
+/// 用法：`div()...pointer()`（需要 `use crate::ui_kit::Clickable as _;`）。
+///
+/// 为什么是 trait 而不是函数：调用方是形状各异的手写 `div()` 链（行、图标按钮、
+/// 分段、徽标…），包成组件会改变布局参数；trait 只接管"鼠标变成手"这一个职责，
+/// 视觉零变化，可逐页替换。
+pub trait Clickable: Sized + Styled {
+    /// 鼠标悬停时显示手型光标。
+    fn pointer(mut self) -> Self {
+        self.style().mouse_cursor = Some(gpui::CursorStyle::PointingHand);
+        self
+    }
+}
+
+impl<T: Styled> Clickable for T {}
+
 // ---- 文字 ----
 
 /// 辅助文字：11/16，次级色。

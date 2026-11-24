@@ -124,6 +124,15 @@
 | `field(label, input)` | 表单字段：标签 `T_Label` + 输入框 |
 | `value_box(value, label)` | 只读值块：用于路径、诊断信息 |
 
+### 6.6 可点击（2026-11-25 新增）
+
+| 组件 | 说明 |
+| --- | --- |
+| `Clickable::pointer()` | **可点击元素的唯一入口**：trait 扩展，`use crate::ui_kit::Clickable as _;` 后任意 `div()` 链可直接 `.pointer()`。现有 139 处裸 `.cursor_pointer()` 全走这一层，`ui-lint.ps1` 规则 1 强制 |
+
+为什么是 trait 而不是函数：调用方是形状各异的手写 `div()` 链（列表行、图标按钮、分段、徽标），
+包成组件会改变布局参数；trait 只接管"鼠标变成手"一个职责，视觉零变化，可逐页替换。
+
 ## 7. 页面骨架
 
 ### 7.1 设置页
@@ -175,7 +184,7 @@
 | # | 项 | 状态 |
 | --- | --- | --- |
 | 1 | 128 处裸 `rounded(px(N))` → `theme::RADIUS_*` | ✅ 已完成（剩 1 处动态值 `size * 0.24`，按头像等比缩放，豁免） |
-| 2 | 141 处裸 `cursor_pointer` → 组件 | ⬜ 待做 |
+| 2 | 141 处裸 `cursor_pointer` → 组件（2026-11-25 `scripts/ui-lint.ps1 -Enforce` 复测：**0** 处） | ✅ 已完成（`ui_kit::Clickable::pointer()` 接管，139 处全改完） |
 | 3 | 24 个弹窗按 §8 分类迁移 | ✅ 已完成（只剩 6 个：5 个删除确认 + 1 个插件开关确认，按 §8 保留） |
 
 ### 10.1 图标库（2026-11-24 决定）
@@ -224,3 +233,30 @@ Lucide 是 24 网格、stroke-width 2，图形约占 85%，与旧版相当。
 - 设置面板的开合检测放在 `render` 顶部按"上一帧是否显示"比较，因为
   `settings_detail` 有 60+ 处赋值点，逐处加钩子必然遗漏。
 - 改窗口尺寸必须走 `window.defer`：在 `render` 内直接 resize 会破坏当前帧布局。
+
+---
+
+## 11. 令牌门禁（2026-11-25 新增）
+
+`scripts/ui-lint.ps1` 把 §2/§3/§4/§5 的令牌要求变成可执行检查，四条规则：
+
+| # | 规则 | 只允许出现在 | 当前违规 |
+| --- | --- | --- | --- |
+| 1 | `.cursor_pointer()` | `src/ui_kit.rs` | **0**（已全部改用 `ui_kit::Clickable::pointer()`） |
+| 2 | `.rounded(px(<数字字面量>))` | `src/ui_kit.rs`、`src/theme.rs` | **0**（令牌参数与 `size * 0.24` 等比头像不算违规） |
+| 3 | `text_size(px(N))` | `N` 必须是 `T_LABEL/T_BODY/T_TITLE/T_PAGE/T_METRIC` 的值 | **0**（残留 10/12.5/14/17 全并入令牌） |
+| 4 | `rgb(...)` | 主题与图标着色白名单文件 | **0**（5 处换 `theme::accent_ink()` / `wecom_theme::list_title_selected()`） |
+
+四项合计 **0 处**，`-Enforce` 已可用于 CI 阻断（2026-11-25 达成）。
+
+用法：
+
+```powershell
+# 报告模式（默认，不改退出码；收敛期间用）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1
+
+# 门禁模式（CI 用，有违规即 exit 1）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
+```
+
+收敛完成后把 release.yml 的调用改成 `-Enforce`，违规即阻断发布。

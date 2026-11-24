@@ -24,6 +24,7 @@ mod avatar;
 mod autostart;
 mod backend;
 mod bot_icon;
+mod bot_tools;
 mod brand_icons;
 mod capabilities;
 mod connectors;
@@ -44,6 +45,10 @@ mod process_console;
 mod rpi_engine;
 mod mcp_host;
 mod memory_review;
+mod memory_tools;
+mod model_limits;
+mod privacy;
+mod schedule_builder;
 mod automations;
 mod automation_scheduler;
 mod automation_scope;
@@ -111,6 +116,8 @@ use bot_team::group::group_member_workspace_identity;
 use data::{Bot, Group, ModelSpec, Roster};
 use simple_input::SimpleInput;
 use composer_input::{ComposerInput, Send, SendSecondary};
+// 可点击样式的唯一入口（规范 §6）：页面一律 `.pointer()`，不写裸 `.pointer()`。
+use ui_kit::Clickable as _;
 
 /// kit AlertDialog 关闭回调（统一恢复焦点用）。
 type DialogFocusRestore = std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>;
@@ -891,6 +898,8 @@ struct ChatState {
     pending_attachments: Vec<backend::AttachmentUpload>,
     /// 与 `pending_attachments` 对齐的本地预览路径（图片才有）。
     pending_attachment_previews: Vec<Option<std::path::PathBuf>>,
+    /// 上下文压缩状态（v0.5.0 W4）：Some(true)=正在压缩，Some(false)=刚结束。
+    compacting: Option<bool>,
 }
 
 /// 一轮 token 用量（内嵌引擎的 assistant usage 汇总）。
@@ -1038,6 +1047,8 @@ enum PaletteCmd {
     OpenSettings,
     PickModel,
     EditAllowlist,
+    /// 立即压缩当前会话上下文（W4）。
+    Compact,
     SelectBot(usize),
     SelectGroup(usize),
 }
@@ -1054,6 +1065,17 @@ struct FindState {
     results: Vec<session_db::SearchHit>,
 }
 
+/// 阶段上正在进行的二次操作（通过要填证据、打回要填原因、验收线要改）。
+#[derive(Clone, PartialEq, Eq)]
+enum GoalStageEdit {
+    /// 填证据后走 `PassStage`。
+    Pass { stage_id: String },
+    /// 填原因后走 `ReworkStage`。
+    Rework { stage_id: String },
+    /// 改这一阶段的验收线，走 `SetAcceptance { stage_id: Some }`。
+    Acceptance { stage_id: String },
+}
+
 /// 群目标编辑对话框状态（写回 `{data_root}/v2/groups/<gid>/goal.json`）。
 struct GroupGoalState {
     group_id: String,
@@ -1061,6 +1083,12 @@ struct GroupGoalState {
     title: Entity<SimpleInput>,
     description: Entity<SimpleInput>,
     stage: Entity<SimpleInput>,
+    /// 目标级验收线输入（W5：整体「做完的标准」）。
+    acceptance: Entity<SimpleInput>,
+    /// 阶段二次操作的输入框（证据 / 打回原因 / 阶段验收线，按 `edit` 的语义复用）。
+    stage_action: Entity<SimpleInput>,
+    /// 当前展开的阶段操作；为空 = 没有任何阶段在编辑。
+    edit: Option<GoalStageEdit>,
     /// 新建目标时尚未落盘的阶段标题。
     new_stages: Vec<String>,
     error: Option<String>,
@@ -1103,6 +1131,153 @@ impl GroupGoalState {
             },
             cx,
         );
+    }
+
+    /// 展开某个阶段的二次操作面板，并清空输入框。
+    fn begin_stage_edit(&mut self, edit: GoalStageEdit, seed: String, cx: &mut Context<Self>) {
+        self.edit = Some(edit);
+        self.error = None;
+        let input = self.stage_action.clone();
+        input.update(cx, |input, cx| input.set_content(seed, cx));
+        cx.notify();
+    }
+
+    /// 提交当前展开的阶段操作（证据 / 打回原因 / 阶段验收线）。
+    fn commit_stage_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(edit) = self.edit.clone() else {
+            return;
+        };
+        let text = self.stage_action.read(cx).content().trim().to_string();
+        // 空值一律在前端拦下：后端也会报错，但这样能立刻给用户提示。
+        if text.is_empty() {
+            self.error = Some(
+                match edit {
+                    GoalStageEdit::Pass { .. } => i18n::t("证据不能为空"),
+                    GoalStageEdit::Rework { .. } => i18n::t("打回原因不能为空"),
+                    GoalStageEdit::Acceptance { .. } => i18n::t("验收线不能为空"),
+                }
+                .to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        let action = match edit {
+            GoalStageEdit::Pass { stage_id } => GoalAction::PassStage {
+                stage_id,
+                evidence: text,
+            },
+            GoalStageEdit::Rework { stage_id } => GoalAction::ReworkStage {
+                stage_id,
+                note: text,
+            },
+            GoalStageEdit::Acceptance { stage_id } => GoalAction::SetAcceptance {
+                stage_id: Some(stage_id),
+                acceptance: text,
+            },
+        };
+        self.edit = None;
+        self.apply(action, cx);
+    }
+
+    /// 保存目标级验收线（W5 的「整体做完的标准」）。
+    fn save_goal_acceptance(&mut self, cx: &mut Context<Self>) {
+        let acceptance = self.acceptance.read(cx).content().trim().to_string();
+        self.apply(
+            GoalAction::SetAcceptance {
+                stage_id: None,
+                acceptance,
+            },
+            cx,
+        );
+    }
+
+    /// 阶段二次操作的输入行：一行输入 + 提交 + 取消。
+    fn stage_edit_row(&self, index: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(edit) = self.edit.clone() else {
+            return div().into_any_element();
+        };
+        let (label, confirm) = match &edit {
+            GoalStageEdit::Pass { .. } => (i18n::t("证据（命令/输出/文件路径）"), i18n::t("确认通过")),
+            GoalStageEdit::Rework { .. } => (i18n::t("打回原因"), i18n::t("确认打回")),
+            GoalStageEdit::Acceptance { .. } => (i18n::t("这一阶段的验收线"), i18n::t("保存")),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(ui_kit::S1))
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_LABEL))
+                    .line_height(px(ui_kit::T_LABEL_LH))
+                    .text_color(theme::ink_tertiary())
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(ui_kit::S1))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(32.))
+                            .rounded(px(theme::RADIUS_FIELD))
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::card())
+                            .px(px(ui_kit::S2))
+                            .child(self.stage_action.clone()),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("goal-stage-confirm-{index}")))
+                            .h(px(26.))
+                            .rounded(px(theme::RADIUS_TAG))
+                            .bg(theme::accent())
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .pointer()
+                            .hover(|style| style.opacity(0.9))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.commit_stage_edit(cx);
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(ui_kit::T_LABEL))
+                                    .text_color(theme::accent_ink())
+                                    .child(confirm),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("goal-stage-cancel-{index}")))
+                            .h(px(26.))
+                            .rounded(px(theme::RADIUS_TAG))
+                            .border_1()
+                            .border_color(theme::edge())
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.edit = None;
+                                this.error = None;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(ui_kit::T_LABEL))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("取消")),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -1180,7 +1355,7 @@ impl Render for GroupGoalState {
                             .px(px(10.))
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(theme::hover()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 let title = this.title.read(cx).content().trim().to_string();
@@ -1197,6 +1372,38 @@ impl Render for GroupGoalState {
                                     .text_size(px(11.))
                                     .text_color(theme::ink_secondary())
                                     .child(i18n::t("保存标题/说明")),
+                            ),
+                    ),
+                )
+                .child(section_label(i18n::t("整体验收线")))
+                .child(dialog_field(
+                    "goal-acceptance",
+                    i18n::t("做到什么程度算整体完成"),
+                    &self.acceptance,
+                ))
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("goal-acceptance-save")
+                            .h(px(26.))
+                            .rounded(px(theme::RADIUS_TAG))
+                            .border_1()
+                            .border_color(theme::edge())
+                            .bg(theme::card())
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.save_goal_acceptance(cx);
+                            }))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(ui_kit::T_LABEL))
+                                    .text_color(theme::ink_secondary())
+                                    .child(i18n::t("保存验收线")),
                             ),
                     ),
                 )
@@ -1250,7 +1457,7 @@ impl Render for GroupGoalState {
                                 .px(px(8.))
                                 .flex()
                                 .items_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.bg(theme::hover()))
                                 .on_click(cx.listener({
                                     let stage_id = stage_id.clone();
@@ -1272,7 +1479,7 @@ impl Render for GroupGoalState {
                                 .child(
                                     div()
                                         .font_family(theme::FONT_FAMILY)
-                                        .text_size(px(10.))
+                                        .text_size(px(ui_kit::T_LABEL))
                                         .text_color(theme::ink_secondary())
                                         .child(if done { i18n::t("重开") } else { i18n::t("完成") }),
                                 ),
@@ -1285,7 +1492,7 @@ impl Render for GroupGoalState {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.bg(theme::hover()))
                                 .on_click(cx.listener({
                                     let stage_id = stage_id.clone();
@@ -1304,6 +1511,140 @@ impl Render for GroupGoalState {
                                     theme::ink_secondary(),
                                 ))
                         })),
+                );
+                // ---- W5 验收操作条：验收线 / 通过（填证据）/ 打回（填原因） ----
+                let stage_active = stage.status == StageStatus::Active;
+                let passed_at = stage.passed_at;
+                let acceptance_text = if stage.acceptance.trim().is_empty() {
+                    i18n::t("还没写验收线").to_string()
+                } else {
+                    stage.acceptance.clone()
+                };
+                let failure = if stage.evidence.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" · 证据：{}", stage.evidence)
+                };
+                body = body.child(
+                    div()
+                        .pl(px(ui_kit::S3))
+                        .pb(px(ui_kit::S2))
+                        .flex()
+                        .flex_col()
+                        .gap(px(ui_kit::S1))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(ui_kit::S2))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .truncate()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(ui_kit::T_LABEL))
+                                        .line_height(px(ui_kit::T_LABEL_LH))
+                                        .text_color(theme::ink_tertiary())
+                                        .child(SharedString::from(format!(
+                                            "验收：{acceptance_text}{failure}"
+                                        ))),
+                                )
+                                .children(passed_at.map(|at| {
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(ui_kit::T_LABEL))
+                                        .text_color(theme::success())
+                                        .child(SharedString::from(format!(
+                                            "✓ {}",
+                                            time::format_hm(at)
+                                        )))
+                                })),
+                        )
+                        .child({
+                            let mut strip = div().flex().items_center().gap(px(ui_kit::S1));
+                            // 通过：只有进行中的阶段可点（其余灰掉，点了也给提示）。
+                            strip = strip.child(stage_action_chip(
+                                format!("goal-stage-pass-{index}"),
+                                i18n::t("通过"),
+                                stage_active,
+                                theme::success(),
+                                cx.listener({
+                                    let stage_id = stage_id.clone();
+                                    move |this, _event, _window, cx| {
+                                        if !stage_active {
+                                            this.error =
+                                                Some(i18n::t("只有进行中的阶段可以通过").to_string());
+                                            cx.notify();
+                                            return;
+                                        }
+                                        this.begin_stage_edit(
+                                            GoalStageEdit::Pass {
+                                                stage_id: stage_id.clone(),
+                                            },
+                                            String::new(),
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            ));
+                            strip = strip.child(stage_action_chip(
+                                format!("goal-stage-rework-{index}"),
+                                i18n::t("打回"),
+                                stage.status != StageStatus::Pending,
+                                theme::danger(),
+                                cx.listener({
+                                    let stage_id = stage_id.clone();
+                                    move |this, _event, _window, cx| {
+                                        this.begin_stage_edit(
+                                            GoalStageEdit::Rework {
+                                                stage_id: stage_id.clone(),
+                                            },
+                                            this.goal
+                                                .as_ref()
+                                                .map(|goal| goal.last_rework_note.clone())
+                                                .unwrap_or_default(),
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            ));
+                            strip = strip.child(stage_action_chip(
+                                format!("goal-stage-acceptance-{index}"),
+                                i18n::t("改验收线"),
+                                true,
+                                theme::ink_secondary(),
+                                cx.listener({
+                                    let stage_id = stage_id.clone();
+                                    let current = stage.acceptance.clone();
+                                    move |this, _event, _window, cx| {
+                                        this.begin_stage_edit(
+                                            GoalStageEdit::Acceptance {
+                                                stage_id: stage_id.clone(),
+                                            },
+                                            current.clone(),
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            ));
+                            strip
+                        })
+                        .children(
+                            (self.edit
+                                == Some(GoalStageEdit::Pass {
+                                    stage_id: stage_id.clone(),
+                                })
+                                || self.edit
+                                    == Some(GoalStageEdit::Rework {
+                                        stage_id: stage_id.clone(),
+                                    })
+                                || self.edit
+                                    == Some(GoalStageEdit::Acceptance {
+                                        stage_id: stage_id.clone(),
+                                    }))
+                            .then(|| self.stage_edit_row(index, cx)),
+                        ),
                 );
             }
             body = body
@@ -1332,7 +1673,7 @@ impl Render for GroupGoalState {
                                 .px(px(10.))
                                 .flex()
                                 .items_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.opacity(0.9))
                                 .on_click(cx.listener(|this, _event, _window, cx| {
                                     let value =
@@ -1446,7 +1787,7 @@ impl Render for GroupGoalState {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.bg(theme::hover()))
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     this.new_stages.retain(|item| item != &value);
@@ -1488,7 +1829,7 @@ impl Render for GroupGoalState {
                                 .px(px(10.))
                                 .flex()
                                 .items_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.bg(theme::hover()))
                                 .on_click(cx.listener(|this, _event, _window, cx| {
                                     this.add_new_stage(cx);
@@ -1512,7 +1853,7 @@ impl Render for GroupGoalState {
                             .px(px(12.))
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.opacity(0.9))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.create(cx);
@@ -1562,7 +1903,7 @@ fn goal_action_button(
         .px(px(10.))
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.bg(theme::hover()))
         .on_click(handler)
         .child(
@@ -1574,6 +1915,39 @@ fn goal_action_button(
                 } else {
                     theme::ink_secondary()
                 })
+                .child(i18n::t(label)),
+        )
+}
+
+/// 群目标阶段操作条上的小 chip（通过 / 打回 / 改验收线）。
+///
+/// `enabled=false` 时灰化但仍可点：点击由调用方给出"为什么现在不能通过"的提示，
+/// 比一个完全不响应的死按钮更容易让人理解。
+fn stage_action_chip(
+    id: String,
+    label: &'static str,
+    enabled: bool,
+    color: Rgba,
+    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(SharedString::from(id))
+        .h(px(22.))
+        .rounded(px(theme::RADIUS_TAG))
+        .border_1()
+        .border_color(if enabled { color } else { theme::edge() })
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .pointer()
+        .when(!enabled, |el| el.opacity(0.5))
+        .hover(|style| style.bg(theme::hover()))
+        .on_click(handler)
+        .child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(ui_kit::T_LABEL))
+                .text_color(if enabled { color } else { theme::ink_tertiary() })
                 .child(i18n::t(label)),
         )
 }
@@ -1786,7 +2160,7 @@ impl Render for GroupTasksState {
                                     .child(
                                         div()
                                             .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(10.))
+                                            .text_size(px(ui_kit::T_LABEL))
                                             .text_color(state_color)
                                             .child(state_text),
                                     ),
@@ -1820,7 +2194,7 @@ impl Render for GroupTasksState {
                                     .flex_1()
                                     .truncate()
                                     .font_family(theme::FONT_FAMILY)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(theme::ink_tertiary())
                                     .child(SharedString::from(format!(
                                         "{owner} · rev {}",
@@ -1835,7 +2209,7 @@ impl Render for GroupTasksState {
                                     .px(px(6.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener({
                                         let task_id = task_id_stop.clone();
@@ -1847,7 +2221,7 @@ impl Render for GroupTasksState {
                                     .child(
                                         div()
                                             .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(10.))
+                                            .text_size(px(ui_kit::T_LABEL))
                                             .text_color(theme::ink_secondary())
                                             .child(i18n::t("停止")),
                                     )
@@ -1863,7 +2237,7 @@ impl Render for GroupTasksState {
                                     .px(px(6.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener({
                                         let task_id = task_id_cancel.clone();
@@ -1874,7 +2248,7 @@ impl Render for GroupTasksState {
                                     .child(
                                         div()
                                             .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(10.))
+                                            .text_size(px(ui_kit::T_LABEL))
                                             .text_color(theme::danger())
                                             .child(i18n::t("取消")),
                                     )
@@ -1890,7 +2264,7 @@ impl Render for GroupTasksState {
                                     .px(px(6.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener({
                                         let task = task_retry.clone();
@@ -1901,7 +2275,7 @@ impl Render for GroupTasksState {
                                     .child(
                                         div()
                                             .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(10.))
+                                            .text_size(px(ui_kit::T_LABEL))
                                             .text_color(theme::ink_secondary())
                                             .child(i18n::t("重试")),
                                     )
@@ -1917,7 +2291,7 @@ impl Render for GroupTasksState {
                                     .px(px(6.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener({
                                         let task_id = task_reassign.id.clone();
@@ -1935,7 +2309,7 @@ impl Render for GroupTasksState {
                                     .child(
                                         div()
                                             .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(10.))
+                                            .text_size(px(ui_kit::T_LABEL))
                                             .text_color(theme::ink_secondary())
                                             .child(i18n::t("改派")),
                                     )
@@ -1962,7 +2336,7 @@ impl Render for GroupTasksState {
                                     .px(px(6.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.retry_or_reassign(
@@ -1974,7 +2348,7 @@ impl Render for GroupTasksState {
                                     .child(
                                         div()
                                             .font_family(theme::FONT_FAMILY)
-                                            .text_size(px(10.))
+                                            .text_size(px(ui_kit::T_LABEL))
                                             .text_color(theme::ink_secondary())
                                             .child(SharedString::from(member_name)),
                                     ),
@@ -2040,7 +2414,7 @@ impl Render for GroupFormState {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         if let Some(index) =
@@ -2120,7 +2494,7 @@ impl Render for GroupFormState {
                         .px(px(9.))
                         .flex()
                         .items_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.admin_id = bot_id.clone();
@@ -2155,7 +2529,7 @@ impl Render for GroupFormState {
                         .px(px(9.))
                         .flex()
                         .items_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.policy = next.clone();
@@ -2466,7 +2840,7 @@ impl Render for BotFormState {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.opacity(0.9))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.icon = key.to_string();
@@ -2492,7 +2866,7 @@ impl Render for BotFormState {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::hover()))
                         .border_2()
                         .border_color(if selected { theme::ink() } else { transparent })
@@ -2809,6 +3183,16 @@ struct PilotApp {
     automations_view: Option<AutomationsView>,
     /// 用量页「全库累计」快照：外层 None = 未加载，内层 None = 还没有会话。
     usage_totals_view: Option<Option<session_db::UsageSummary>>,
+    /// 用量页分组视图（W9）：扫描全部会话 JSONL，不能进每帧渲染，按需加载。
+    usage_grouped_view: Option<crate::rpi_engine::GroupedUsage>,
+    /// 用量页时间范围（天）：1/7/30/90。
+    usage_range: usize,
+    /// 用量页分组口径：0 = 不分组，1 = 按 Bot，2 = 按模型。
+    usage_group: usize,
+    /// 定时任务向导（W8）：时间模式 0=一次 1=每天 2=每周 3=每隔。
+    schedule_when: usize,
+    /// 定时任务向导：每周模式下选中的天（0=周一 … 6=周日）。
+    schedule_days: [bool; 7],
     /// 设置 → 密钥：新增密钥的两个输入框。
     /// 待二次确认移除的密钥名。
     confirm_remove_secret: Option<String>,
@@ -3024,11 +3408,13 @@ enum DetailMenuAction {
     CopySessionId(String),
 }
 
-/// 记忆面板作用域：团队共享 / 某个群聊的文件记忆。
+/// 记忆面板作用域：团队共享 / 某个群聊 / 某个 Bot 的文件记忆。
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum MemoryScope {
     Team,
     Group(String),
+    /// 单个 Bot 的私有记忆（`{data_root}/…/bot-<id>/memory/`）。
+    Bot(String),
 }
 
 impl MemoryScope {
@@ -3036,6 +3422,7 @@ impl MemoryScope {
         match self {
             Self::Team => data::read_team_memory(file),
             Self::Group(id) => data::read_group_memory(id, file),
+            Self::Bot(id) => data::read_bot_memory(id, file),
         }
     }
 
@@ -3051,6 +3438,7 @@ impl MemoryScope {
             Self::Group(id) => {
                 data::save_group_memory(id, file, title, description, body)
             }
+            Self::Bot(id) => data::save_bot_memory(id, file, title, description, body),
         }
     }
 
@@ -3058,6 +3446,7 @@ impl MemoryScope {
         match self {
             Self::Team => data::delete_team_memory(file),
             Self::Group(id) => data::delete_group_memory(id, file),
+            Self::Bot(id) => data::delete_bot_memory(id, file),
         }
     }
 
@@ -3065,6 +3454,7 @@ impl MemoryScope {
         match self {
             Self::Team => data::undo_team_memory(),
             Self::Group(id) => data::undo_group_memory(id),
+            Self::Bot(id) => data::undo_bot_memory(id),
         }
     }
 
@@ -3072,6 +3462,7 @@ impl MemoryScope {
         match self {
             Self::Team => i18n::t("团队记忆"),
             Self::Group(_) => i18n::t("群聊记忆"),
+            Self::Bot(_) => i18n::t("Bot 记忆"),
         }
     }
 }
@@ -3324,6 +3715,11 @@ impl PilotApp {
             menu_focus: cx.focus_handle(),
             automations_view: None,
             usage_totals_view: None,
+            usage_grouped_view: None,
+            usage_range: 7,
+            usage_group: 0,
+            schedule_when: 1,
+            schedule_days: [true, false, false, false, false, false, false],
             settings_detail: None,
             chat_detail: None,
             settings_detail_input: None,
@@ -3516,7 +3912,7 @@ impl PilotApp {
             .flex()
             .items_center()
             .gap(px(6.))
-            .cursor_pointer()
+            .pointer()
             .hover(move |style| style.bg(hover))
             .on_click(cx.listener(|this, _event, _window, cx| {
                 if let Some(bar) = this.group_task_bar.as_mut() {
@@ -3586,7 +3982,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .cursor_pointer()
+                        .pointer()
                         .hover(move |style| style.bg(hover))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.settings_detail = Some(SettingsDetail::GroupTasks {
@@ -3649,7 +4045,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .justify_end()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(move |style| style.bg(hover))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.settings_detail = Some(SettingsDetail::GroupTasks {
@@ -4037,6 +4433,84 @@ impl PilotApp {
                 self.refresh_group_task_bar(&group_id);
                 cx.notify();
             }
+            BackendEvent::GroupPost {
+                group_id,
+                text,
+                from_bot_id,
+                from_bot_name,
+            } => {
+                let key = group_key(&group_id);
+                let Some(group) = self
+                    .roster
+                    .groups
+                    .iter()
+                    .find(|group| group.id == group_id)
+                    .cloned()
+                else {
+                    return;
+                };
+                // 群外机器人发言：当成一条用户消息上屏（sender 显示发言者名字），
+                // 再照既有群发送路径派发回合。
+                let payload = if from_bot_name.trim().is_empty() {
+                    text.clone()
+                } else {
+                    format!("{from_bot_name}：{text}")
+                };
+                if let Some(chat) = self.chats.get_mut(&key) {
+                    chat.push_user_group(payload.clone(), Vec::new());
+                }
+                self.group_handoff_count.remove(&key);
+                if let Some(turn) = self.group_task_turns.get(&key) {
+                    let _ = turn;
+                }
+                let member_pairs: Vec<(String, String)> = group
+                    .member_ids
+                    .iter()
+                    .filter_map(|member_id| self.roster.bot_by_id(member_id))
+                    .filter(|bot| !bot.is_private)
+                    .map(|bot| (bot.id.clone(), bot.name.clone()))
+                    .collect();
+                let chosen = route_group_members(
+                    &payload,
+                    &member_pairs,
+                    &group.responder_policy,
+                    group.admin_id.as_deref(),
+                );
+                let mut root_ids: Option<(String, String)> = None;
+                if let Ok((root, children)) = group_tasks::create_turn(
+                    &data::data_root(),
+                    &group.id,
+                    &payload,
+                    &text,
+                    &chosen,
+                ) {
+                    if self.group_task_turns.contains_key(&key) {
+                        fail_group_task_turn(&mut self.group_task_turns, &key);
+                    }
+                    root_ids = Some((root.id.clone(), root.root_message_id.clone()));
+                    self.group_task_turns.insert(
+                        key.clone(),
+                        GroupTaskTurn {
+                            root_id: root.id,
+                            members: children.into_iter().collect(),
+                        },
+                    );
+                }
+                self.refresh_group_task_bar(&group.id);
+                let (root_task_id, root_message_id) = match root_ids {
+                    Some((task, message)) => (Some(task), Some(message)),
+                    None => (None, None),
+                };
+                self.backend.send_group_in_turn(
+                    key.clone(),
+                    payload,
+                    Vec::new(),
+                    root_task_id.clone(),
+                    root_message_id,
+                );
+                let _ = from_bot_id;
+                cx.notify();
+            }
             BackendEvent::Session { key, event } => {
                 if key.starts_with("side:") {
                     self.apply_side_event(&key, event, cx);
@@ -4106,6 +4580,18 @@ impl PilotApp {
                         chat.retry = None;
                         chat.status = i18n::t("已恢复历史").to_string();
                         chat.refresh_meta();
+                    }
+                    SessionEvent::Compaction { active, manual } => {
+                        // W4：压缩状态行。开着时显示在聊天流顶部，结束即撤。
+                        chat.compacting = Some(active);
+                        if active {
+                            // 手动/自动文案目前一致；保留 `manual` 供状态栏以后区分触发源。
+                            let _ = manual;
+                            chat.status = i18n::t("正在压缩上下文…").to_string();
+                        } else if !chat.streaming {
+                            chat.status = i18n::t("就绪").to_string();
+                        }
+                        cx.notify();
                     }
                     SessionEvent::Tool(card) => {
                         chat.apply_tool(card);
@@ -5299,7 +5785,7 @@ impl PilotApp {
                         .px(px(10.))
                         .flex()
                         .items_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.answer_question(request_id_click.clone(), Some(value.clone()), cx);
@@ -5323,7 +5809,7 @@ impl PilotApp {
                     .px(px(10.))
                     .flex()
                     .items_center()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.answer_question(request_id.clone(), None, cx);
@@ -5415,7 +5901,7 @@ impl PilotApp {
                         .bg(wecom_theme::send_enabled())
                         .flex()
                         .items_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.opacity(0.9))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             let text = this
@@ -5448,7 +5934,7 @@ impl PilotApp {
             .px(px(2.))
             .flex()
             .items_center()
-            .cursor_pointer()
+            .pointer()
             .hover(|style| style.opacity(0.85))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.question_free_active = Some(active_id.clone());
@@ -5553,7 +6039,7 @@ impl PilotApp {
                                     .px(px(9.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.elicit_select(
@@ -5605,7 +6091,7 @@ impl PilotApp {
                                     .px(px(9.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.elicit_select(
@@ -5657,7 +6143,7 @@ impl PilotApp {
                                     .px(px(12.))
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.elicit_select(
@@ -5699,7 +6185,7 @@ impl PilotApp {
                             .px(px(12.))
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(theme::hover()))
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.answer_elicitation(request.clone(), None, cx);
@@ -5721,7 +6207,7 @@ impl PilotApp {
                             .px(px(12.))
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.opacity(0.85))
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.submit_elicitation(request_id.clone(), cx);
@@ -6040,7 +6526,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.opacity(0.88))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.resolve_permission(request_id_click.clone(), option_id.clone(), cx);
@@ -6108,7 +6594,7 @@ impl PilotApp {
                             .px(px(6.))
                             .py(px(2.))
                             .font_family(theme::FONT_FAMILY)
-                            .text_size(px(10.))
+                            .text_size(px(ui_kit::T_LABEL))
                             .text_color(theme::ink_tertiary())
                             .child(risk)
                     })),
@@ -6860,6 +7346,7 @@ impl PilotApp {
             (i18n::t("搜索历史消息").to_string(), "Ctrl+F".to_string(), PaletteCmd::FindMessages),
             (i18n::t("选择运行时").to_string(), String::new(), PaletteCmd::PickModel),
             (i18n::t("审批白名单").to_string(), String::new(), PaletteCmd::EditAllowlist),
+            (i18n::t("立即压缩").to_string(), String::new(), PaletteCmd::Compact),
             (i18n::t("打开设置").to_string(), "Ctrl+,".to_string(), PaletteCmd::OpenSettings),
         ];
         for (index, bot) in self.roster.bots.iter().enumerate() {
@@ -7032,6 +7519,15 @@ impl PilotApp {
                     });
                     self.settings_detail_input = None;
                     self.settings_open = true;
+                }
+                cx.notify();
+            }
+            PaletteCmd::Compact => {
+                if let Some(key) = self.active_key() {
+                    self.backend.compact(key);
+                    self.toast(i18n::t("正在压缩上下文…"), cx);
+                } else {
+                    self.toast(i18n::t("先选一个会话"), cx);
                 }
                 cx.notify();
             }
@@ -7589,7 +8085,7 @@ impl PilotApp {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .text_color(theme::ink_tertiary())
                                 .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -7650,7 +8146,7 @@ impl PilotApp {
                                                 .bg(theme::accent())
                                                 .flex()
                                                 .items_center()
-                                                .cursor_pointer()
+                                                .pointer()
                                                 .hover(|style| style.opacity(0.85))
                                                 .font_family(theme::FONT_FAMILY)
                                                 .text_size(px(11.))
@@ -7687,7 +8183,7 @@ impl PilotApp {
                                                 .bg(theme::subtle())
                                                 .flex()
                                                 .items_center()
-                                                .cursor_pointer()
+                                                .pointer()
                                                 .hover(|style| style.bg(theme::raised_hover()))
                                                 .font_family(theme::FONT_FAMILY)
                                                 .text_size(px(11.))
@@ -7749,7 +8245,7 @@ impl PilotApp {
                                     .bg(theme::raised())
                                     .flex()
                                     .items_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .font_family(theme::FONT_FAMILY)
                                     .text_size(px(11.))
@@ -7829,7 +8325,7 @@ impl PilotApp {
                                 .child(
                                     div()
                                         .font_family(theme::FONT_FAMILY)
-                                        .text_size(px(10.))
+                                        .text_size(px(ui_kit::T_LABEL))
                                         .text_color(theme::ink_tertiary())
                                         .child(SharedString::from(title)),
                                 );
@@ -7851,7 +8347,7 @@ impl PilotApp {
                                 row = row.child(
                                     div()
                                         .font_family(theme::FONT_FAMILY)
-                                        .text_size(px(10.))
+                                        .text_size(px(ui_kit::T_LABEL))
                                         .text_color(theme::ink_tertiary())
                                         .child(i18n::t("该项请在主会话中填写")),
                                 );
@@ -7873,7 +8369,7 @@ impl PilotApp {
                                         .bg(theme::accent())
                                         .flex()
                                         .items_center()
-                                        .cursor_pointer()
+                                        .pointer()
                                         .hover(|style| style.opacity(0.85))
                                         .font_family(theme::FONT_FAMILY)
                                         .text_size(px(11.))
@@ -7975,7 +8471,7 @@ impl PilotApp {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.opacity(0.85))
                                 .opacity(if side.streaming { 0.4 } else { 1.0 })
                                 .on_click(cx.listener(|this, _event, window, cx| {
@@ -8055,7 +8551,7 @@ impl PilotApp {
                     .px(px(8.))
                     .flex()
                     .items_center()
-                    .cursor_pointer()
+                    .pointer()
                     .bg(if index == selected {
                         theme::hover()
                     } else {
@@ -8095,7 +8591,7 @@ impl PilotApp {
                         .px(px(8.))
                         .pt(px(2.))
                         .font_family(theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .text_color(theme::ink_tertiary())
                         .child(i18n::t("点击选择 · Enter 插入 · Esc 收起")),
                 )
@@ -8174,7 +8670,7 @@ impl PilotApp {
                             SharedString::from(format!("plugin-switch-{}", plugin_short)),
                             on,
                         )
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.open_plugin_confirm_dialog(
@@ -8244,7 +8740,7 @@ impl PilotApp {
                             .px(px(12.))
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(theme::hover()))
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 let _ = this;
@@ -8299,7 +8795,7 @@ impl PilotApp {
                     .px(px(6.))
                     .flex()
                     .items_center()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         match shell_open::open_url(&target) {
@@ -8408,7 +8904,7 @@ impl PilotApp {
                 .items_center()
                 .justify_center()
                 .gap(px(8.))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.image_preview = None;
@@ -8541,7 +9037,7 @@ impl PilotApp {
                                         .flex()
                                         .items_center()
                                         .gap(px(4.))
-                                        .cursor_pointer()
+                                        .pointer()
                                         .hover(|style| style.bg(theme::hover()))
                                         .on_click(cx.listener(
                                             |this, _event, window, cx| {
@@ -8606,7 +9102,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::raised_hover()))
                     .on_click(cx.listener(|this, _event, window, cx| {
                         this.settings_open = false;
@@ -8653,7 +9149,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .cursor_pointer()
+                    .pointer()
                     .when(active, |el| el.bg(theme::accent()))
                     .when(!active, |el| {
                         el.hover(|style| style.bg(theme::hover()))
@@ -8698,7 +9194,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .opacity(if pinned { 1.0 } else { 0.0 })
                             .when(active && !pinned, |el| {
                                 el.hover(|style| style.opacity(1.))
@@ -8937,6 +9433,148 @@ impl PilotApp {
                     }))),
                 )
             }
+            // W4：模型窗口 / 输出上限。两个输入框都允许留空（= 用模板/兜底值）。
+            SettingsDetail::ModelLimits {
+                provider_id,
+                provider_name,
+                model_id,
+            } => {
+                let limits = crate::model_limits::read(provider_id, model_id);
+                let (placeholder_window, placeholder_max) =
+                    crate::model_limits::placeholder(&limits);
+                let (resolved_window, resolved_max) = crate::model_limits::resolve(&limits);
+                let existing_window = limits.context_window.map(|v| v.to_string()).unwrap_or_default();
+                let existing_max = limits.max_tokens.map(|v| v.to_string()).unwrap_or_default();
+                let window_input = self.ensure_detail_input(
+                    cx,
+                    "上下文窗口",
+                    &existing_window,
+                    "",
+                );
+                if self.settings_detail_extra.is_empty() {
+                    let max_input = cx.new(|cx| {
+                        SimpleInput::new(i18n::t("最大输出 tokens"), theme::ink_tertiary, cx)
+                    });
+                    max_input.update(cx, |input, cx| input.set_content(existing_max.clone(), cx));
+                    self.settings_detail_extra = vec![max_input];
+                }
+                let max_input = self
+                    .settings_detail_extra
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        cx.new(|cx| SimpleInput::new(i18n::t("最大输出 tokens"), theme::ink_tertiary, cx))
+                    });
+                let pid = provider_id.clone();
+                let mid = model_id.clone();
+                let mut panel = ui::DetailPanel::new(tri!(
+                    "模型限额 · {model_id}",
+                    "Model limits · {model_id}"
+                ))
+                .subtitle(tri!(
+                    "{} · 留空用默认（窗口 {} / 输出 {}）",
+                    "{} · leave empty for defaults (window {} / output {})",
+                    provider_name,
+                    resolved_window,
+                    resolved_max
+                ))
+                .body(ui::form_field(
+                    "model-window-input",
+                    i18n::t("上下文窗口"),
+                    &window_input,
+                ))
+                .body(ui::note(tri!(
+                    "默认 {}（模板值）",
+                    "Default {} (template value)",
+                    placeholder_window
+                )))
+                .body(ui::form_field(
+                    "model-maxtokens-input",
+                    i18n::t("最大输出 tokens"),
+                    &max_input,
+                ))
+                .body(ui::note(tri!(
+                    "默认 {}；不能超过窗口的一半",
+                    "Default {}; must not exceed half the window",
+                    placeholder_max
+                )));
+                if let Some(error) = self.settings_detail_error.clone() {
+                    panel = panel.body(ui::error(error));
+                }
+                (
+                    tri!("模型限额 · {model_id}", "Model limits · {model_id}").to_string(),
+                    Some(provider_name.clone()),
+                    panel
+                        .action(ui::button("detail-cancel", i18n::t("取消")).on_click(
+                            cx.listener(|this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_error = None;
+                                cx.notify();
+                            }),
+                        ))
+                        .action(ui::button("model-limits-save", i18n::t("保存")).on_click(
+                            cx.listener(move |this, _event, _window, cx| {
+                                let window_text = this
+                                    .settings_detail_input
+                                    .as_ref()
+                                    .map(|input| input.read(cx).content().trim().to_string())
+                                    .unwrap_or_default();
+                                let max_text = this
+                                    .settings_detail_extra
+                                    .first()
+                                    .map(|input| input.read(cx).content().trim().to_string())
+                                    .unwrap_or_default();
+                                // 留空 = 回到模板/兜底；非空必须是纯整数。
+                                let parse = |text: &str, field: &'static str| {
+                                    if text.is_empty() {
+                                        return Ok(None);
+                                    }
+                                    match text.parse::<i64>() {
+                                        Ok(value) if value > 0 => Ok(Some(value)),
+                                        Ok(_) => Err(format!("{field}必须是正整数")),
+                                        Err(_) => Err(format!("{field}必须是整数")),
+                                    }
+                                };
+                                let window = match parse(&window_text, i18n::t("上下文窗口")) {
+                                    Ok(value) => value,
+                                    Err(message) => {
+                                        this.settings_detail_error = Some(message);
+                                        cx.notify();
+                                        return;
+                                    }
+                                };
+                                let max_tokens = match parse(&max_text, i18n::t("最大输出 tokens")) {
+                                    Ok(value) => value,
+                                    Err(message) => {
+                                        this.settings_detail_error = Some(message);
+                                        cx.notify();
+                                        return;
+                                    }
+                                };
+                                let payload = crate::model_limits::ModelLimits {
+                                    context_window: window,
+                                    max_tokens,
+                                    // 模板值由 `read` 重算，这里不参与写盘。
+                                    template_context_window: None,
+                                    template_max_tokens: None,
+                                };
+                                match crate::model_limits::write(&pid, &mid, &payload) {
+                                    Ok(()) => {
+                                        this.toast(i18n::t("已保存"), cx);
+                                        this.settings_detail = None;
+                                        this.settings_detail_input = None;
+                                        this.settings_detail_extra.clear();
+                                        this.settings_detail_error = None;
+                                    }
+                                    Err(message) => this.settings_detail_error = Some(message),
+                                }
+                                cx.notify();
+                            }),
+                        )),
+                )
+            }
             // 上面已提前返回，这里只为 match 完备性保留
             SettingsDetail::RunStatus { .. } => {
                 return None;
@@ -9038,6 +9676,123 @@ impl PilotApp {
                             cx.notify();
                         }
                     }))),
+                )
+            }
+            SettingsDetail::BotMemory { bot_id } => {
+                let bot_id = bot_id.clone();
+                let bot_name = self
+                    .roster
+                    .bot_by_id(&bot_id)
+                    .map(|bot| bot.name.clone())
+                    .unwrap_or_else(|| bot_id.clone());
+                let entries = data::bot_memory_entries(&bot_id);
+                let mut panel = ui::DetailPanel::new(tri!(
+                    "{} · 记忆",
+                    "{} · Memory",
+                    bot_name
+                ))
+                .subtitle(i18n::t(
+                    "这个 Bot 自己记下的事；下一轮对话起按内容注入。可撤销最近一次修改。",
+                ));
+                if entries.is_empty() {
+                    panel = panel.body(ui::empty(i18n::t(
+                        "这个 Bot 还没有记忆。聊几次它就会记住你。",
+                    )));
+                } else {
+                    let mut list = div().flex().flex_col().gap(px(ui::S1));
+                    for entry in entries {
+                        let file = entry.file.clone();
+                        let bot_id = bot_id.clone();
+                        list = list.child(
+                            div()
+                                .id(SharedString::from(format!("bot-memory-row-{}", entry.file)))
+                                .w_full()
+                                .rounded(px(theme::RADIUS_FIELD))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::card())
+                                .px(px(ui::S3))
+                                .py(px(ui::S2))
+                                .flex()
+                                .flex_col()
+                                .gap(px(ui::S1))
+                                .pointer()
+                                .hover(|style| style.bg(theme::hover()))
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.settings_detail = Some(SettingsDetail::Memory {
+                                        file: Some(file.clone()),
+                                        scope: MemoryScope::Bot(bot_id.clone()),
+                                    });
+                                    this.settings_detail_input = None;
+                                    this.settings_detail_extra.clear();
+                                    this.settings_detail_error = None;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(ui::T_BODY))
+                                        .text_color(theme::ink())
+                                        .child(SharedString::from(entry.title.clone())),
+                                )
+                                .children((!entry.description.is_empty()).then(|| {
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(ui::T_LABEL))
+                                        .line_height(px(ui::T_LABEL_LH))
+                                        .text_color(theme::ink_tertiary())
+                                        .truncate()
+                                        .child(SharedString::from(entry.description.clone()))
+                                })),
+                        );
+                    }
+                    panel = panel.body(list);
+                }
+                panel = panel.action(
+                    ui::button("bot-memory-new", i18n::t("新增记忆")).on_click(cx.listener({
+                        let bot_id = bot_id.clone();
+                        move |this, _event, _window, cx| {
+                            this.settings_detail = Some(SettingsDetail::Memory {
+                                file: None,
+                                scope: MemoryScope::Bot(bot_id.clone()),
+                            });
+                            this.settings_detail_input = None;
+                            this.settings_detail_extra.clear();
+                            this.settings_detail_error = None;
+                            cx.notify();
+                        }
+                    })),
+                );
+                if let Some(error) = self.settings_detail_error.clone() {
+                    panel = panel.body(ui::error(error));
+                }
+                (
+                    tri!("{} · 记忆", "{} · Memory", bot_name).to_string(),
+                    Some(i18n::t("Bot 私有记忆").to_string()),
+                    panel
+                        .action(ui::button("bot-memory-undo", i18n::t("撤销")).on_click(
+                            cx.listener({
+                                let bot_id = bot_id.clone();
+                                move |this, _event, _window, cx| {
+                                    match data::undo_bot_memory(&bot_id) {
+                                        Ok(title) => {
+                                            this.toast(tri!("已恢复：{title}", "Restored: {title}"), cx)
+                                        }
+                                        Err(message) => this.toast(message, cx),
+                                    }
+                                    cx.notify();
+                                }
+                            }),
+                        ))
+                        .action(ui::button("detail-close", i18n::t("关闭")).on_click(
+                            cx.listener(|this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_error = None;
+                                cx.notify();
+                            }),
+                        )),
                 )
             }
             SettingsDetail::Memory { file, scope } => {
@@ -9288,53 +10043,206 @@ impl PilotApp {
             }
             SettingsDetail::NewSchedule => {
                 let bot = self.selected_bot().cloned()?;
+                // 5 个输入：标题（主输入）+ 指令 / 时间 / 分钟数 / cron。
                 let fields = self.ensure_detail_fields(
                     cx,
                     &[
                         ("例如：每日简报", String::new()),
-                        ("cron（五段，本地时区）", "0 9 * * *".to_string()),
                         ("到点后发给 Bot 的指令", String::new()),
+                        ("09:00", "09:00".to_string()),
+                        ("60", "60".to_string()),
+                        ("0 9 * * *", "0 9 * * *".to_string()),
                     ],
                 );
                 let title_input = fields[0].clone();
-                let cron_input = fields[1].clone();
-                let prompt_input = fields[2].clone();
-                let flags = self.ensure_detail_flags(&[true]);
+                let prompt_input = fields[1].clone();
+                let time_input = fields[2].clone();
+                let every_input = fields[3].clone();
+                let cron_input = fields[4].clone();
+                let flags = self.ensure_detail_flags(&[true, false]);
                 let recurring = flags[0];
+                let advanced = flags[1];
                 let bot_id = bot.id.clone();
+                let mode = self.schedule_when;
+                let days = self.schedule_days;
+                let once_hours = self
+                    .settings_detail_entries
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "2".to_string());
+
+                // ---- 时间模式四选一（一次 / 每天 / 每周 / 每隔） ----
+                let mut when_row = div().flex().flex_wrap().items_center().gap(px(ui::S1));
+                for (index, label) in [
+                    (0usize, i18n::t("一次")),
+                    (1, i18n::t("每天")),
+                    (2, i18n::t("每周")),
+                    (3, i18n::t("每隔")),
+                ] {
+                    when_row = when_row.child(
+                        ui::segment(
+                            SharedString::from(format!(
+                                "schedule-when-{}",
+                                ["once", "daily", "weekly", "every"][index]
+                            )),
+                            label,
+                            index == mode,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.schedule_when = index;
+                            cx.notify();
+                        })),
+                    );
+                }
+                // 「一次」只有相对时间可选（内嵌引擎没有日期控件），先给 1/2/4/8/24 小时。
+                let mut once_row = div().flex().flex_wrap().items_center().gap(px(ui::S1));
+                for hours in [1u32, 2, 4, 8, 24] {
+                    let active = once_hours == hours.to_string();
+                    once_row = once_row.child(
+                        ui::chip(
+                            SharedString::from(format!("schedule-once-{hours}")),
+                            format!("{hours} 小时后"),
+                            active,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail_entries = vec![hours.to_string()];
+                            cx.notify();
+                        })),
+                    );
+                }
+                // 「每周」：七个 chip，至少选一天。
+                let mut days_row = div().flex().items_center().gap(px(ui::S1));
+                for (index, label) in [
+                    i18n::t("一"),
+                    i18n::t("二"),
+                    i18n::t("三"),
+                    i18n::t("四"),
+                    i18n::t("五"),
+                    i18n::t("六"),
+                    i18n::t("日"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let active = days[index];
+                    days_row = days_row.child(
+                        ui::chip(
+                            SharedString::from(format!("schedule-day-{index}")),
+                            label,
+                            active,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.schedule_days[index] = !this.schedule_days[index];
+                            cx.notify();
+                        })),
+                    );
+                }
+
+                let mut wizard = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(ui::S2))
+                    .child(ui::label(i18n::t("什么时候跑")))
+                    .child(when_row);
+                wizard = match mode {
+                    0 => wizard.child(once_row),
+                    3 => wizard.child(ui::form_field(
+                        "schedule-every-minutes",
+                        i18n::t("每隔多少分钟（1–10080）"),
+                        &every_input,
+                    )),
+                    _ => wizard.child(ui::form_field(
+                        "schedule-daily-time",
+                        i18n::t("时间（HH:mm）"),
+                        &time_input,
+                    )),
+                };
+                if mode == 2 {
+                    wizard = wizard
+                        .child(ui::form_field(
+                            "schedule-weekly-time",
+                            i18n::t("时间（HH:mm）"),
+                            &time_input,
+                        ))
+                        .child(ui::label(i18n::t("哪几天")))
+                        .child(days_row);
+                }
+                wizard = wizard.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            ui::button_ghost(
+                                SharedString::from("detail-schedule-advanced-toggle"),
+                                if advanced {
+                                    i18n::t("收起高级")
+                                } else {
+                                    i18n::t("高级：自定义 cron")
+                                },
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                if let Some(flag) = this.settings_detail_flags.get_mut(1) {
+                                    *flag = !*flag;
+                                }
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .children(advanced.then(|| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(ui::S2))
+                        .child(ui::form_field(
+                            "detail-schedule-cron",
+                            i18n::t("cron（五段，本地时区）"),
+                            &cron_input,
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(ui::label(i18n::t("重复执行")))
+                                .child(ui::switch("detail-schedule-recurring", recurring).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        if let Some(flag) = this.settings_detail_flags.first_mut() {
+                                            *flag = !*flag;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )),
+                        )
+                }));
+
                 let panel = ui::DetailPanel::new(i18n::t("新建定时任务"))
-                    .subtitle(format!("{} · {}", bot.name, i18n::t("按 cron 触发")))
-                    .body(ui::form_field("detail-schedule-title", i18n::t("标题"), &title_input))
-                    .body(ui::form_field(
-                        "detail-schedule-cron",
-                        i18n::t("cron（五段，本地时区）"),
-                        &cron_input,
+                    .subtitle(format!(
+                        "{} · {}",
+                        bot.name,
+                        i18n::t("选好时间后自动生成调度规则")
                     ))
+                    .body(ui::form_field(
+                        "detail-schedule-title",
+                        i18n::t("标题"),
+                        &title_input,
+                    ))
+                    .body(wizard)
                     .body(ui::form_field_tall(
                         "detail-schedule-prompt",
                         i18n::t("指令"),
                         &prompt_input,
                         120.,
                     ))
-                    .body(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(ui::label(i18n::t("重复执行")))
-                            .child(
-                                ui::switch("detail-schedule-recurring", recurring).on_click(
-                                    cx.listener(|this, _event, _window, cx| {
-                                        if let Some(flag) =
-                                            this.settings_detail_flags.first_mut()
-                                        {
-                                            *flag = !*flag;
-                                        }
-                                        cx.notify();
-                                    }),
-                                ),
-                            ),
-                    )
+                    .body(ui::note(tri!(
+                        "规则：{}",
+                        "Rule: {}",
+                        crate::schedule_builder::describe(&match mode {
+                            0 => crate::schedule_builder::When::Once { at_ms: 0 },
+                            3 => crate::schedule_builder::When::Every { minutes: 60 },
+                            _ => crate::schedule_builder::When::Daily { hour: 9, minute: 0 },
+                        })
+                    )))
                     .action(
                         ui::button("detail-cancel", i18n::t("取消")).on_click(cx.listener(
                             move |this, _event, _window, cx| {
@@ -9342,6 +10250,7 @@ impl PilotApp {
                                 this.settings_detail_input = None;
                                 this.settings_detail_extra.clear();
                                 this.settings_detail_flags.clear();
+                                this.settings_detail_entries.clear();
                                 cx.notify();
                             },
                         )),
@@ -9351,27 +10260,139 @@ impl PilotApp {
                             let read = |input: &Entity<SimpleInput>, cx: &mut Context<Self>| {
                                 input.read(cx).content().trim().to_string()
                             };
-                            let (Some(title_input), Some(cron_input), Some(prompt_input)) = (
+                            let (
+                                Some(title_input),
+                                Some(prompt_input),
+                                Some(time_input),
+                                Some(every_input),
+                                Some(cron_input),
+                            ) = (
                                 this.settings_detail_input.clone(),
                                 this.settings_detail_extra.first().cloned(),
                                 this.settings_detail_extra.get(1).cloned(),
+                                this.settings_detail_extra.get(2).cloned(),
+                                this.settings_detail_extra.get(3).cloned(),
                             ) else {
                                 return;
                             };
                             let title = read(&title_input, cx);
-                            let cron = read(&cron_input, cx);
                             let prompt = prompt_input.read(cx).content().to_string();
-                            let recurring = this
-                                .settings_detail_flags
-                                .first()
-                                .copied()
-                                .unwrap_or(true);
                             if title.is_empty() {
                                 this.settings_detail_error =
                                     Some(i18n::t("标题不能为空").to_string());
                                 cx.notify();
                                 return;
                             }
+                            if prompt.trim().is_empty() {
+                                this.settings_detail_error =
+                                    Some(i18n::t("指令不能为空").to_string());
+                                cx.notify();
+                                return;
+                            }
+                            let advanced = this
+                                .settings_detail_flags
+                                .get(1)
+                                .copied()
+                                .unwrap_or(false);
+                            // 高级模式：直接用用户填的 cron（保留老路径）。
+                            let (cron, recurring, rule) = if advanced {
+                                let cron = read(&cron_input, cx);
+                                if cron.split_whitespace().count() != 5 {
+                                    this.settings_detail_error = Some(
+                                        i18n::t("cron 必须是五段（分 时 日 月 周）").to_string(),
+                                    );
+                                    cx.notify();
+                                    return;
+                                }
+                                (
+                                    cron,
+                                    this.settings_detail_flags.first().copied().unwrap_or(true),
+                                    None,
+                                )
+                            } else {
+                                let now = time::now_ms() as i64;
+                                let when = match this.schedule_when {
+                                    0 => {
+                                        let hours = this
+                                            .settings_detail_entries
+                                            .first()
+                                            .and_then(|value| value.parse::<i64>().ok())
+                                            .unwrap_or(2);
+                                        crate::schedule_builder::When::Once {
+                                            at_ms: now + hours * 3_600_000,
+                                        }
+                                    }
+                                    3 => {
+                                        let minutes = read(&every_input, cx);
+                                        match minutes.parse::<u32>() {
+                                            Ok(value) if (1..=10_080).contains(&value) => {
+                                                crate::schedule_builder::When::Every {
+                                                    minutes: value,
+                                                }
+                                            }
+                                            _ => {
+                                                this.settings_detail_error = Some(
+                                                    i18n::t("1 到 10080 分钟").to_string(),
+                                                );
+                                                cx.notify();
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    mode => {
+                                        let raw = read(&time_input, cx);
+                                        let (hour, minute) = match parse_hhmm(&raw) {
+                                            Some(pair) => pair,
+                                            None => {
+                                                this.settings_detail_error = Some(
+                                                    i18n::t("时间格式是 HH:mm，例如 09:30")
+                                                        .to_string(),
+                                                );
+                                                cx.notify();
+                                                return;
+                                            }
+                                        };
+                                        if mode == 2 {
+                                            let weekdays: Vec<u32> = this
+                                                .schedule_days
+                                                .iter()
+                                                .enumerate()
+                                                .filter(|(_, on)| **on)
+                                                .map(|(index, _)| index as u32 + 1)
+                                                .collect();
+                                            if weekdays.is_empty() {
+                                                this.settings_detail_error =
+                                                    Some(i18n::t("至少选一天").to_string());
+                                                cx.notify();
+                                                return;
+                                            }
+                                            crate::schedule_builder::When::Weekly {
+                                                weekdays,
+                                                hour,
+                                                minute,
+                                            }
+                                        } else {
+                                            crate::schedule_builder::When::Daily { hour, minute }
+                                        }
+                                    }
+                                };
+                                match crate::schedule_builder::to_request(
+                                    &when,
+                                    now,
+                                    time::local_offset_secs() as i32,
+                                ) {
+                                    Ok(request) => (
+                                        request.cron,
+                                        request.recurring,
+                                        request.schedule_rule,
+                                    ),
+                                    Err(message) => {
+                                        this.settings_detail_error = Some(message);
+                                        cx.notify();
+                                        return;
+                                    }
+                                }
+                            };
                             let Some(bot) = this.roster.bot_by_id(&bot_id).cloned() else {
                                 return;
                             };
@@ -9381,7 +10402,7 @@ impl PilotApp {
                                 bot.directory.clone()
                             };
                             let identity = bot.identity();
-                            match automations::create_task(
+                            match automations::create_task_with_rule(
                                 &automations::db_path(&data::data_root()),
                                 &workspace,
                                 Some(&identity),
@@ -9389,6 +10410,7 @@ impl PilotApp {
                                 &cron,
                                 &prompt,
                                 recurring,
+                                rule,
                             ) {
                                 Ok(_) => {
                                     this.automations_view = None;
@@ -9400,6 +10422,7 @@ impl PilotApp {
                                     this.settings_detail_input = None;
                                     this.settings_detail_extra.clear();
                                     this.settings_detail_flags.clear();
+                                    this.settings_detail_entries.clear();
                                     this.settings_detail_error = None;
                                 }
                                 Err(message) => this.settings_detail_error = Some(message),
@@ -9518,7 +10541,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(ui::S2))
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(theme::hover()))
                             .on_click(cx.listener(
                                 move |this, _event, _window, cx| {
@@ -9669,9 +10692,15 @@ impl PilotApp {
                 // 目标表单是已有的 Render 实体，直接嵌进面板
                 if self.settings_detail_view.is_none() {
                     let goal = group_goal::read(&data::data_root(), &group_id);
-                    let (title_text, description_text) = goal
+                    let (title_text, description_text, acceptance_text) = goal
                         .as_ref()
-                        .map(|goal| (goal.title.clone(), goal.description.clone()))
+                        .map(|goal| {
+                            (
+                                goal.title.clone(),
+                                goal.description.clone(),
+                                goal.acceptance.clone(),
+                            )
+                        })
                         .unwrap_or_default();
                     let title = cx.new(|cx| {
                         SimpleInput::new(i18n::t("目标标题（必填）"), theme::ink_tertiary, cx)
@@ -9681,14 +10710,24 @@ impl PilotApp {
                     });
                     let stage =
                         cx.new(|cx| SimpleInput::new(i18n::t("阶段标题"), theme::ink_tertiary, cx));
+                    let acceptance = cx.new(|cx| {
+                        SimpleInput::new(i18n::t("整体验收线（做完的标准）"), theme::ink_tertiary, cx)
+                    });
+                    let stage_action = cx.new(|cx| {
+                        SimpleInput::new(i18n::t("证据 / 打回原因 / 阶段验收线"), theme::ink_tertiary, cx)
+                    });
                     title.update(cx, |input, cx| input.set_content(title_text, cx));
                     description.update(cx, |input, cx| input.set_content(description_text, cx));
+                    acceptance.update(cx, |input, cx| input.set_content(acceptance_text, cx));
                     let view = cx.new(|_| GroupGoalState {
                         group_id: group_id.clone(),
                         goal,
                         title,
                         description,
                         stage,
+                        acceptance,
+                        stage_action,
+                        edit: None,
                         new_stages: Vec::new(),
                         error: None,
                     });
@@ -9849,7 +10888,7 @@ impl PilotApp {
                                     .w_full()
                                     .truncate()
                                     .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
                                     .child(SharedString::from(detail)),
                             )
@@ -10010,7 +11049,7 @@ impl PilotApp {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(theme::hover()))
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.settings_detail_entries
@@ -10739,7 +11778,7 @@ impl PilotApp {
             8 => self.settings_page_schedules(cx),
             9 => self.settings_page_secrets(cx),
             10 => self.settings_page_capabilities(),
-            11 => self.settings_page_usage(),
+            11 => self.settings_page_usage(cx),
             12 => self.settings_page_about(cx),
             13 => self.settings_page_feedback(cx),
             14 => self.settings_page_browser(cx),
@@ -10763,11 +11802,24 @@ impl PilotApp {
         let status = crate::browser_tools::browser_path()
                 .map(|path| tri!("已找到：{path}", "Found: {path}"))
             .unwrap_or_else(|| i18n::t("未找到 Edge/Chrome，浏览器控制不可用").to_string());
+        // 浏览器 profile 按 Bot 隔离（W6 / G02）：登录态互不影响。
+        // 没有选中 Bot 时落到 "ui" 这一个 UI 专用 profile。
+        let current_scope = self
+            .selected_bot()
+            .map(|bot| bot.identity())
+            .unwrap_or_else(|| "ui".to_string());
+        // 三个按钮各自持有一份 scope（`listener` 是 'static 闭包，只能 move）。
+        let scope_open = current_scope.clone();
+        let scope_close = current_scope.clone();
+        let scope_shot = current_scope.clone();
         body = body
             .child(settings_section(i18n::t("状态")))
             .child(settings_group(vec![
                 kv_row(status, "Edge / Chrome").into_any_element()
             ]))
+            .child(settings_note(i18n::t(
+                "每个 Bot 使用独立浏览器配置，登录状态互不影响；配置文件保留在 runtime/browser-profiles/<bot>。",
+            )))
             .child(settings_section(i18n::t("控制")))
             .child(
                 div()
@@ -10775,9 +11827,10 @@ impl PilotApp {
                     .gap(px(8.))
                     .child(
                         settings_button(SharedString::from("browser-open"), i18n::t("打开浏览器"))
-                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                                let scope = scope_open.clone();
                                 let task = cx.background_executor().spawn(async move {
-                                    tokio_block_on(crate::browser_tools::launch_for_ui())
+                                    tokio_block_on(crate::browser_tools::launch_for_ui(&scope))
                                 });
                                 cx.spawn(async move |this, cx| {
                                     let result = task.await;
@@ -10791,9 +11844,10 @@ impl PilotApp {
                     )
                     .child(
                         settings_button(SharedString::from("browser-close"), i18n::t("关闭浏览器"))
-                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                                let scope = scope_close.clone();
                                 let task = cx.background_executor().spawn(async move {
-                                    tokio_block_on(crate::browser_tools::close_for_ui())
+                                    tokio_block_on(crate::browser_tools::close_for_ui(&scope))
                                 });
                                 cx.spawn(async move |this, cx| {
                                     let result = task.await;
@@ -10807,9 +11861,10 @@ impl PilotApp {
                     )
                     .child(
                         settings_button(SharedString::from("browser-shot"), i18n::t("页面截图"))
-                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                                let scope = scope_shot.clone();
                                 let task = cx.background_executor().spawn(async move {
-                                    tokio_block_on(crate::browser_tools::screenshot_png())
+                                    tokio_block_on(crate::browser_tools::screenshot_png(&scope))
                                 });
                                 cx.spawn(async move |this, cx| {
                                     let result = task.await;
@@ -11035,6 +12090,76 @@ impl PilotApp {
                     )
                     .into_any_element(),
             ]));
+        // ---- W3：删除隐私 Bot 后仍受保护的目录 ----
+        // 这些目录的归属 Bot 已经删掉，路径守卫继续拦着；这里给一个显式的解除入口，
+        // 否则用户只能手改 private-archives.json。
+        let archives = crate::privacy::archived_private_bots();
+        body = body.child(settings_section(i18n::t("保留的隐私 Bot 目录")));
+        if archives.is_empty() {
+            body = body.child(settings_empty(i18n::t("没有受保护的隐私目录。")));
+        } else {
+            body = body.child(settings_note(i18n::t(
+                "删除隐私 Bot 后目录继续受保护；解除后其他 Bot 可读。",
+            )));
+            let mut rows: Vec<gpui::AnyElement> = Vec::new();
+            let last = archives.len();
+            for (index, archive) in archives.iter().enumerate() {
+                let id = archive.id.clone();
+                rows.push(
+                    crate::ui_kit::card_row(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(crate::ui_kit::S2))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(crate::ui_kit::S1))
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_FAMILY)
+                                            .text_size(px(crate::ui_kit::T_BODY))
+                                            .text_color(theme::ink())
+                                            .truncate()
+                                            .child(SharedString::from(archive.name.clone())),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(theme::FONT_MONO)
+                                            .text_size(px(crate::ui_kit::T_LABEL))
+                                            .line_height(px(crate::ui_kit::T_LABEL_LH))
+                                            .text_color(theme::ink_tertiary())
+                                            .truncate()
+                                            .child(SharedString::from(archive.directory.clone())),
+                                    ),
+                            )
+                            .child(
+                                crate::ui_kit::button_ghost(
+                                    SharedString::from(format!("private-archive-row-{id}")),
+                                    i18n::t("解除保护"),
+                                )
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    match crate::privacy::release_archive(&id) {
+                                        Ok(()) => {
+                                            this.toast(i18n::t("已解除保护"), cx);
+                                        }
+                                        Err(message) => this.toast(message, cx),
+                                    }
+                                    cx.notify();
+                                })),
+                            )
+                            .into_any_element(),
+                        index + 1 == last,
+                    )
+                    .into_any_element(),
+                );
+            }
+            body = body.child(crate::ui_kit::card(rows));
+        }
         body.into_any_element()
     }
 
@@ -11085,7 +12210,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.opacity(0.9))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.set_theme_pref(value, cx);
@@ -11120,7 +12245,7 @@ impl PilotApp {
                                     } else {
                                         theme::FONT_FAMILY
                                     })
-                                    .text_size(px(12.5))
+                                    .text_size(px(ui_kit::T_TITLE))
                                     .line_height(px(17.))
                                     .text_color(if active {
                                         if wechat {
@@ -11219,7 +12344,7 @@ impl PilotApp {
             .items_center()
             .justify_between()
             .gap(px(8.))
-            .cursor_pointer()
+            .pointer()
             .hover(|style| style.opacity(0.9))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                 if let gpui::ClickEvent::Mouse(mouse) = event {
@@ -11386,7 +12511,7 @@ impl PilotApp {
                     .bg(color)
                     .border_2()
                     .border_color(if selected { theme::ink() } else { theme::edge() })
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.accent = if is_default { None } else { Some(color) };
@@ -11488,7 +12613,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, window, cx| {
                         this.apply_setting_select(kind, &option_value, window, cx);
@@ -11620,7 +12745,7 @@ impl PilotApp {
                     .flex()
                     .items_start()
                     .gap(px(8.))
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| {
                         style.bg(if wechat {
                             wecom_theme::nav_item_hover_bg()
@@ -11813,7 +12938,7 @@ impl PilotApp {
                     .px(px(12.))
                     .flex()
                     .items_center()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         theme::set_light(light);
@@ -12057,6 +13182,7 @@ impl PilotApp {
             }
 
             let model_rows = data::provider_model_rows(&provider.provider_id);
+            let provider_display = provider.provider_name.clone();
             let mut inner: Vec<gpui::AnyElement> = Vec::new();
             for model in model_rows {
                 let pid = provider.provider_id.clone();
@@ -12124,6 +13250,26 @@ impl PilotApp {
                                 if let Err(message) = data::move_model(&pid, &mid, 1) {
                                     this.toast(message, cx);
                                 }
+                                cx.notify();
+                            }))
+                        })
+                        .child({
+                            let pid = pid.clone();
+                            let mid = mid.clone();
+                            let pname = provider_display.clone();
+                            ui::button_ghost(
+                                SharedString::from(format!("model-limits-{pid}-{mid}")),
+                                i18n::t("限额"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.settings_detail = Some(SettingsDetail::ModelLimits {
+                                    provider_id: pid.clone(),
+                                    provider_name: pname.clone(),
+                                    model_id: mid.clone(),
+                                });
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_error = None;
                                 cx.notify();
                             }))
                         })
@@ -12563,7 +13709,7 @@ impl PilotApp {
                         gpui::rgba(0x00000000)
                     })
                     .mb(px(-1.))
-                    .cursor_pointer()
+                    .pointer()
                     .when(!is_active, |el| {
                         el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                     })
@@ -13068,7 +14214,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .bg(ui_accent())
                             .hover(|style| style.opacity(0.9))
                             .on_click(cx.listener(|this, _event, window, cx| {
@@ -13155,7 +14301,7 @@ impl PilotApp {
             .flex()
             .items_center()
             .gap(px(12.))
-            .cursor_pointer()
+            .pointer()
             .hover(|style| {
                 style.bg(if wechat {
                     wecom_theme::nav_item_hover_bg()
@@ -13180,11 +14326,11 @@ impl PilotApp {
                                 gpui::svg()
                                     .data(data)
                                     .size(px(20.))
-                                    .text_color(gpui::rgb(0xffffff))
+                                    .text_color(theme::accent_ink())
                                     .into_any_element()
                             })
                             .unwrap_or_else(|| {
-                                icons::icon(icons::Icon::MessageCircleFilled, 20., gpui::rgb(0xffffff))
+                                icons::icon(icons::Icon::MessageCircleFilled, 20., theme::accent_ink())
                                     .into_any_element()
                             }),
                     ),
@@ -13232,6 +14378,100 @@ impl PilotApp {
             .into_any_element()
     }
 
+    /// 未支持平台的入口卡片：灰化 + 版本徽标，点击只弹 toast，**绝不打开创建页**。
+    ///
+    /// v0.5.0 只交付能真跑的微信/企微；飞书/钉钉的配置字段与卡片协议都在 v0.6.0。
+    /// 这里做成明确的"不可用"空态，而不是看起来能点、点进去报错的假入口
+    /// （规范 §10 + 群记忆：v0.5 不保留假入口）。
+    fn im_platform_card_planned(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        reason: &'static str,
+        _cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let wechat = wecom_theme::active();
+        div()
+            .id(id)
+            .flex_1()
+            .min_w(px(180.))
+            .h(px(84.))
+            .rounded(px(theme::RADIUS_FIELD))
+            .border_1()
+            .border_color(if wechat {
+                wecom_theme::panel_divider()
+            } else {
+                theme::edge()
+            })
+            .bg(if wechat {
+                wecom_theme::panel_card_bg()
+            } else {
+                theme::card()
+            })
+            .px(px(14.))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            // 灰化：禁用语义靠 opacity + 徽标 + 不跳转三件事共同表达。
+            // 不挂 on_click：卡片不可用就不该响应用户，避免和"点了没反应"混淆。
+            .opacity(0.55)
+            .child(
+                div()
+                    .size(px(36.))
+                    .rounded_full()
+                    .bg(if wechat {
+                        wecom_theme::panel_divider()
+                    } else {
+                        theme::inset()
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icons::icon(icons::Icon::Calendar, 18., theme::ink_tertiary())),
+            )
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .font_family(if wechat {
+                                        wecom_theme::FONT_FAMILY
+                                    } else {
+                                        theme::FONT_FAMILY
+                                    })
+                                    .text_size(px(ui_kit::T_TITLE))
+                                    .line_height(px(18.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(theme::ink_secondary())
+                                    .child(title),
+                            )
+                            .child(ui_kit::badge("v0.6.0", ui_kit::Tone::Neutral)),
+                    )
+                    .child(
+                        div()
+                            .font_family(if wechat {
+                                wecom_theme::FONT_FAMILY
+                            } else {
+                                theme::FONT_FAMILY
+                            })
+                            .text_size(px(ui_kit::T_LABEL))
+                            .line_height(px(16.))
+                            .text_color(theme::ink_tertiary())
+                            .child(reason),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn settings_page_im(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         self.ensure_im_ticker(cx);
         if let Some(bot_id) = self.im_qr_page.clone() {
@@ -13274,6 +14514,24 @@ impl PilotApp {
                         cx,
                     )),
             )
+            // v0.6.0 的两张卡：明确不可用，不打开创建页（见 im_platform_card_planned）。
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(self.im_platform_card_planned(
+                        "im-new-feishu",
+                        i18n::t("飞书"),
+                        i18n::t("当前版本不支持飞书通道，计划 v0.6.0"),
+                        cx,
+                    ))
+                    .child(self.im_platform_card_planned(
+                        "im-new-dingtalk",
+                        i18n::t("钉钉"),
+                        i18n::t("当前版本不支持钉钉通道，计划 v0.6.0"),
+                        cx,
+                    )),
+            )
             .child(settings_note(i18n::t(
                 "微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。",
             )));
@@ -13312,7 +14570,7 @@ impl PilotApp {
             };
             let mut element = settings_row(title, Some(detail))
                 .id(SharedString::from(format!("im-bot-{}", row.id)))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .child(
                     div()
@@ -14605,8 +15863,18 @@ impl PilotApp {
             .unwrap_or(&const { None })
     }
 
-    /// 用量：对齐 DS 的看板排版——顶部四张数字卡，中间 7 天堆叠柱，底部会话明细。
-    fn settings_page_usage(&mut self) -> gpui::AnyElement {
+    /// 用量分组快照（W9；懒加载，同 totals）。
+    fn get_or_load_usage_grouped(&mut self) -> crate::rpi_engine::GroupedUsage {
+        if self.usage_grouped_view.is_none() {
+            self.usage_grouped_view = Some(crate::rpi_engine::usage_grouped(self.usage_range));
+        }
+        self.usage_grouped_view
+            .clone()
+            .unwrap_or_default()
+    }
+
+    /// 用量：对齐 DS 的看板排版——顶部四张数字卡，中间堆叠柱，底部会话明细。
+    fn settings_page_usage(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         use crate::ui_kit as ui;
 
         let chat = self.active_key().and_then(|key| self.chats.get(&key));
@@ -14619,7 +15887,10 @@ impl PilotApp {
         // 快照只在切到本页/打开设置时重读：扫全部 JSONL 不能进每帧渲染路径。
         let totals = *self.get_or_load_usage_totals();
         let summary = totals.or(usage);
-        let daily = crate::rpi_engine::usage_daily(7);
+        let range = self.usage_range;
+        let group_mode = self.usage_group;
+        let grouped = self.get_or_load_usage_grouped();
+        let daily = grouped.by_day.clone();
 
         let token = |value: Option<i64>| {
             value
@@ -14630,7 +15901,50 @@ impl PilotApp {
         let mut body = ui::page();
 
         // ---- 概览：四张统计卡 ----
-        body = body.child(ui::section(i18n::t("概览"))).child(
+        body = body.child(ui::section_action(
+            i18n::t("概览"),
+            // W9：范围 chip（1/7/30/90 天）+ 分组 chip（不分组/按 Bot/按模型）。
+            div()
+                .flex()
+                .items_center()
+                .gap(px(ui::S1))
+                .children([1usize, 7, 30, 90].into_iter().map(|days| {
+                    ui::chip(
+                        SharedString::from(format!("usage-range-{days}")),
+                        tri!("{days} 天", "{days}d"),
+                        days == range,
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        if this.usage_range != days {
+                            this.usage_range = days;
+                            this.usage_grouped_view = None;
+                            this.usage_totals_view = None;
+                        }
+                        cx.notify();
+                    }))
+                }))
+                .child(div().w(px(ui::S2)))
+                .children(
+                    [
+                        (0usize, i18n::t("不分组")),
+                        (1, i18n::t("按 Bot")),
+                        (2, i18n::t("按模型")),
+                    ]
+                    .into_iter()
+                    .map(|(mode, label)| {
+                        ui::chip(
+                            SharedString::from(format!("usage-group-{mode}")),
+                            label,
+                            mode == self.usage_group,
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.usage_group = mode;
+                            cx.notify();
+                        }))
+                    }),
+                ),
+        ));
+        body = body.child(
             div()
                 .w_full()
                 .flex()
@@ -14654,14 +15968,23 @@ impl PilotApp {
                     i18n::t("输出"),
                 )),
         );
+        // ---- 分组明细表（不分组时不出表，避免和下面 7 天柱状重复） ----
+        match group_mode {
+            1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&grouped.by_bot)),
+            2 => body = body.child(ui::section(i18n::t("按模型"))).child(usage_table_model(&grouped.by_model)),
+            _ => {}
+        }
 
-        // ---- 最近 7 天堆叠柱 ----
-        body = body.child(ui::section(i18n::t("最近 7 天")));
+        // ---- 最近 N 天堆叠柱 ----
+        body = body.child(ui::section(tri!("最近 {range} 天", "Last {range} days")));
         if daily
             .iter()
             .all(|(_, input, output, cache)| input + output + cache == 0)
         {
-            body = body.child(ui::empty(i18n::t("最近 7 天还没有用量。")));
+            body = body.child(ui::empty(tri!(
+                "最近 {range} 天还没有用量。",
+                "No usage in the last {range} days."
+            )));
         } else {
             let max = daily
                 .iter()
@@ -16205,7 +17528,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         .child(
                                             div()
                                                 .font_family(wecom_theme::FONT_FAMILY)
-                                                .text_size(px(17.))
+                                                .text_size(px(ui_kit::T_PAGE))
                                                 .line_height(px(24.))
                                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                                 .text_color(wecom_theme::chat_title())
@@ -16281,8 +17604,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .cursor_pointer()
-                .hover(|style| style.bg(theme::hover()))
+                .pointer()
                 .font_family(if wechat {
                     wecom_theme::FONT_FAMILY
                 } else {
@@ -16443,8 +17765,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme::hover()))
+                    .pointer()
                     .font_family(if wechat {
                         wecom_theme::FONT_FAMILY
                     } else {
@@ -16565,7 +17886,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .font_family(if wechat {
                         wecom_theme::FONT_FAMILY
@@ -16820,7 +18141,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .items_center()
                     .justify_between()
                     .gap(px(8.))
-                    .cursor_pointer()
+                    .pointer()
                     .bg(if active { theme::raised() } else { theme::panel() })
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -16971,7 +18292,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     );
                 if clickable {
                     row = row
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener({
                             let hit = hit.clone();
@@ -17224,7 +18545,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                     .on_click(cx.listener(|this, _event, window, cx| {
                         let next = !this.right_panel_open;
@@ -17282,7 +18603,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             .flex()
             .items_center()
             .justify_center()
-            .cursor_pointer();
+            .pointer();
         let base = if danger {
             base.hover(|style| style.bg(theme::danger()))
         } else {
@@ -17423,7 +18744,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .child(
                         div()
                             .font_family(theme::FONT_FAMILY)
-                            .text_size(px(14.))
+                            .text_size(px(ui_kit::T_PAGE))
                             .line_height(px(20.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(theme::ink())
@@ -17440,7 +18761,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .text_color(if self.search_open {
                                 theme::ink()
                             } else {
@@ -17477,7 +18798,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .text_color(theme::ink_secondary())
                             .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -17539,7 +18860,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .text_color(theme::ink_tertiary())
                                     .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                                     .on_click(cx.listener(|this, _event, _window, cx| {
@@ -17562,7 +18883,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::raised_hover()).text_color(theme::ink()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             this.footer_menu_open = !this.footer_menu_open;
@@ -17668,7 +18989,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .flex_shrink_0()
                 .mx_auto()
                 .rounded(px(theme::RADIUS_CARD))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.select_bot(index, cx);
@@ -17790,7 +19111,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .items_center()
                     .gap(px(8.))
                     .shadow(theme::shadow_1())
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::raised()))
                     .on_click(cx.listener(|this, _event, window, cx| {
                         let next = !this.right_panel_open;
@@ -17902,6 +19223,9 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             let start = messages.len().saturating_sub(group_chat_window);
             if start > 0 {
                 column = column.child(load_earlier_row(&chat_key, start, cx));
+            }
+            if chat.compacting == Some(true) {
+                column = column.child(compaction_status_row());
             }
             let mut last_day: Option<String> = None;
             for (index, message) in messages.iter().enumerate().skip(start) {
@@ -18063,7 +19387,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .px(px(12.))
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .font_family(theme::FONT_FAMILY)
                             .text_size(px(12.))
                             .line_height(px(16.))
@@ -18144,7 +19468,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                                 .px(px(14.))
                                                 .py(px(8.))
                                                 .font_family(theme::FONT_FAMILY)
-                                                .text_size(px(14.))
+                                                .text_size(px(ui_kit::T_TITLE))
                                                 .line_height(px(24.))
                                                 .text_color(theme::ink())
                                                 .child(SharedString::from(welcome)),
@@ -18181,6 +19505,10 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         let start = messages.len().saturating_sub(chat_window);
         if start > 0 {
             column = column.child(load_earlier_row(&chat_key, start, cx));
+        }
+        // W4：压缩进行中时在消息流顶部插一条状态行（不新建气泡），结束后移除。
+        if chat.compacting == Some(true) {
+            column = column.child(compaction_status_row());
         }
         let mut last_day: Option<String> = None;
         for (index, message) in messages.iter().enumerate().skip(start) {
@@ -18534,7 +19862,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .flex()
                 .items_center()
                 .justify_center()
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.remove_attachment(index, cx);
@@ -18554,7 +19882,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 .border_1()
                                 .border_color(theme::edge())
                                 .overflow_hidden()
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.bg(theme::hover()))
                                 .on_click(cx.listener({
                                     let path = path.clone();
@@ -18643,7 +19971,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .px(px(12.))
                         .flex()
                         .items_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(theme::raised()))
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             let text = this
@@ -18792,7 +20120,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .text_color(theme::ink_tertiary())
                             .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -18846,7 +20174,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .text_color(theme::ink_tertiary())
                             .hover(|style| style.bg(theme::subtle_hover()).text_color(theme::ink()))
                             .on_click(cx.listener(|this, _event, window, cx| {
@@ -18874,7 +20202,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .text_color(theme::ink_tertiary())
                             .hover(|style| style.bg(theme::subtle_hover()).text_color(theme::ink()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -18892,7 +20220,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .overflow_hidden()
                             .py(px(8.))
                             .font_family(theme::FONT_FAMILY)
-                            .text_size(px(14.))
+                            .text_size(px(ui_kit::T_PAGE))
                             .line_height(px(22.))
                             .text_color(theme::ink())
                             .key_context("Composer")
@@ -18911,7 +20239,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .text_color(theme::ink_secondary())
                             .hover(|style| style.bg(theme::subtle_hover()).text_color(theme::ink()))
                             .on_click(cx.listener(|this, _event, window, cx| {
@@ -18955,7 +20283,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 theme::accent()
                             })
                             .opacity(if streaming || send_enabled { 1.0 } else { 0.35 })
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(theme::hover()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 if this.active_key().is_some_and(|key| {
@@ -19040,7 +20368,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .px(px(12.))
                         .flex()
                         .items_center()
-                        .cursor_pointer()
+                        .pointer()
                         .text_color(theme::ink_secondary())
                         .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                         .on_click(cx.listener({
@@ -19227,7 +20555,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .child(
                         div()
                             .font_family(theme::FONT_FAMILY)
-                            .text_size(px(17.))
+                            .text_size(px(ui_kit::T_PAGE))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme::ink())
                             .child(SharedString::from(name)),
@@ -19294,7 +20622,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .rounded_full()
                             .px(px(8.))
                             .py(px(4.))
-                            .cursor_pointer()
+                            .pointer()
                             .bg(if active {
                                 theme::raised()
                             } else {
@@ -19541,7 +20869,7 @@ fn bot_details(
             .items_center()
             .justify_between()
             .gap(px(8.))
-            .cursor_pointer()
+            .pointer()
             .hover(|style| style.bg(theme::hover()))
             .on_click(cx.listener({
                 let bot_id = bot.id.clone();
@@ -19594,7 +20922,7 @@ fn bot_details(
                     .px(px(9.))
                     .flex()
                     .items_center()
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         if let Err(message) = data::set_bot_approval_level(&bot_id, level) {
@@ -19630,7 +20958,7 @@ fn bot_details(
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener({
                     let bot_id = bot.id.clone();
@@ -19654,6 +20982,58 @@ fn bot_details(
                         } else {
                             tri!("白名单：{allowlist_count} 项 · 编辑", "Allowlist: {allowlist_count} items · Edit")
                         })),
+                ),
+        );
+    }
+    // ---- W1：Bot 记忆。条目数直接读记忆索引；点行进编辑面板（与团队/群聊记忆同一套 UI） ----
+    rows = rows.child(section_label(i18n::t("记忆")));
+    {
+        let entries = data::bot_memory_entries(&bot.id);
+        let count = entries.len();
+        let bot_id = bot.id.clone();
+        rows = rows.child(
+            div()
+                .id("bot-details-memory-row")
+                .h(px(32.))
+                .w_full()
+                .rounded(px(theme::RADIUS_FIELD))
+                .border_1()
+                .border_color(theme::edge())
+                .bg(theme::card())
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .pointer()
+                .hover(|style| style.bg(theme::hover()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.settings_detail = Some(SettingsDetail::BotMemory {
+                        bot_id: bot_id.clone(),
+                    });
+                    this.settings_detail_input = None;
+                    this.settings_detail_extra.clear();
+                    this.settings_detail_error = None;
+                    this.settings_open = true;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(ui_kit::T_BODY))
+                        .text_color(theme::ink())
+                        .child(if count == 0 {
+                            i18n::t("还没有记忆").to_string()
+                        } else {
+                            tri!("{count} 条记忆", "{count} entries")
+                        }),
+                )
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(ui_kit::T_LABEL))
+                        .text_color(theme::ink_tertiary())
+                        .child(i18n::t("查看")),
                 ),
         );
     }
@@ -19698,7 +21078,7 @@ fn bot_details(
             div()
                 .id(SharedString::from(format!("hist-{}", history_id)))
                 .rounded(px(theme::RADIUS_CHIP))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     let key = bot_key(&bot_id);
@@ -19758,9 +21138,9 @@ fn bot_details(
                                 .id(SharedString::from(format!("hist-rename-{}", history_id)))
                                 .px(px(4.))
                                 .font_family(theme::FONT_FAMILY)
-                                .text_size(px(10.))
+                                .text_size(px(ui_kit::T_LABEL))
                                 .text_color(theme::ink_tertiary())
-                                .cursor_pointer()
+                                .pointer()
                                 .hover(|style| style.text_color(theme::ink()))
                                 .on_click(cx.listener(move |this, _event, window, cx| {
                                     cx.stop_propagation();
@@ -19783,7 +21163,7 @@ fn bot_details(
                         .child(
                             div()
                                 .font_family(theme::FONT_FAMILY)
-                                .text_size(px(10.))
+                                .text_size(px(ui_kit::T_LABEL))
                                 .text_color(theme::ink_tertiary())
                                 .child(i18n::t("点击切换")),
                         ),
@@ -20176,7 +21556,7 @@ fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> g
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(wecom_theme::list_hover()))
                 .on_click(move |_event, _window, cx| {
                     let id = toggle_id.clone();
@@ -20204,7 +21584,7 @@ fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> g
                 .child(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .text_color(wecom_theme::list_preview())
                         .child(SharedString::from(count.to_string())),
                 )
@@ -20274,7 +21654,7 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
         .flex()
         .items_center()
         .gap(px(10.))
-        .cursor_pointer()
+        .pointer()
         .when(active, |el| el.bg(wecom_theme::selected_gradient()))
         .when(!active, |el| {
             el.hover(|style| style.bg(wecom_theme::list_hover()))
@@ -20329,7 +21709,7 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
                                 .min_w(px(0.))
                                 .truncate()
                                 .font_family(wecom_theme::FONT_FAMILY)
-                                .text_size(px(14.))
+                                .text_size(px(ui_kit::T_TITLE))
                                 .line_height(px(20.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(title_color)
@@ -20458,7 +21838,7 @@ fn wecom_row_el(
                 .flex()
                 .justify_center()
                 .py(px(4.))
-                .cursor_pointer()
+                .pointer()
                 .font_family(wecom_theme::FONT_FAMILY)
                 .text_size(px(11.))
                 .line_height(px(16.))
@@ -20606,7 +21986,7 @@ fn wecom_row_el(
                 .items_center()
                 .gap(px(6.))
                 .px(px(2.))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.opacity(0.85))
                 .on_click(move |_event, _window, cx| {
                     let _ = weak.update(cx, |this, cx| {
@@ -20975,7 +22355,7 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
         })
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.bg(theme::hover()))
         .child(
             div()
@@ -20996,7 +22376,7 @@ fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stat
         .flex()
         .items_center()
         .justify_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| {
             style.bg(if wechat {
                 wecom_theme::nav_item_hover_bg()
@@ -21028,7 +22408,7 @@ fn dialog_close_hint(id: &'static str) -> impl IntoElement {
         .rounded(px(theme::RADIUS_CHIP))
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| {
             style.bg(if wechat {
                 wecom_theme::nav_item_hover_bg()
@@ -21136,6 +22516,7 @@ impl Default for ChatState {
             last_sent: None,
             pending_attachments: Vec::new(),
             pending_attachment_previews: Vec::new(),
+            compacting: None,
         }
     }
 }
@@ -21200,7 +22581,7 @@ fn load_earlier_row(key: &str, hidden: usize, cx: &mut Context<PilotApp>) -> gpu
         .flex()
         .justify_center()
         .py(px(4.))
-        .cursor_pointer()
+        .pointer()
         .font_family(theme::FONT_FAMILY)
         .text_size(px(11.))
         .text_color(theme::ink_tertiary())
@@ -21335,7 +22716,7 @@ fn quote_button(
         .font_family(theme::FONT_FAMILY)
         .text_size(px(11.))
         .text_color(theme::ink_tertiary())
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.text_color(theme::ink()))
         .on_click(cx.listener(move |this, _event, _window, cx| {
             if let Some(chat) = this.chats.get_mut(&key) {
@@ -21354,7 +22735,7 @@ fn copy_button(index: usize, text: String, cx: &mut Context<PilotApp>) -> gpui::
         .font_family(theme::FONT_FAMILY)
         .text_size(px(11.))
         .text_color(theme::ink_tertiary())
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.text_color(theme::ink()))
         .on_click(cx.listener(move |this, _event, _window, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
@@ -21388,7 +22769,7 @@ fn message_actions(
                 .font_family(theme::FONT_FAMILY)
                 .text_size(px(11.))
                 .text_color(theme::ink_tertiary())
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.text_color(theme::ink()))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
@@ -21493,7 +22874,7 @@ fn history_attachment_view(
                     .overflow_hidden()
                     .border_1()
                     .border_color(wecom_theme::composer_border())
-                    .cursor_pointer()
+                    .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(move |_event, _window, cx| {
                         let path = thumb_path.clone();
@@ -21524,7 +22905,7 @@ fn history_attachment_view(
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .when(!loading, |el| {
                     el.on_click(move |_event, _window, cx| {
@@ -21538,14 +22919,14 @@ fn history_attachment_view(
                         .max_w(px(160.))
                         .truncate()
                         .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .text_color(wecom_theme::chip_text())
                         .child(SharedString::from(meta.file_name.clone())),
                 )
                 .child(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .text_color(wecom_theme::list_preview())
                         .child(if loading { i18n::t("加载中…") } else { i18n::t("加载") }),
                 ),
@@ -21566,7 +22947,7 @@ fn history_attachment_view(
                         .max_w(px(220.))
                         .truncate()
                         .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .text_color(wecom_theme::chip_text())
                         .child(SharedString::from(name.clone())),
                 ),
@@ -21627,7 +23008,7 @@ fn nav_row(id: impl Into<gpui::ElementId>, active: bool) -> gpui::Stateful<gpui:
         .flex()
         .items_center()
         .gap(px(8.))
-        .cursor_pointer()
+        .pointer()
         .bg(if active { theme::selected() } else { theme::panel() })
         .hover(|style| style.bg(theme::hover()))
 }
@@ -21684,7 +23065,7 @@ fn two_line(title: String, subtitle: String, active: bool, pinned: bool) -> impl
                     div()
                         .min_w(px(0.))
                         .font_family(theme::FONT_FAMILY)
-                        .text_size(px(14.))
+                        .text_size(px(ui_kit::T_TITLE))
                         .line_height(px(20.))
                         .font_weight(if active {
                             gpui::FontWeight::MEDIUM
@@ -21782,6 +23163,10 @@ enum SettingsDetail {
         file: Option<String>,
         scope: MemoryScope,
     },
+    /// 单个 Bot 的记忆列表（W1）：点条目进 `Memory{ scope: Bot }` 编辑。
+    BotMemory {
+        bot_id: String,
+    },
     /// 添加密钥（名称 + 值）。
     AddSecret,
     /// 连接器密钥（按 connector 的 secrets 清单逐项填）。
@@ -21796,6 +23181,12 @@ enum SettingsDetail {
     AddModel {
         provider_id: String,
         provider_name: String,
+    },
+    /// 某个模型的上下文窗口 / 输出上限（W4）。
+    ModelLimits {
+        provider_id: String,
+        provider_name: String,
+        model_id: String,
     },
     /// 新建 Bot 默认模型（列表选择）。
     NewBotModel,
@@ -21958,6 +23349,171 @@ fn settings_section(title: impl Into<SharedString>) -> impl IntoElement {
     crate::ui_kit::section(title)
 }
 
+/// `"HH:mm"` → `(hour, minute)`。向导里手输时间用，格式错返回 None。
+fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
+    let (hour, minute) = text.trim().split_once(':')?;
+    let hour: u32 = hour.trim().parse().ok()?;
+    let minute: u32 = minute.trim().parse().ok()?;
+    (hour < 24 && minute < 60).then_some((hour, minute))
+}
+
+/// W9 用量分组表（按 Bot）：名称 / 回合 / 输入 / 输出 / 合计。
+///
+/// 数字列右对齐、等宽字体（`FONT_MONO`），保证同屏比较时位数对齐。
+fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
+    use crate::ui_kit as ui;
+    if rows.is_empty() {
+        return div()
+            .w_full()
+            .child(ui::empty(i18n::t("这个范围内还没有用量。")))
+            .into_any_element();
+    }
+    let mut card_rows: Vec<gpui::AnyElement> = Vec::new();
+    let header = |text: &'static str, right: bool| {
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .justify_end()
+            .when(!right, |el| el.justify_start())
+            .child(
+                div()
+                    .font_family(theme::FONT_FAMILY)
+                    .text_size(px(ui::T_LABEL))
+                    .text_color(theme::ink_tertiary())
+                    .child(i18n::t(text)),
+            )
+    };
+    card_rows.push(
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(ui::S2))
+            .child(header("名称", false))
+            .child(header("回合", true))
+            .child(header("输入", true))
+            .child(header("输出", true))
+            .child(header("合计", true))
+            .into_any_element(),
+    );
+    let last = rows.len();
+    for (index, (name, turns, input, output)) in rows.iter().enumerate() {
+        let number = |value: String| {
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .flex()
+                .justify_end()
+                .child(
+                    div()
+                        .font_family(theme::FONT_MONO)
+                        .text_size(px(ui::T_BODY))
+                        .text_color(theme::ink())
+                        .child(SharedString::from(value)),
+                )
+        };
+        card_rows.push(
+            ui::card_row(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(ui::S2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .font_family(theme::FONT_FAMILY)
+                            .text_size(px(ui::T_BODY))
+                            .text_color(theme::ink())
+                            .child(SharedString::from(name.clone())),
+                    )
+                    .child(number(turns.to_string()))
+                    .child(number(session_db::format_tokens(*input)))
+                    .child(number(session_db::format_tokens(*output)))
+                    .child(number(session_db::format_tokens(input + output))),
+                index + 1 == last,
+            )
+            .into_any_element(),
+        );
+    }
+    div()
+        .w_full()
+        .id("usage-table-bot")
+        .child(ui::card(card_rows))
+        .into_any_element()
+}
+
+/// W9 用量分组表（按模型）：provider / model / 回合 / 输入 / 输出 / 合计。
+fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoElement {
+    use crate::ui_kit as ui;
+    if rows.is_empty() {
+        return div()
+            .w_full()
+            .child(ui::empty(i18n::t("这个范围内还没有用量。")))
+            .into_any_element();
+    }
+    let mut card_rows: Vec<gpui::AnyElement> = Vec::new();
+    let number = |value: String| {
+        div().flex().justify_end().child(
+            div()
+                .font_family(theme::FONT_MONO)
+                .text_size(px(ui::T_BODY))
+                .text_color(theme::ink())
+                .child(SharedString::from(value)),
+        )
+    };
+    let last = rows.len();
+    for (index, (provider, model, turns, input, output)) in rows.iter().enumerate() {
+        card_rows.push(
+            ui::card_row(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(ui::S3))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(ui::S1))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(ui::T_BODY))
+                                    .text_color(theme::ink())
+                                    .truncate()
+                                    .child(SharedString::from(model.clone())),
+                            )
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(ui::T_LABEL))
+                                    .text_color(theme::ink_tertiary())
+                                    .truncate()
+                                    .child(SharedString::from(provider.clone())),
+                            ),
+                    )
+                    .child(number(turns.to_string()))
+                    .child(number(session_db::format_tokens(*input)))
+                    .child(number(session_db::format_tokens(*output)))
+                    .child(number(session_db::format_tokens(input + output))),
+                index + 1 == last,
+            )
+            .into_any_element(),
+        );
+    }
+    div()
+        .w_full()
+        .id("usage-table-model")
+        .child(ui::card(card_rows))
+        .into_any_element()
+}
+
 /// 分区标题 + 右侧动作（对齐 DS `.bt-set-section` + 头部 soft 按钮）。
 fn settings_section_action(
     title: impl Into<SharedString>,
@@ -22010,7 +23566,7 @@ fn settings_action_button(
         .flex()
         .items_center()
         .justify_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.bg(theme::raised_hover()))
         .child(
             div()
@@ -22047,7 +23603,7 @@ fn connector_link(
         .px(px(2.))
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .font_family(theme::FONT_FAMILY)
         .text_size(px(11.))
         .line_height(px(16.))
@@ -22172,7 +23728,7 @@ fn connector_chip(
         .px(px(12.))
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.bg(theme::hover()))
         .font_family(theme::FONT_FAMILY)
         .text_size(px(12.))
@@ -22230,7 +23786,7 @@ fn settings_tool_scope_section(
     rows.push(
         settings_row(title.to_string(), Some(detail.to_string()))
             .id(SharedString::from(format!("{master_id}-row")))
-            .cursor_pointer()
+            .pointer()
             .hover(move |style| style.bg(row_hover))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 let next = !crate::tool_scope::enabled(family);
@@ -22255,7 +23811,7 @@ fn settings_tool_scope_section(
             rows.push(
                 settings_row(bot.name.clone(), Some(bot_detail.to_string()))
                     .id(SharedString::from(format!("{per_bot_prefix}-row-{}", bot.id)))
-                    .cursor_pointer()
+                    .pointer()
                     .hover(move |style| style.bg(row_hover))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         match crate::tool_scope::toggle_bot(family, &bot_id) {
@@ -22321,7 +23877,7 @@ fn im_choice_button(
         })
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.opacity(0.9))
         .child(
             div()
@@ -22412,7 +23968,7 @@ fn settings_button(
         .px(px(12.))
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .hover(|style| style.bg(theme::raised_hover()))
         .child(
             div()
@@ -22801,7 +24357,7 @@ fn empty_state_badged(
             div()
                 .text_center()
                 .font_family(theme::FONT_FAMILY)
-                .text_size(px(14.))
+                .text_size(px(ui_kit::T_PAGE))
                 .line_height(px(20.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme::ink())
@@ -22815,6 +24371,30 @@ fn empty_state_badged(
                 .line_height(px(18.))
                 .text_color(theme::ink_tertiary())
                 .child(body.into()),
+        )
+}
+
+/// W4：上下文压缩中的状态行。挂在消息流顶部，`active=false` 时由调用处移除。
+///
+/// 不是气泡（组合进 `column` 会让它被当成一条消息进历史），只是一行居中的
+/// `T_Label` + 主题色，和 DS 的 "Compacting context…" 一致。
+fn compaction_status_row() -> impl IntoElement {
+    div()
+        .id("chat-compaction-status")
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(ui_kit::S1))
+        .py(px(ui_kit::S1))
+        .child(icons::icon(icons::Icon::Refresh, 12., theme::ink_tertiary()))
+        .child(
+            div()
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(ui_kit::T_LABEL))
+                .line_height(px(ui_kit::T_LABEL_LH))
+                .text_color(theme::ink_tertiary())
+                .child(i18n::t("正在压缩上下文…")),
         )
 }
 
@@ -23184,9 +24764,9 @@ fn tool_copy_button(
         .rounded(px(theme::RADIUS_TAG))
         .flex()
         .items_center()
-        .cursor_pointer()
+        .pointer()
         .font_family(wecom_theme::FONT_FAMILY)
-        .text_size(px(10.))
+        .text_size(px(ui_kit::T_LABEL))
         .text_color(wecom_theme::time_label())
         .hover(|style| {
             style
@@ -23226,7 +24806,7 @@ fn tool_images_row(
                 .border_1()
                 .border_color(wecom_theme::composer_border())
                 .overflow_hidden()
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(move |_event, _window, cx| {
                     let path = click_path.clone();
@@ -23242,7 +24822,7 @@ fn tool_images_row(
         row = row.child(
             div()
                 .font_family(wecom_theme::FONT_FAMILY)
-                .text_size(px(10.))
+                .text_size(px(ui_kit::T_LABEL))
                 .text_color(wecom_theme::time_label())
                 .child(SharedString::from(format!("+{}", paths.len() - 4))),
         );
@@ -23456,7 +25036,7 @@ fn wecom_edit_card(
     )
     .id(SharedString::from(format!("tool-toggle-{call_id}")))
     .when(has_content, |el| {
-        el.cursor_pointer()
+        el.pointer()
             .hover(|style| style.opacity(0.9))
             .on_click(move |_event, _window, cx| {
                 let key = key.clone();
@@ -23561,7 +25141,7 @@ fn wecom_exec_card(
     )
     .id(SharedString::from(format!("tool-toggle-{call_id}")))
     .when(has_content, |el| {
-        el.cursor_pointer()
+        el.pointer()
             .hover(|style| style.opacity(0.9))
             .on_click(move |_event, _window, cx| {
                 let key = key.clone();
@@ -23784,7 +25364,7 @@ fn wecom_tool_group_card(
         expanded,
     )
     .id(SharedString::from(format!("tool-group-{key}")))
-    .cursor_pointer()
+    .pointer()
     .hover(|style| style.opacity(0.9))
     .on_click(move |_event, _window, cx| {
         let key = toggle_key.clone();
@@ -23864,7 +25444,7 @@ fn wecom_tool_card(
             )
             .id(SharedString::from(format!("tool-toggle-{call_id}")))
             .when(has_detail, |el| {
-                el.cursor_pointer()
+                el.pointer()
                     .hover(|style| style.opacity(0.9))
                     .on_click(move |_event, _window, cx| {
                         let key = key.clone();
@@ -24103,7 +25683,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .pointer()
                     .when(topmost, |el| {
                         el.bg(wecom_theme::nav_item_selected_bg())
                     })
@@ -24174,7 +25754,7 @@ impl PilotApp {
             .flex()
             .items_center()
             .justify_center()
-            .cursor_pointer();
+            .pointer();
         let base = if danger {
             base.hover(|style| style.bg(wecom_theme::nav_badge_bg()))
         } else {
@@ -24344,7 +25924,7 @@ impl PilotApp {
             div()
                 .id("wechat-me")
                 .relative()
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.me_card_open = !this.me_card_open;
@@ -24382,7 +25962,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .pointer()
                     .bg(gpui::rgba(0x00000000))
                     .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -24437,7 +26017,7 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .pointer()
                     .bg(gpui::rgba(0x00000000))
                     .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -24465,7 +26045,7 @@ impl PilotApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .cursor_pointer()
+                .pointer()
                 .bg(gpui::rgba(0x00000000))
                 .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -24731,7 +26311,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .cursor_pointer()
+                        .pointer()
                         .when(active, |el| el.bg(wecom_theme::send_enabled()))
                         .when(!active, |el| {
                             el.hover(|style| style.bg(wecom_theme::list_hover()))
@@ -24753,7 +26333,7 @@ impl PilotApp {
                             false,
                             menu_icons::SETTINGS_SIZE,
                             if active {
-                                gpui::rgb(0xffffff)
+                                theme::accent_ink()
                             } else if secondary {
                                 wecom_theme::time_label()
                             } else {
@@ -24769,7 +26349,7 @@ impl PilotApp {
                                 .text_size(px(13.))
                                 .line_height(px(18.))
                                 .text_color(if active {
-                                    gpui::rgb(0xffffff)
+                                    wecom_theme::list_title_selected()
                                 } else if secondary {
                                     wecom_theme::time_label()
                                 } else {
@@ -24784,7 +26364,7 @@ impl PilotApp {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor_pointer()
+                                .pointer()
                                 .opacity(if pinned { 1.0 } else { 0.0 })
                                 .when(active && !pinned, |el| {
                                     el.hover(|style| style.opacity(1.))
@@ -24797,7 +26377,7 @@ impl PilotApp {
                                     icons::Icon::Pin,
                                     13.,
                                     if active {
-                                        gpui::rgb(0xffffff)
+                                        theme::accent_ink()
                                     } else if pinned {
                                         wecom_theme::send_enabled()
                                     } else {
@@ -24895,7 +26475,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(wecom_theme::list_hover()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             this.new_menu_open = !this.new_menu_open;
@@ -24980,7 +26560,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(4.))
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.close_im_subpage(window, cx);
@@ -25158,7 +26738,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.set_right_panel(false, window);
@@ -25239,7 +26819,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
                                     .child(SharedString::from(format!("还有 {overflow} 条"))),
                             )
@@ -25273,7 +26853,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
                                     .child(SharedString::from(format!("{}", index + 1))),
                             )
@@ -25368,7 +26948,7 @@ impl PilotApp {
                                 div()
                                     .flex_shrink_0()
                                     .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
                                     .child(SharedString::from(label)),
                             )
@@ -25385,7 +26965,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(wecom_theme::FONT_FAMILY)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
                                     .child(SharedString::from(format!("还有 {overflow} 个文件"))),
                             )
@@ -25470,7 +27050,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(ui::S1))
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(move |this, _event, window, cx| {
                                 this.switch_to_history_session(
@@ -25672,7 +27252,7 @@ impl PilotApp {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .cursor_pointer()
+                                        .pointer()
                                         .hover(|style| {
                                             style.bg(wecom_theme::nav_item_hover_bg())
                                         })
@@ -25695,7 +27275,7 @@ impl PilotApp {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .cursor_pointer()
+                                    .pointer()
                                     .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         if this.selection.is_some() {
@@ -26056,7 +27636,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
+                        .pointer()
                         .when(!enabled, |el| el.opacity(0.35))
                         .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -26260,7 +27840,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .gap(px(5.))
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             if let Some(key) = this.active_key()
@@ -26315,7 +27895,7 @@ impl PilotApp {
                                     .min_w(px(0.))
                                     .truncate()
                                     .font_family(theme::FONT_MONO)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::list_preview())
                                     .child(SharedString::from(path.clone())),
                             )
@@ -26323,7 +27903,7 @@ impl PilotApp {
                                 div()
                                     .flex_shrink_0()
                                     .font_family(theme::FONT_MONO)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(theme::success())
                                     .child(SharedString::from(format!("+{added}")))
                             }))
@@ -26331,7 +27911,7 @@ impl PilotApp {
                                 div()
                                     .flex_shrink_0()
                                     .font_family(theme::FONT_MONO)
-                                    .text_size(px(10.))
+                                    .text_size(px(ui_kit::T_LABEL))
                                     .text_color(theme::danger())
                                     .child(SharedString::from(format!("-{removed}")))
                             })),
@@ -26346,7 +27926,7 @@ impl PilotApp {
                 div().w_full().flex().justify_end().child(
                     div()
                         .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .line_height(px(14.))
                         .text_color(wecom_theme::time_label())
                         .child(SharedString::from(stats.join(" · "))),
@@ -26379,7 +27959,7 @@ impl PilotApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .cursor_pointer()
+                .pointer()
                 .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.chat_find_step(if previous { -1 } else { 1 }, cx);
@@ -26422,7 +28002,7 @@ impl PilotApp {
                     div()
                         .flex_shrink_0()
                         .font_family(wecom_theme::FONT_FAMILY)
-                        .text_size(px(10.))
+                        .text_size(px(ui_kit::T_LABEL))
                         .text_color(wecom_theme::time_label())
                         .child(SharedString::from(count)),
                 )
@@ -26436,7 +28016,7 @@ impl PilotApp {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .cursor_pointer()
+                        .pointer()
                         .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             this.chat_find = None;
@@ -26473,7 +28053,7 @@ impl PilotApp {
                         div()
                             .flex_shrink_0()
                             .font_family(wecom_theme::FONT_FAMILY)
-                            .text_size(px(10.))
+                            .text_size(px(ui_kit::T_LABEL))
                             .text_color(wecom_theme::time_label())
                             .child(SharedString::from(format!("{}.", index + 1))),
                     )
@@ -26492,7 +28072,7 @@ impl PilotApp {
                         div()
                             .flex_shrink_0()
                             .font_family(wecom_theme::FONT_FAMILY)
-                            .text_size(px(10.))
+                            .text_size(px(ui_kit::T_LABEL))
                             .text_color(wecom_theme::time_label())
                             .child(SharedString::from(if i18n::is_en() {
                                 format!("+{attachment_count} files")
@@ -26508,7 +28088,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 if let Some(chat) = this.chats.get_mut(&remove_key)
@@ -26649,7 +28229,7 @@ impl PilotApp {
                     .px(px(8.))
                     .pt(px(8.))
                     .font_family(wecom_theme::FONT_FAMILY)
-                    .text_size(px(14.))
+                    .text_size(px(ui_kit::T_PAGE))
                     .line_height(px(22.))
                     .text_color(wecom_theme::bubble_text())
                     .child(self.input.clone()),
@@ -26676,7 +28256,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
                                 if let gpui::ClickEvent::Mouse(mouse) = event {
@@ -26708,7 +28288,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(4.))
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.interject_current(window, cx);
@@ -26730,7 +28310,7 @@ impl PilotApp {
                         div()
                             .flex_shrink_0()
                             .font_family(wecom_theme::FONT_FAMILY)
-                            .text_size(px(10.))
+                            .text_size(px(ui_kit::T_LABEL))
                             .text_color(wecom_theme::time_label())
                             .child(i18n::t("Enter 排队"))
                     }))
@@ -26742,7 +28322,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.stage_attachments(cx);
@@ -26757,7 +28337,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.start_screenshot_capture(cx);
@@ -26772,7 +28352,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.toggle_voice_typing(window, cx);
@@ -26795,7 +28375,7 @@ impl PilotApp {
                             .bg(send_bg)
                             .flex()
                             .items_center()
-                            .cursor_pointer()
+                            .pointer()
                             .hover(|style| style.bg(theme::hover()))
                             .font_family(wecom_theme::FONT_FAMILY)
                             .text_size(px(13.))
