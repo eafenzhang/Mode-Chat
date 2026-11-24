@@ -7,7 +7,7 @@
 
 | 用途 | 来源 | 许可 | 许可全文 |
 | --- | --- | --- | --- |
-| 通用 UI（侧栏、菜单、按钮） | [Boxicons](https://boxicons.com) | MIT | [LICENSE-boxicons.txt](assets/icons/LICENSE-boxicons.txt) |
+| 通用 UI（侧栏、菜单、按钮） | [Lucide](https://lucide.dev) | ISC | [LICENSE-lucide.txt](assets/icons/LICENSE-lucide.txt) |
 | 连接器品牌标 | [simple-icons](https://simpleicons.org) / [mdi](https://materialdesignicons.com) | CC0-1.0 / Apache-2.0 | 资产内嵌，见下 |
 | IM 频道手机端标 | [TDesign](https://tdesign.tencent.com) | MIT | 资产内嵌，见下 |
 | 模型厂商标 | [LobeHub Icons](https://github.com/lobehub/lobe-icons) | MIT | [LICENSE-lobe.txt](assets/icons/LICENSE-lobe.txt) |
