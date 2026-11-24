@@ -562,22 +562,9 @@ async fn handle_agent_request(
                         .collect()
                 })
                 .unwrap_or_default();
-            let Some(fields) = parse_elicitation_fields(&schema, &required) else {
-                send(
-                    stdin,
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": { "action": "decline" }
-                    }),
-                )
-                .await?;
-                let _ = events.send(AcpEvent::Error(
-                    "表单包含暂不支持的字段类型，已拒绝".to_string(),
-                ));
-                return Ok(());
-            };
+            let (fields, skipped) = parse_elicitation_fields(&schema, &required);
             if fields.is_empty() {
+                // 全部字段都无法渲染：只能拒绝，但要说清原因。
                 send(
                     stdin,
                     json!({
@@ -587,7 +574,23 @@ async fn handle_agent_request(
                     }),
                 )
                 .await?;
+                let detail = if skipped.is_empty() {
+                    "表单没有可渲染的字段，已拒绝".to_string()
+                } else {
+                    format!(
+                        "表单字段类型均不受支持（{}），已拒绝",
+                        skipped.join("、")
+                    )
+                };
+                let _ = events.send(AcpEvent::Error(detail));
                 return Ok(());
+            }
+            if !skipped.is_empty() {
+                // 部分字段跳过：照常显示表单，但明确告诉用户缺了哪些。
+                let _ = events.send(AcpEvent::Error(format!(
+                    "以下字段类型不受支持，未在表单中显示：{}",
+                    skipped.join("、")
+                )));
             }
             let request_id = format!("acp-elicit-{}", request_key(id));
             pending.insert(
@@ -641,64 +644,80 @@ fn normalize_option_kind(kind: &str) -> String {
     }
 }
 
+/// 解析 elicitation 表单字段。
+///
+/// 返回 `(可渲染字段, 被跳过的字段名)`。
+/// 遇到不认识的类型**跳过该字段**而不是整份拒绝——外部引擎的字段类型比
+/// 我们支持的多，一个不认识的字段就让用户丢掉整个提问，代价太大。
+/// 只有全部字段都无法渲染时，调用方才会 decline。
 fn parse_elicitation_fields(
     schema: &Value,
     required: &[String],
-) -> Option<Vec<ElicitationField>> {
-    let properties = schema.get("properties")?.as_object()?;
-    if properties.len() > 12 {
-        return None;
-    }
-    properties
-        .iter()
-        .map(|(key, property)| {
-            let title = property
-                .get("title")
-                .and_then(Value::as_str)
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or(key)
-                .to_string();
-            let kind = match property.get("type").and_then(Value::as_str) {
-                Some("array") => {
-                    let items = property.get("items");
-                    let options = items.map(options_from_schema).unwrap_or_default();
-                    if !options.is_empty() {
-                        ElicitationFieldKind::Multi(options)
-                    } else if items
-                        .and_then(|items| items.get("type"))
-                        .and_then(Value::as_str)
-                        == Some("string")
-                    {
-                        ElicitationFieldKind::TextList
-                    } else {
-                        return None;
-                    }
+) -> (Vec<ElicitationField>, Vec<String>) {
+    let mut fields = Vec::new();
+    let mut skipped = Vec::new();
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return (fields, skipped);
+    };
+    for (key, property) in properties {
+        // 字段数上限：超过 12 个的截断（避免表单撑爆面板），不是拒绝整份。
+        if fields.len() >= 12 {
+            skipped.push(key.clone());
+            continue;
+        }
+        let title = property
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or(key)
+            .to_string();
+        let kind = match property.get("type").and_then(Value::as_str) {
+            Some("array") => {
+                let items = property.get("items");
+                let options = items.map(options_from_schema).unwrap_or_default();
+                if !options.is_empty() {
+                    ElicitationFieldKind::Multi(options)
+                } else if items.and_then(|items| items.get("type")).and_then(Value::as_str)
+                    == Some("string")
+                {
+                    ElicitationFieldKind::TextList
+                } else {
+                    skipped.push(key.clone());
+                    continue;
                 }
-                Some("boolean") => ElicitationFieldKind::Boolean,
-                Some("integer") => ElicitationFieldKind::Number { integer: true },
-                Some("number") => ElicitationFieldKind::Number { integer: false },
-                Some("string") => {
-                    let options = options_from_schema(property);
-                    if options.is_empty() {
-                        ElicitationFieldKind::Text
-                    } else {
-                        ElicitationFieldKind::Single(options)
-                    }
-                }
-                _ => return None,
-            };
-            if matches!(&kind, ElicitationFieldKind::Single(options) | ElicitationFieldKind::Multi(options) if options.len() > 50)
-            {
-                return None;
             }
-            Some(ElicitationField {
-                key: key.clone(),
-                title,
-                kind,
-                required: required.iter().any(|name| name == key),
-            })
-        })
-        .collect()
+            Some("boolean") => ElicitationFieldKind::Boolean,
+            Some("integer") => ElicitationFieldKind::Number { integer: true },
+            Some("number") => ElicitationFieldKind::Number { integer: false },
+            Some("string") => {
+                let options = options_from_schema(property);
+                if options.is_empty() {
+                    ElicitationFieldKind::Text
+                } else {
+                    ElicitationFieldKind::Single(options)
+                }
+            }
+            // 未知类型（object / null / 缺省）：跳过该字段，继续处理其余字段。
+            other => {
+                let _ = other;
+                skipped.push(key.clone());
+                continue;
+            }
+        };
+        // 选项过多：同样跳过而不是整份拒绝。
+        if matches!(&kind, ElicitationFieldKind::Single(options) | ElicitationFieldKind::Multi(options) if options.len() > 50)
+        {
+            skipped.push(key.clone());
+            continue;
+        }
+        fields.push(ElicitationField {
+            key: key.clone(),
+            title,
+            kind,
+            required: required.iter().any(|name| name == key),
+        });
+    }
+    (fields, skipped)
 }
 
 fn options_from_schema(schema: &Value) -> Vec<(String, String)> {
@@ -1054,7 +1073,8 @@ mod tests {
                 "enabled": { "type": "boolean", "title": "启用" }
             }
         });
-        let fields = parse_elicitation_fields(&schema, &[]).expect("schema 应可解析");
+        let (fields, skipped) = parse_elicitation_fields(&schema, &[]);
+        assert!(skipped.is_empty(), "不该有跳过字段");
         let by_key = |key: &str| fields.iter().find(|field| field.key == key).expect("字段");
         assert!(matches!(
             by_key("count").kind,
@@ -1074,7 +1094,9 @@ mod tests {
             "type": "object",
             "properties": { "blob": { "type": "object", "title": "对象" } }
         });
-        assert!(parse_elicitation_fields(&schema, &[]).is_none());
+        let (fields, skipped) = parse_elicitation_fields(&schema, &[]);
+        assert!(fields.is_empty(), "未知类型的字段应被跳过");
+        assert!(!skipped.is_empty(), "跳过的字段名要收集起来");
     }
 
     #[test]
