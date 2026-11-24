@@ -52,7 +52,11 @@ enum PendingKind {
 
 /// 后端发给 ACP 任务的命令。
 pub enum AcpCommand {
-    Prompt(String),
+    /// `images` 是 `(base64 数据, MIME)`，会作为 ImageBlock 追加到 prompt。
+    Prompt {
+        text: String,
+        images: Vec<(String, String)>,
+    },
     Stop,
     /// 审批作答：request_id 是展示给 UI 的 id，option_id 是 ACP optionId。
     Resolve { request_id: String, option_id: String },
@@ -70,9 +74,23 @@ pub struct AcpHandle {
 
 impl AcpHandle {
     /// 发送一次提问；返回 false 表示 ACP 任务已退出（会话句柄失效）。
+    /// 纯文本 prompt（测试与无附件路径都走这里）。
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn prompt(&self, text: impl Into<String>) -> bool {
+        self.prompt_with_images(text, Vec::new())
+    }
+
+    /// 带图片的 prompt。`images` 是 `(base64, mime)`。
+    pub fn prompt_with_images(
+        &self,
+        text: impl Into<String>,
+        images: Vec<(String, String)>,
+    ) -> bool {
         self.tx
-            .send(AcpCommand::Prompt(text.into()))
+            .send(AcpCommand::Prompt {
+                text: text.into(),
+                images,
+            })
             .is_ok()
     }
     pub fn is_closed(&self) -> bool {
@@ -223,7 +241,7 @@ async fn run(
             command = commands.recv() => {
                 let Some(command) = command else { break };
                 match command {
-                    AcpCommand::Prompt(text) => {
+                    AcpCommand::Prompt { text, images } => {
                         let Some(session) = session_id.as_deref() else {
                             let _ = events.send(AcpEvent::Error("ACP 会话尚未建立".to_string()));
                             continue;
@@ -234,13 +252,14 @@ async fn run(
                                 text.chars().count()
                             );
                         }
+                        let blocks = prompt_blocks(text, &images);
                         let payload = json!({
                             "jsonrpc": "2.0",
                             "id": next_id,
                             "method": "session/prompt",
                             "params": {
                                 "sessionId": session,
-                                "prompt": [{ "type": "text", "text": text }]
+                                "prompt": blocks
                             }
                         });
                         next_id += 1;
@@ -763,6 +782,22 @@ fn scalar_string(value: &Value) -> Option<String> {
     value.as_bool().map(|flag| flag.to_string())
 }
 
+/// 把文本 + 图片组成 ACP 的 `session/prompt` content block 数组。
+///
+/// ACP 协议支持 `{ "type": "image", "data": <base64>, "mimeType": ... }`；
+/// 我们之前只发文本，导致外置引擎收不到图片。
+fn prompt_blocks(text: String, images: &[(String, String)]) -> Vec<Value> {
+    let mut blocks = vec![json!({ "type": "text", "text": text })];
+    for (data, mime) in images {
+        blocks.push(json!({
+            "type": "image",
+            "data": data,
+            "mimeType": mime,
+        }));
+    }
+    blocks
+}
+
 fn content_json(content: &ElicitationContent) -> Value {
     let mut map = serde_json::Map::new();
     for (key, value) in content {
@@ -875,6 +910,27 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc::UnboundedReceiver;
+
+    /// ACP 的 prompt 必须能把图片作为 ImageBlock 发出去。
+    ///
+    /// 曾经只组装 `[{ "type": "text" }]`，外置引擎完全收不到附件。
+    #[test]
+    fn prompt_blocks_carry_images() {
+        let blocks = prompt_blocks("看图".to_string(), &[]);
+        assert_eq!(blocks.len(), 1, "只有文本时不该有额外块");
+        assert_eq!(blocks[0]["type"], "text");
+
+        let images = vec![
+            ("QUJD".to_string(), "image/png".to_string()),
+            ("REVG".to_string(), "image/jpeg".to_string()),
+        ];
+        let blocks = prompt_blocks("两张图".to_string(), &images);
+        assert_eq!(blocks.len(), 3, "文本 + 两张图");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["data"], "QUJD");
+        assert_eq!(blocks[1]["mimeType"], "image/png");
+        assert_eq!(blocks[2]["mimeType"], "image/jpeg");
+    }
 
     async fn recv(rx: &mut UnboundedReceiver<AcpEvent>) -> AcpEvent {
         tokio::time::timeout(Duration::from_secs(20), rx.recv())

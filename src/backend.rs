@@ -290,6 +290,11 @@ pub fn engine_is_mode(selected: Option<&str>) -> bool {
     !matches!(resolve_engine(selected), EngineChoice::Acp(_))
 }
 
+/// 当前选中的引擎是否是外部 ACP（而不是内嵌 pi-rust）。
+pub fn engine_is_acp(selected: Option<&str>) -> bool {
+    matches!(resolve_engine(selected), EngineChoice::Acp(_))
+}
+
 /// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
 #[allow(clippy::too_many_arguments)]
 async fn open_rpi_session(
@@ -1705,18 +1710,33 @@ async fn run_agent(
                     continue;
                 }
                                 if let SessionEngine::Acp(handle) = &ctx.engine {
-                    if !attachments.is_empty() {
-                        let _ = events.send(BackendEvent::Session {
-                            key,
-                            event: SessionEvent::Error {
-                                member: None,
-                                message: "智能体引擎暂不支持附件".to_string(),
-                            },
-                        });
-                        continue;
-                    }
+                    // ACP 的 prompt 支持 ImageBlock；把附件转成 (base64, mime)。
+                    // 解码失败时只发文本并提示，不整条丢弃。
+                    let acp_images: Vec<(String, String)> =
+                        match crate::rpi_engine::images_from_attachments(&attachments) {
+                            Ok(images) => images
+                                .into_iter()
+                                .map(|image| {
+                                    (image.data.to_string(), image.mime_type.clone())
+                                })
+                                .collect(),
+                            Err(reason) => {
+                                if !attachments.is_empty() {
+                                    let _ = events.send(BackendEvent::Session {
+                                        key: key.clone(),
+                                        event: SessionEvent::Error {
+                                            member: None,
+                                            message: format!(
+                                                "附件未随消息发送：{reason}"
+                                            ),
+                                        },
+                                    });
+                                }
+                                Vec::new()
+                            }
+                        };
                     let handle = handle.clone();
-                    if !handle.prompt(text) {
+                    if !handle.prompt_with_images(text, acp_images) {
                         // 子进程已退出（例如 session/load 失败）：丢掉死会话，
                         // 让下次 Ensure/新会话重建，而不是静默吞掉这条消息。
                         sessions.remove(&ctx_key);

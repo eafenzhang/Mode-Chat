@@ -18063,7 +18063,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         list.child(column)
     }
 
-    /// 当前会话（Bot）是否由完整引擎执行——ACP 引擎不支持附件。
+    /// 当前会话（Bot）是否由内嵌引擎执行。
     fn current_engine_is_mode(&self) -> bool {
         if self.selected_group().is_some() {
             return true;
@@ -18098,14 +18098,28 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
 
     /// 附件前置检查（文件选择与拖拽共用）。
     fn attachments_allowed(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.current_engine_is_mode() {
-            self.toast(i18n::t("当前智能体引擎暂不支持附件"), cx);
-            return false;
-        }
+        // 内嵌 Mode 引擎和外部 ACP 引擎都支持附件：
+        // Mode 走 `ImageContent`，ACP 走 `ImageBlock`（协议原生支持）。
+        // 只有「还没选会话」时才拒绝。
         let Some(key) = self.active_key() else {
             return false;
         };
+        if !self.current_engine_is_mode() && !self.current_engine_is_acp() {
+            self.toast(i18n::t("当前引擎不支持附件发送"), cx);
+            return false;
+        }
         self.chats.contains_key(&key)
+    }
+
+    /// 当前选中的会话是否跑在外部 ACP 引擎上。
+    fn current_engine_is_acp(&self) -> bool {
+        if self.selected_group().is_some() {
+            return false; // 群聊固定走内嵌引擎
+        }
+        let selected = self
+            .selected_bot()
+            .and_then(|bot| self.sessions.engine_of(&bot.id));
+        backend::engine_is_acp(selected)
     }
 
     /// 把本地路径读成附件；图片额外记一个预览路径（缩略图用）。

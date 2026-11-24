@@ -253,7 +253,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "当前 Bot" => Some("Current bot"),
         "当前会话" => Some("Current chat"),
         "当前引擎" => Some("Current engine"),
-        "当前智能体引擎暂不支持附件" => Some("The current agent engine does not support attachments"),
+        "当前引擎不支持附件发送" => Some("The current engine cannot send attachments"),
         "当前版本" => Some("Current version"),
         "待办" => Some("To-do"),
         "待办条数" => Some("To-do count"),
