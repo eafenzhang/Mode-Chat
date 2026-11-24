@@ -277,10 +277,15 @@ pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
             String::from_utf8_lossy(&extract.stderr).trim()
         ));
     }
-    let new_exe = work_dir.join("bot-gpui-pilot.exe");
-    if !new_exe.is_file() {
-        return Err("更新包缺少 bot-gpui-pilot.exe".to_string());
-    }
+    // 包内 exe 名跟随产品名（ModeChat.exe），不再是 Cargo 的 bin 名。
+    // 两者都接受：老安装包是 bot-gpui-pilot.exe，新包是 ModeChat.exe。
+    let new_exe = ["ModeChat.exe", "bot-gpui-pilot.exe"]
+        .iter()
+        .map(|name| work_dir.join(name))
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            "更新包缺少 ModeChat.exe（也没有 bot-gpui-pilot.exe）".to_string()
+        })?;
     let runtime_dirs = ["agent", "node", "config"]
         .iter()
         .filter(|name| work_dir.join(name).is_dir())
@@ -358,7 +363,7 @@ fn backup_path(current_exe: &Path) -> PathBuf {
     let mut name = current_exe
         .file_name()
         .map(|name| name.to_os_string())
-        .unwrap_or_else(|| "bot-gpui-pilot.exe".into());
+        .unwrap_or_else(|| "ModeChat.exe".into());
     name.push(".bak");
     current_exe.with_file_name(name)
 }
@@ -430,6 +435,7 @@ Start-Sleep -Seconds 20
 Remove-Item -LiteralPath '__BACKUP__' -Force -ErrorAction SilentlyContinue
 # 保留 apply-update*.log 便于排障，清掉大文件（zip + 解压出的运行时）。
 Remove-Item -LiteralPath (Join-Path '__STAGED__' 'update.zip') -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path '__STAGED__' 'ModeChat.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path '__STAGED__' 'bot-gpui-pilot.exe') -Force -ErrorAction SilentlyContinue
 foreach ($name in @('agent', 'node', 'config')) {{
   Remove-Item -LiteralPath (Join-Path '__STAGED__' $name) -Recurse -Force -ErrorAction SilentlyContinue
@@ -612,6 +618,42 @@ mod tests {
     }
 
     #[cfg(windows)]
+    /// 回归：发布包里的 exe 叫 `ModeChat.exe`（产品名），不是 Cargo 的 bin 名。
+    /// 早期只认 `bot-gpui-pilot.exe`，导致线上更新一直报「更新包缺少 …」。
+    #[cfg(windows)]
+    #[test]
+    fn accepts_product_exe_name_in_package() {
+        let dir = std::env::temp_dir().join(format!("modebot-update-name-{}", uuid::Uuid::new_v4()));
+        let payload = dir.join("payload");
+        std::fs::create_dir_all(&payload).expect("dir");
+        std::fs::write(payload.join("ModeChat.exe"), b"fake-exe").expect("exe");
+        let zip = dir.join("update.zip");
+        let status = std::process::Command::new("tar")
+            .args(["-a", "-cf"])
+            .arg(&zip)
+            .arg("-C")
+            .arg(&payload)
+            .arg("ModeChat.exe")
+            .status()
+            .expect("tar");
+        assert!(status.success(), "tar 创建 zip 失败");
+        let sha256 = sha256_file(&zip).expect("hash");
+        let size = std::fs::metadata(&zip).expect("meta").len();
+        let target = Target {
+            version: "0.0.98".to_string(),
+            url: format!("file:///{}", zip.display().to_string().replace('\\', "/")),
+            sha256,
+            size: Some(size),
+        };
+        let staged = download_and_stage(&target).expect("ModeChat.exe 应被接受");
+        assert!(staged.new_exe.is_file());
+        assert_eq!(
+            staged.new_exe.file_name().unwrap().to_string_lossy(),
+            "ModeChat.exe"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn rejects_mismatched_sha256() {
         let dir = std::env::temp_dir().join(format!("modebot-update-bad-{}", uuid::Uuid::new_v4()));
