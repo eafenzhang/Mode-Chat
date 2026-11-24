@@ -246,9 +246,9 @@ fn ui_prefs_path() -> std::path::PathBuf {
 /// 侧栏最多固定几个设置页（再多会挤压底部齿轮和导航）。
 const MAX_PINNED_SETTINGS: usize = 5;
 
-fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
+fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>, bool) {
     let Ok(bytes) = std::fs::read(ui_prefs_path()) else {
-        return (HashSet::new(), false, Vec::new());
+        return (HashSet::new(), false, Vec::new(), false);
     };
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| serde_json::json!({}));
     let muted = value
@@ -295,7 +295,17 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
             &atomic_file::WriteOptions::default(),
         );
     }
-    (muted, topmost, normalize_pinned_settings(&pinned))
+    // 右栏默认收起：中栏能拿到 894px，长文可读性最好；需要时点标题栏展开。
+    let right_panel_open = value
+        .get("right_panel_open")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    (
+        muted,
+        topmost,
+        normalize_pinned_settings(&pinned),
+        right_panel_open,
+    )
 }
 
 /// 设置页布局版本迁移。
@@ -694,7 +704,12 @@ fn sidebar_section_dot(color: Option<&str>) -> Rgba {
     }
 }
 
-fn save_ui_prefs(muted: &HashSet<String>, topmost: bool, pinned_settings: &[usize]) {
+fn save_ui_prefs(
+    muted: &HashSet<String>,
+    topmost: bool,
+    pinned_settings: &[usize],
+    right_panel_open: bool,
+) {
     let path = ui_prefs_path();
     let mut value = std::fs::read(&path)
         .ok()
@@ -709,6 +724,7 @@ fn save_ui_prefs(muted: &HashSet<String>, topmost: bool, pinned_settings: &[usiz
     value["topmost"] = serde_json::json!(topmost);
     value["pinned_settings"] = serde_json::json!(pinned_settings);
     value["settings_layout"] = serde_json::json!(4);
+    value["right_panel_open"] = serde_json::json!(right_panel_open);
     let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
 }
 
@@ -3243,7 +3259,7 @@ impl PilotApp {
         })
         .detach();
 
-        let (muted, topmost, pinned_settings) = load_ui_prefs();
+        let (muted, topmost, pinned_settings, right_panel_open) = load_ui_prefs();
         let wecom_scroller = cx.new(|cx| {
             gpui::component::message_scroller::MessageScrollerState::new(0, cx)
         });
@@ -3400,7 +3416,7 @@ impl PilotApp {
             backend,
             scroll: ScrollHandle::new(),
             active_tab: 0,
-            right_panel_open: true,
+            right_panel_open,
             panel_restore_width: None,
             settings_panel_shown: false,
             settings_panel_restore: None,
@@ -10627,6 +10643,13 @@ impl PilotApp {
             self.panel_restore_width = None;
             apply_panel_width(window, target);
         }
+        // 开合状态落盘，下次启动保持用户的选择。
+        save_ui_prefs(
+            &self.muted,
+            self.topmost,
+            &self.pinned_settings,
+            self.right_panel_open,
+        );
     }
 
     /// 详情面板的多字段表单：首次进入时按 `specs` 创建，已有则原样返回。
@@ -15735,7 +15758,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 } else {
                     self.muted.insert(key);
                 }
-                save_ui_prefs(&self.muted, self.topmost, &self.pinned_settings);
+                save_ui_prefs(
+                    &self.muted,
+                    self.topmost,
+                    &self.pinned_settings,
+                    self.right_panel_open,
+                );
                 self.toast(if muted { i18n::t("已取消免打扰") } else { i18n::t("已开启免打扰") }, cx);
             }
             DetailMenuAction::ShareConversation(key) => {
@@ -16050,7 +16078,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             self.pinned_settings.push(tab);
             self.toast(i18n::t("已添加到侧栏"), cx);
         }
-        save_ui_prefs(&self.muted, self.topmost, &self.pinned_settings);
+        save_ui_prefs(
+                    &self.muted,
+                    self.topmost,
+                    &self.pinned_settings,
+                    self.right_panel_open,
+                );
         cx.notify();
     }
 
@@ -24050,7 +24083,12 @@ impl PilotApp {
                     })
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.topmost = !this.topmost;
-                        save_ui_prefs(&this.muted, this.topmost, &this.pinned_settings);
+                        save_ui_prefs(
+                            &this.muted,
+                            this.topmost,
+                            &this.pinned_settings,
+                            this.right_panel_open,
+                        );
                         window_style::set_topmost(this.topmost);
                         this.toast(if this.topmost { i18n::t("窗口已置顶") } else { i18n::t("已取消置顶") }, cx);
                         cx.notify();
@@ -25466,8 +25504,8 @@ impl PilotApp {
             .w(px(PANEL_WIDTH))
             .flex_shrink_0()
             .h_full()
-            .border_l_1()
-            .border_color(wecom_theme::panel_divider())
+            // 不再画 border_l_1：面板底色（#252526）本来就比中栏（#1e1e1f）亮一档，
+            // 再叠 1px 亮线会读成「两条分割线」。底色差已经够分隔。
             .bg(wecom_theme::panel_bg())
             .px(px(12.))
             .py(px(12.))
@@ -25958,8 +25996,9 @@ impl PilotApp {
             let can_next = cursor + 1 < turns_prev.len();
             let mut nav = div()
                 .absolute()
-                .top(px(14.))
-                .right(px(14.))
+                .top(px(12.))
+                // 中栏容器已有 14px 内边距，这里再留 6px 才不会贴住气泡。
+                .right(px(6.))
                 .flex()
                 .flex_col()
                 .gap(px(2.))

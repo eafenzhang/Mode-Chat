@@ -79,7 +79,9 @@ pub const PANEL_WIDTH: f32 = 166.0;
 pub const NAV_ITEM_HEIGHT: f32 = 44.0;
 pub const LIST_ROW_HEIGHT: f32 = 56.0;
 pub const SEARCH_HEIGHT: f32 = 32.0;
-pub const COMPOSER_HEIGHT: f32 = 148.0;
+/// 输入框最小高度。原来是 148，占掉窗口 21% 却只放两行字；
+/// 收到 110（≈15%）更接近微信 4.x 的比例，也把空间让给消息区。
+pub const COMPOSER_HEIGHT: f32 = 110.0;
 
 // 窗口 / 标题栏
 pub fn window_bg() -> Rgba {
