@@ -285,7 +285,7 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
     if layout < 3 {
         let mut migrated = value.clone();
         migrated["pinned_settings"] = serde_json::json!(pinned);
-        migrated["settings_layout"] = serde_json::json!(3);
+        migrated["settings_layout"] = serde_json::json!(4);
         let _ = atomic_file::write_json_atomic(
             &ui_prefs_path(),
             &migrated,
@@ -295,7 +295,11 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
     (muted, topmost, normalize_pinned_settings(&pinned))
 }
 
-/// 设置页布局版本迁移：v1→v2 团队记忆 +1；v2→v3 浏览器/电脑操控 +2。
+/// 设置页布局版本迁移。
+///
+/// - v1→v2：团队记忆插入到 6，其后 +1
+/// - v2→v3：浏览器/电脑操控插入到 15/16，其后 +2
+/// - v3→v4：Bot 与群聊合并为「Bot团队」，群里归到 4，其后 -1
 fn migrate_pinned_settings(items: &[usize], layout: u64) -> Vec<usize> {
     let mut out = items.to_vec();
     if layout < 2 {
@@ -308,6 +312,18 @@ fn migrate_pinned_settings(items: &[usize], layout: u64) -> Vec<usize> {
         out = out
             .iter()
             .map(|&item| if item >= 15 { item + 2 } else { item })
+            .collect();
+    }
+    if layout < 4 {
+        out = out
+            .iter()
+            .map(|&item| match item {
+                // 群聊(5) 并入 Bot团队(4)
+                5 => 4,
+                // 6.. 整体前移一位
+                n if n >= 6 => n - 1,
+                n => n,
+            })
             .collect();
     }
     out
@@ -689,7 +705,7 @@ fn save_ui_prefs(muted: &HashSet<String>, topmost: bool, pinned_settings: &[usiz
     value["muted"] = serde_json::json!(keys);
     value["topmost"] = serde_json::json!(topmost);
     value["pinned_settings"] = serde_json::json!(pinned_settings);
-    value["settings_layout"] = serde_json::json!(3);
+    value["settings_layout"] = serde_json::json!(4);
     let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
 }
 
@@ -2726,6 +2742,8 @@ struct PilotApp {
     settings_open: bool,
     /// 设置窗口当前页（`SETTINGS_PAGES` 下标）。
     settings_tab: usize,
+    /// 「Bot团队」页内的横向 tab（0=Bot, 1=群聊, 2=分组）。
+    bot_team_tab: usize,
     /// 设置窗口的焦点句柄：打开时拿走焦点，别让按键落到后面的输入框。
     settings_focus: gpui::FocusHandle,
     /// 每个会话（Bot/群聊 key）的未发送草稿：切走再回来不丢。
@@ -3238,6 +3256,7 @@ impl PilotApp {
             search_open: false,
             settings_open: false,
             settings_tab: 0,
+            bot_team_tab: 0,
             settings_focus: cx.focus_handle(),
             tab_focus: {
                 let names = [
@@ -8291,12 +8310,13 @@ impl PilotApp {
             // 行本身通栏到侧栏边缘，内容缩进放在行内；滚动条占右侧 6px。
             .py(px(16.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
-            if index == 15 || index == 16 {
+            // 浏览器 / 电脑操控已并入「插件」页，不单独占菜单项。
+            if index == 14 || index == 15 {
                 continue;
             }
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
-            if index == 14 {
+            if index == 13 {
                 nav = nav.child(
                     div()
                         .mx(px(6.))
@@ -10283,19 +10303,19 @@ impl PilotApp {
             1 => self.settings_page_models(cx),
             2 => self.settings_page_plugins(cx),
             3 => self.settings_page_local_agents(cx),
-            4 => self.settings_page_bots(cx),
-            5 => self.settings_page_channels(cx),
-            6 => self.settings_page_team_memory(cx),
-            7 => self.settings_page_connectors(content_width, cx),
-            8 => self.settings_page_im(cx),
-            9 => self.settings_page_schedules(cx),
-            10 => self.settings_page_secrets(cx),
-            11 => self.settings_page_capabilities(),
-            12 => self.settings_page_usage(),
-            13 => self.settings_page_about(cx),
-            14 => self.settings_page_feedback(cx),
-            15 => self.settings_page_browser(cx),
-            16 => self.settings_page_computer(cx),
+            // Bot / 群聊 / 分组 三合一，页内横向 tab
+            4 => self.settings_page_bot_team(content_width, cx),
+            5 => self.settings_page_team_memory(cx),
+            6 => self.settings_page_connectors(content_width, cx),
+            7 => self.settings_page_im(cx),
+            8 => self.settings_page_schedules(cx),
+            9 => self.settings_page_secrets(cx),
+            10 => self.settings_page_capabilities(),
+            11 => self.settings_page_usage(),
+            12 => self.settings_page_about(cx),
+            13 => self.settings_page_feedback(cx),
+            14 => self.settings_page_browser(cx),
+            15 => self.settings_page_computer(cx),
             _ => self.settings_page_more(cx),
         }
     }
@@ -10530,118 +10550,7 @@ impl PilotApp {
                 )
                 .into_any_element(),
             ]))
-            .child(settings_section(i18n::t("侧栏分组")));
-        if self.sidebar_sections.sections.is_empty() {
-            body = body.child(settings_empty(i18n::t("还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/群聊移入")));
-        } else {
-            let mut section_rows: Vec<gpui::AnyElement> = Vec::new();
-            for section in self.sidebar_sections.sections.clone() {
-                let count = self
-                    .sidebar_sections
-                    .membership
-                    .values()
-                    .filter(|id| **id == section.id)
-                    .count();
-                let color_label = section
-                    .color
-                    .as_deref()
-                    .and_then(|id| {
-                        SIDEBAR_SECTION_COLORS
-                            .iter()
-                            .find(|(value, _)| *value == id)
-                            .map(|(_, label)| *label)
-                    })
-                    .unwrap_or(i18n::t("无"));
-                let mut row = settings_row(
-                    section.name.clone(),
-                    Some(if i18n::is_en() { format!("{} · color {color_label}", i18n::n(count, "item", "items")) } else { format!("{count} 项 · 颜色 {color_label}") }),
-                );
-                let id_up = section.id.clone();
-                let id_down = section.id.clone();
-                let id_rename = section.id.clone();
-                let id_color = section.id.clone();
-                let id_delete = section.id.clone();
-                row = row
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("section-up-{}", id_up)),
-                            "↑",
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.move_sidebar_section(&id_up, -1);
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("section-down-{}", id_down)),
-                            "↓",
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.move_sidebar_section(&id_down, 1);
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("section-rename-{}", id_rename)),
-                            i18n::t("改名"),
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            let current_name = this
-                                .sidebar_sections
-                                .sections
-                                .iter()
-                                .find(|section| section.id == id_rename)
-                                .map(|section| section.name.clone())
-                                .unwrap_or_default();
-                            this.settings_detail = Some(SettingsDetail::Section {
-                                editing_id: Some(id_rename.clone()),
-                                current_name,
-                            });
-                            this.settings_detail_input = None;
-                            this.settings_open = true;
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("section-color-{}", id_color)),
-                            i18n::t("颜色"),
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.cycle_sidebar_section_color(&id_color);
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        settings_button(
-                            SharedString::from(format!("section-delete-{}", id_delete)),
-                            i18n::t("删除"),
-                        )
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.delete_sidebar_section(&id_delete);
-                            this.toast(i18n::t("已删除分组，成员回到未分组"), cx);
-                            cx.notify();
-                        })),
-                    );
-                section_rows.push(row.into_any_element());
-            }
-            body = body.child(settings_group(section_rows));
-        }
-        body = body.child(div().flex().justify_end().child(
-            settings_button(SharedString::from("section-new"), i18n::t("新建分组")).on_click(
-                cx.listener(|this, _event, _window, cx| {
-                    this.settings_detail = Some(SettingsDetail::Section {
-                        editing_id: None,
-                        current_name: String::new(),
-                    });
-                    this.settings_detail_input = None;
-                    this.settings_open = true;
-                    cx.notify();
-                }),
-            ),
-        ));
+            .child(self.sidebar_sections_section(cx));
         body = body
             .child(settings_section(i18n::t("启动与后台")))
             .child(settings_group(vec![
@@ -11957,6 +11866,215 @@ impl PilotApp {
         .into_any_element()
     }
 
+    /// 「侧栏分组」管理块（通用页与 Bot团队页共用）。
+    ///
+    /// 抽出来是因为它现在有两个入口：原「通用」页里的快捷入口，
+    /// 和合并后的「Bot团队 → 分组」tab。两边必须完全一致，否则用户会看到两套行为。
+    fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut body = div().w_full().flex().flex_col().gap(px(ui_kit::S4));
+        body = body.child(settings_section(i18n::t("侧栏分组")));
+        if self.sidebar_sections.sections.is_empty() {
+            body = body.child(settings_empty(i18n::t(
+                "还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/群聊移入",
+            )));
+        } else {
+            let mut section_rows: Vec<gpui::AnyElement> = Vec::new();
+            for section in self.sidebar_sections.sections.clone() {
+                let count = self
+                    .sidebar_sections
+                    .membership
+                    .values()
+                    .filter(|id| **id == section.id)
+                    .count();
+                let color_label = section
+                    .color
+                    .as_deref()
+                    .and_then(|id| {
+                        SIDEBAR_SECTION_COLORS
+                            .iter()
+                            .find(|(value, _)| *value == id)
+                            .map(|(_, label)| *label)
+                    })
+                    .unwrap_or(i18n::t("无"));
+                let mut row = settings_row(
+                    section.name.clone(),
+                    Some(if i18n::is_en() {
+                        format!("{} · color {color_label}", i18n::n(count, "item", "items"))
+                    } else {
+                        format!("{count} 项 · 颜色 {color_label}")
+                    }),
+                );
+                let id_up = section.id.clone();
+                let id_down = section.id.clone();
+                let id_rename = section.id.clone();
+                let id_color = section.id.clone();
+                let id_delete = section.id.clone();
+                row = row
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-up-{}", id_up)),
+                            "↑",
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.move_sidebar_section(&id_up, -1);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-down-{}", id_down)),
+                            "↓",
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.move_sidebar_section(&id_down, 1);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-rename-{}", id_rename)),
+                            i18n::t("改名"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let current_name = this
+                                .sidebar_sections
+                                .sections
+                                .iter()
+                                .find(|section| section.id == id_rename)
+                                .map(|section| section.name.clone())
+                                .unwrap_or_default();
+                            this.settings_detail = Some(SettingsDetail::Section {
+                                editing_id: Some(id_rename.clone()),
+                                current_name,
+                            });
+                            this.settings_detail_input = None;
+                            this.settings_open = true;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-color-{}", id_color)),
+                            i18n::t("颜色"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.cycle_sidebar_section_color(&id_color);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("section-delete-{}", id_delete)),
+                            i18n::t("删除"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.delete_sidebar_section(&id_delete);
+                            this.toast(i18n::t("已删除分组，成员回到未分组"), cx);
+                            cx.notify();
+                        })),
+                    );
+                section_rows.push(row.into_any_element());
+            }
+            body = body.child(settings_group(section_rows));
+        }
+        body.child(div().flex().justify_end().child(
+            settings_button(SharedString::from("section-new"), i18n::t("新建分组")).on_click(
+                cx.listener(|this, _event, _window, cx| {
+                    this.settings_detail = Some(SettingsDetail::Section {
+                        editing_id: None,
+                        current_name: String::new(),
+                    });
+                    this.settings_detail_input = None;
+                    this.settings_open = true;
+                    cx.notify();
+                }),
+            ),
+        ))
+    }
+
+    /// 「Bot团队」页：Bot / 群聊 / 分组 三个子视图，顶部横向 tab 切换。
+    ///
+    /// 合并前这是三个独立设置页。三者操作的是同一批对象——Bot 和群聊互为成员，
+    /// 分组是对它们的归类——分开反而要来回跳导航。
+    fn settings_page_bot_team(
+        &mut self,
+        content_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        const TABS: [&str; 3] = ["Bot", "群聊", "分组"];
+        let active = self.bot_team_tab.min(TABS.len() - 1);
+
+        let mut tab_row = div()
+            .w_full()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .border_b_1()
+            .border_color(wecom_theme::divider());
+        for (index, label) in TABS.iter().enumerate() {
+            let is_active = index == active;
+            tab_row = tab_row.child(
+                div()
+                    .id(SharedString::from(format!("bot-team-tab-{index}")))
+                    .h(px(38.))
+                    .px(px(ui_kit::S3))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    // 选中项画 2px 下划线，和容器的 1px 分隔线重叠对齐。
+                    .border_b_2()
+                    .border_color(if is_active {
+                        wecom_theme::send_enabled()
+                    } else {
+                        gpui::rgba(0x00000000)
+                    })
+                    .mb(px(-1.))
+                    .cursor_pointer()
+                    .when(!is_active, |el| {
+                        el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                    })
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.bot_team_tab = index;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(wecom_theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .font_weight(if is_active {
+                                gpui::FontWeight::SEMIBOLD
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
+                            .text_color(if is_active {
+                                wecom_theme::chat_title()
+                            } else {
+                                wecom_theme::list_preview()
+                            })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+
+        let inner = match active {
+            0 => self.settings_page_bots(cx),
+            1 => self.settings_page_channels(cx),
+            _ => self
+                .sidebar_sections_section(cx)
+                .into_any_element(),
+        };
+        let _ = content_width;
+
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(tab_row)
+            .child(div().w_full().pt(px(ui_kit::S4)).child(inner))
+            .into_any_element()
+    }
+
     fn settings_page_bots(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let bots = self.roster.bots.clone();
         let hidden = self.roster.hidden_bots.clone();
@@ -13099,7 +13217,7 @@ impl PilotApp {
                     .timer(Duration::from_millis(800))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    if this.settings_open && this.settings_tab == 8 {
+                    if this.settings_open && this.settings_tab == 7 {
                         cx.notify();
                     }
                 });
@@ -15587,7 +15705,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         cx.listener(|this, _event, _window, cx| {
                                             cx.stop_propagation();
                                             this.me_card_open = false;
-                                            this.open_settings_at(13, _window, cx);
+                                            this.open_settings_at(12, _window, cx);
                                             cx.notify();
                                         }),
                                     ),
@@ -15734,7 +15852,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         entries.push((
             i18n::t("用量").to_string(),
             icons::Icon::Chart,
-            FooterMenuAction::Settings(12),
+            FooterMenuAction::Settings(11),
         ));
         entries.push((
             i18n::t("模型服务商").to_string(),
@@ -15744,12 +15862,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         entries.push((
             i18n::t("连接器").to_string(),
             icons::Icon::Plug,
-            FooterMenuAction::Settings(7),
+            FooterMenuAction::Settings(6),
         ));
         entries.push((
             i18n::t("定时任务").to_string(),
             icons::Icon::Calendar,
-            FooterMenuAction::Settings(9),
+            FooterMenuAction::Settings(8),
         ));
         entries.push((
             i18n::t("系统设置").to_string(),
@@ -20940,14 +21058,16 @@ fn two_line(title: String, subtitle: String, active: bool, pinned: bool) -> impl
         .child(text.into())
 }
 
-/// 设置窗口的页顺序（P4-9 S1 子集；S3 的页在对应能力就绪后再出现）。
-const SETTINGS_PAGES: [&str; 18] = [
+/// 设置窗口的页顺序。
+///
+/// Bot / 群聊 / 侧栏分组 三块合并为一页「Bot团队」，页内用横向 tab 切换
+/// （见 `settings_page_bot_team`）。18 -> 17 项，原「群聊」及之后的下标各前移 1。
+const SETTINGS_PAGES: [&str; 17] = [
     "通用",
     "模型",
     "插件",
     "智能体",
-    "Bot",
-    "群聊",
+    "Bot团队",
     "团队记忆",
     "连接器",
     "IM频道",
@@ -21061,25 +21181,28 @@ fn agent_icon(id: &str) -> gpui::AnyElement {
 }
 
 
+/// 设置导航图标（下标与 `SETTINGS_PAGES` 对齐）。
+///
+/// 「Bot团队」用 `Community`（人群轮廓）而不是 `Bot`（机器人）：
+/// 这一页同时管 Bot、群聊和侧栏分组，单个机器人图标表达不了「团队」。
 fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     match index {
         0 => menu_icons::MenuIcon::Sliders,
         1 => menu_icons::MenuIcon::Models,
         2 => menu_icons::MenuIcon::Plugins,
         3 => menu_icons::MenuIcon::Agents,
-        4 => menu_icons::MenuIcon::Bot,
-        5 => menu_icons::MenuIcon::Channels,
-        6 => menu_icons::MenuIcon::Memory,
-        7 => menu_icons::MenuIcon::Connectors,
-        8 => menu_icons::MenuIcon::Im,
-        9 => menu_icons::MenuIcon::Schedules,
-        10 => menu_icons::MenuIcon::Keys,
-        11 => menu_icons::MenuIcon::Abilities,
-        12 => menu_icons::MenuIcon::Usage,
-        13 => menu_icons::MenuIcon::About,
-        14 => menu_icons::MenuIcon::Feedback,
-        15 => menu_icons::MenuIcon::Browser,
-        16 => menu_icons::MenuIcon::Computer,
+        4 => menu_icons::MenuIcon::Team,
+        5 => menu_icons::MenuIcon::Memory,
+        6 => menu_icons::MenuIcon::Connectors,
+        7 => menu_icons::MenuIcon::Im,
+        8 => menu_icons::MenuIcon::Schedules,
+        9 => menu_icons::MenuIcon::Keys,
+        10 => menu_icons::MenuIcon::Abilities,
+        11 => menu_icons::MenuIcon::Usage,
+        12 => menu_icons::MenuIcon::About,
+        13 => menu_icons::MenuIcon::Feedback,
+        14 => menu_icons::MenuIcon::Browser,
+        15 => menu_icons::MenuIcon::Computer,
         _ => menu_icons::MenuIcon::More,
     }
 }
@@ -23820,12 +23943,12 @@ impl PilotApp {
                 .gap(px(2.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             // 浏览器 / 电脑操控已并入「插件」页，不再单独占菜单项。
-            if index == 15 || index == 16 {
+            if index == 14 || index == 15 {
                 continue;
             }
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
-            if index == 13 {
+            if index == 12 {
                     rows = rows.child(
                         div()
                             .mx(px(8.))
@@ -23835,7 +23958,7 @@ impl PilotApp {
                     );
                 }
                 // 尾部信息页照 DS 用次级色（关于/反馈/浏览器/电脑操控/更多）。
-                let secondary = index >= 13;
+                let secondary = index >= 12;
                 rows = rows.child(
                     div()
                         .id(SharedString::from(format!("wechat-set-{index}")))
@@ -26660,11 +26783,20 @@ mod prefs_tests {
 
     #[test]
     fn pinned_settings_migrate_to_new_layout() {
-        assert_eq!(migrate_pinned_settings(&[1, 6], 1), vec![1, 7]);
-        assert_eq!(migrate_pinned_settings(&[1, 6], 2), vec![1, 6]);
-        assert_eq!(migrate_pinned_settings(&[1, 15], 2), vec![1, 17]);
-        assert_eq!(migrate_pinned_settings(&[1, 6, 14], 1), vec![1, 7, 17]);
-        assert_eq!(migrate_pinned_settings(&[1, 6, 17], 3), vec![1, 6, 17]);
+        // v1 用户：v1→v2 +1，v2→v3 不动，v3→v4 -1，净效果抵消。
+        assert_eq!(migrate_pinned_settings(&[1, 6], 1), vec![1, 6]);
+        // v2 用户：只有 v3→v4 的 -1。
+        assert_eq!(migrate_pinned_settings(&[1, 6], 2), vec![1, 5]);
+        // v2 里 15 是浏览器，v3 插到 17，v4 再 -1。
+        assert_eq!(migrate_pinned_settings(&[1, 15], 2), vec![1, 16]);
+        assert_eq!(migrate_pinned_settings(&[1, 6, 14], 1), vec![1, 6, 16]);
+        // v3 用户：只跑 v3→v4。
+        assert_eq!(migrate_pinned_settings(&[1, 6, 17], 3), vec![1, 5, 16]);
+        // v4 用户：不再迁移，原样返回。
+        assert_eq!(migrate_pinned_settings(&[1, 5, 16], 4), vec![1, 5, 16]);
+        // 群聊(5) 在任何旧版本都并入 Bot团队(4)。
+        assert_eq!(migrate_pinned_settings(&[5], 3), vec![4]);
+        assert_eq!(migrate_pinned_settings(&[5], 2), vec![4]);
     }
 }
 

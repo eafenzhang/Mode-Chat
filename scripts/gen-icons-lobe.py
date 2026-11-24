@@ -90,6 +90,7 @@ MENU = {
     # 智能体用 CPU，「Bot」用机器人：两个都用 robot 会撞脸
     "agents": ("chip", "chip-filled"),
     "bot": ("robot", "robot-filled"),
+    "team": ("community", "community-filled"),
     "memory": ("brain", "brain-filled"),
     "im": ("mobile", "mobile-filled"),
     "connectors": ("plug-connect", "plug-connect-filled"),

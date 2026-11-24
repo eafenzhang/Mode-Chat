@@ -28,6 +28,8 @@ pub enum MenuIcon {
     Plugins,
     Agents,
     Bot,
+    /// 「Bot团队」页：人群轮廓（管 Bot + 群聊 + 分组）。
+    Team,
     Memory,
     Im,
     Connectors,
@@ -46,7 +48,7 @@ pub enum MenuIcon {
 ///
 /// 成对是硬约束——取不到的实心会退回线框，选中态就没有视觉反馈了，
 /// 所以这里只挑 Remix 确实同时提供 `-line` 与 `-fill` 的图标。
-const PAIRS: [(MenuIcon, &str, &str); 21] = [
+const PAIRS: [(MenuIcon, &str, &str); 22] = [
     // 「消息」用圆形气泡，「反馈」用扩音器，两者不撞脸
     (MenuIcon::Chat, "message-circle", "message-circle-filled"),
     (MenuIcon::Contacts, "group", "group-filled"),
@@ -58,6 +60,7 @@ const PAIRS: [(MenuIcon, &str, &str); 21] = [
     // 智能体用 CPU，「Bot」用机器人：两个都用 robot 会撞脸
     (MenuIcon::Agents, "chip", "chip-filled"),
     (MenuIcon::Bot, "robot", "robot-filled"),
+    (MenuIcon::Team, "community", "community-filled"),
     (MenuIcon::Memory, "brain", "brain-filled"),
     (MenuIcon::Im, "mobile", "mobile-filled"),
     (MenuIcon::Connectors, "plug-connect", "plug-connect-filled"),
@@ -93,6 +96,7 @@ impl MenuIcon {
             "puzzle" => include_bytes!("../assets/icons/ui/puzzle.svg"),
             "chip" => include_bytes!("../assets/icons/ui/chip.svg"),
             "robot" => include_bytes!("../assets/icons/ui/robot.svg"),
+            "community" => include_bytes!("../assets/icons/ui/community.svg"),
             "brain" => include_bytes!("../assets/icons/ui/brain.svg"),
             "mobile" => include_bytes!("../assets/icons/ui/mobile.svg"),
             "plug-connect" => include_bytes!("../assets/icons/ui/plug-connect.svg"),
@@ -120,6 +124,7 @@ impl MenuIcon {
             "puzzle-filled" => include_bytes!("../assets/icons/ui/puzzle-filled.svg"),
             "chip-filled" => include_bytes!("../assets/icons/ui/chip-filled.svg"),
             "robot-filled" => include_bytes!("../assets/icons/ui/robot-filled.svg"),
+            "community-filled" => include_bytes!("../assets/icons/ui/community-filled.svg"),
             "brain-filled" => include_bytes!("../assets/icons/ui/brain-filled.svg"),
             "mobile-filled" => include_bytes!("../assets/icons/ui/mobile-filled.svg"),
             "plug-connect-filled" => include_bytes!("../assets/icons/ui/plug-connect-filled.svg"),
