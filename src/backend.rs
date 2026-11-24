@@ -439,6 +439,8 @@ enum Command {
         key: String,
         text: String,
         members: Vec<String>,
+        /// 插话附带的图片（和正常发送同一套校验，见 images_from_attachments）。
+        attachments: Vec<AttachmentUpload>,
     },
     Resolve {
         key: String,
@@ -565,11 +567,13 @@ impl BackendHandle {
         key: impl Into<String>,
         text: impl Into<String>,
         members: Vec<String>,
+        attachments: Vec<AttachmentUpload>,
     ) {
         let _ = self.tx.send(Command::Interject {
             key: key.into(),
             text: text.into(),
             members,
+            attachments,
         });
     }
 
@@ -1731,6 +1735,7 @@ async fn run_agent(
                 key,
                 text,
                 members,
+                attachments,
             } => {
                 // 私聊/旁路：路由到当前活跃会话；群聊：只发给正在流式的成员。
                 let targets: Vec<(String, Option<String>)> = if let Some(spec) = groups.get(&key)
@@ -1772,8 +1777,11 @@ async fn run_agent(
                     if let SessionEngine::Rpi(session) = &ctx.engine {
                         let session = Arc::clone(session);
                         let text = text.clone();
+                        // 附件解码失败时降级为纯文本插话，不整条丢弃。
+                        let images = crate::rpi_engine::images_from_attachments(&attachments)
+                            .unwrap_or_default();
                         tokio::spawn(async move {
-                            session.steer(text).await;
+                            session.steer(text, images).await;
                         });
                     } else if let Some(member) = member {
                         let _ = events.send(BackendEvent::Session {

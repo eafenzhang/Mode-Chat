@@ -7146,10 +7146,9 @@ impl PilotApp {
         if !chat.ready || !chat.streaming {
             return;
         }
-        if !chat.pending_attachments.is_empty() {
-            self.toast(i18n::t("插话暂不支持附件"), cx);
-            return;
-        }
+        // 插话现在支持附件：取走待发附件。它们已经是 AttachmentUpload
+        // （暂存时就读好字节了），这里直接传下去。
+        let interject_files = std::mem::take(&mut chat.pending_attachments);
         if chat.elicitations.iter().any(|pending| !pending.sent) {
             return;
         }
@@ -7167,7 +7166,8 @@ impl PilotApp {
         chat.last_sent = Some(text.clone());
         chat.retry = None;
         self.drafts.remove(&key);
-        self.backend.interject(key, payload, members);
+        self.backend
+            .interject(key, payload, members, interject_files);
         self.input.update(cx, |input, cx| input.clear(window, cx));
         self.toast(i18n::t("已插话，当前回合会立即收到"), cx);
         self.scroll.scroll_to_bottom();

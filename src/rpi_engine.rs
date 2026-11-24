@@ -1028,9 +1028,19 @@ impl RpiSession {
 
     /// 回合进行中插话：交给 lane 的 steering 队列，在当前工具批次之后
     /// 作为新的用户输入进入模型上下文，不新开回合。
-    pub async fn steer(&self, text: String) {
+    ///
+    /// `images` 非空时把消息组成 `Blocks([Text, Image...])`——
+    /// 和正常发送走同一条 `UserContent` 路径，模型看到的内容格式一致。
+    pub async fn steer(&self, text: String, images: Vec<ImageContent>) {
+        let content: rpi_ai::types::UserContent = if images.is_empty() {
+            rpi_ai::types::UserContent::Text(text)
+        } else {
+            let mut blocks = vec![rpi_ai::types::Content::text(text)];
+            blocks.extend(images.into_iter().map(rpi_ai::types::Content::Image));
+            rpi_ai::types::UserContent::Blocks(blocks)
+        };
         let message = rpi_agent::AgentMessage::User(rpi_ai::types::UserMessage::new(
-            text,
+            content,
             crate::time::now_ms() as i64,
         ));
         if let Err(error) = self.lane.steer(message).await {
