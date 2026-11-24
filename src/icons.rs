@@ -70,8 +70,10 @@ pub enum Icon {
     Moon,
     Monitor,
     ChevronDown,
-    /// 展开右侧栏（侧栏轮廓）
+    /// 展开右侧栏（侧栏轮廓，面板在右）
     SidebarExpand,
+    /// 折叠右侧栏（侧栏轮廓，面板在右，作为收起态的同族图标）
+    SidebarCollapse,
     /// 折叠右侧栏（双箭头向右收拢）
     PaneCollapse,
     /// 展开（双箭头向左）
@@ -94,7 +96,7 @@ pub enum Weight {
 impl Icon {
     /// 全部图标（测试与清单用；顺序与 `svg()` 无关）。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const ALL: [Icon; 55] = [
+    pub const ALL: [Icon; 56] = [
         Icon::Search,
         Icon::Plus,
         Icon::Ellipsis,
@@ -148,6 +150,7 @@ impl Icon {
         Icon::Monitor,
         Icon::ChevronDown,
         Icon::SidebarExpand,
+        Icon::SidebarCollapse,
         Icon::PaneCollapse,
         Icon::PaneExpand,
     ];
@@ -221,7 +224,8 @@ impl Icon {
             Icon::Moon => include_bytes!("../assets/icons/ui/moon.svg"),
             Icon::Monitor => include_bytes!("../assets/icons/ui/monitor.svg"),
             Icon::SidebarExpand => include_bytes!("../assets/icons/ui/sidebar.svg"),
-            Icon::PaneCollapse => include_bytes!("../assets/icons/ui/arrow-to-right.svg"),
+            Icon::SidebarCollapse => include_bytes!("../assets/icons/ui/sidebar-right.svg"),
+            Icon::PaneCollapse => include_bytes!("../assets/icons/ui/sidebar-right.svg"),
             Icon::PaneExpand => include_bytes!("../assets/icons/ui/arrow-to-left.svg"),
         }
     }
@@ -281,7 +285,7 @@ mod tests {
 
     #[test]
     fn icon_set_matches_design_inventory() {
-        assert_eq!(Icon::ALL.len(), 55);
+        assert_eq!(Icon::ALL.len(), 56);
     }
 
     #[test]

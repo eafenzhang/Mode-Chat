@@ -177,40 +177,46 @@ gpui::actions!(
 );
 
 const SIDEBAR_WIDTH: f32 = 280.0;
-const PANEL_WIDTH: f32 = 320.0;
+/// 右侧栏宽度（会话详情栏、经典壳右栏、设置详情栏都以此为准）。
+///
+/// 曾经企微壳用 `PANEL_WIDTH.max(260.)` = 260，而撑窗口用的是 320，
+/// 导致「窗口涨 320、面板只占 260」，多出的 60 被会话列吃掉。
+pub const PANEL_WIDTH: f32 = 320.0;
 
 /// 主窗口最小尺寸（窗口系统层）。侧栏展开时以此为基础加宽，
 /// 保证左侧名单 / 中间会话的宽度不变。
 const WINDOW_MIN_W: f32 = 900.0;
 const WINDOW_MIN_H: f32 = 600.0;
 
-/// 打开 / 收起右侧栏，并在**窗口处于最小宽度**时把窗口加宽。
+/// 打开 / 收起右侧栏时调整窗口宽度。
 ///
-/// 需求：最小宽度下开侧栏不能挤压左侧名单与中间会话——其它模块宽度保持不变，
-/// 窗口整体加宽 `PANEL_WIDTH`；收起时再还原回去。
+/// 规则（用户要的语义）：**面板展开不挤压其它模块**。
+/// 所以「展开」= 窗口加宽「面板自身宽度」；「收起」= 还原。
 ///
-/// 窗口已经被用户手动拉宽时（> 最小宽度）不再撑窗口，侧栏占用现有宽度。
-/// 「展开前宽度」存在调用方，避免判断歧义。
+/// 判断依据不是「是否等于最小宽度」——那会因为 DPI/边框换算差几个像素而失效，
+/// 而是用一个显式状态：`panel_restore_width` 有值说明是「我们撑过的」。
 fn panel_target_width(
     current: f32,
     opening: bool,
     restore: Option<f32>,
     panel: f32,
 ) -> Option<f32> {
-    const SLACK: f32 = 1.;
+    const SLACK: f32 = 2.;
     if opening {
-        // 只有贴着最小宽度才撑窗口。
-        if current > WINDOW_MIN_W + SLACK {
+        // 用户手动拉得很宽（比「最小宽度 + 面板」还宽）时不再继续膨胀，
+        // 否则每次开合都越推越宽。
+        let roomy = WINDOW_MIN_W + panel + SLACK;
+        if current > roomy {
             return None;
         }
         Some(current + panel)
     } else {
-        // 收起：还原到展开前的宽度（只有确实撑过窗口才有值）。
+        // 收起：还原到展开前的宽度。
         let restore = restore?;
         if (restore - current).abs() < SLACK {
             return None;
         }
-        Some(restore.max(WINDOW_MIN_W))
+        Some(restore)
     }
 }
 
@@ -16559,7 +16565,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         cx.notify();
                     }))
                     .child(icons::icon(
-                        icons::Icon::PanelRight,
+                        if panel_open {
+                            icons::Icon::SidebarCollapse
+                        } else {
+                            icons::Icon::SidebarExpand
+                        },
                         menu_icons::TITLEBAR_SIZE,
                         if panel_open {
                             theme::ink()
@@ -18497,7 +18507,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             })),
                     )
                     .child(
-                        icon_button("panel-collapse", icons::Icon::PaneCollapse).on_click(
+                        icon_button("panel-collapse", icons::Icon::SidebarCollapse).on_click(
                             cx.listener(|this, _event, window, cx| {
                                 this.set_right_panel(false, window);
                                 cx.notify();
@@ -24260,7 +24270,7 @@ impl PilotApp {
                             .child(SharedString::from(title)),
                     )
                     .child(ui::badge(status, status_tone))
-                    // 右上角折叠：收起整列
+                    // 右上角折叠：收起整列（图标与左侧展开按钮同族，只是镜像）
                     .child(
                         div()
                             .id("chat-info-collapse")
@@ -24277,8 +24287,8 @@ impl PilotApp {
                                 cx.notify();
                             }))
                             .child(icons::icon(
-                                icons::Icon::PaneCollapse,
-                                14.,
+                                icons::Icon::SidebarCollapse,
+                                15.,
                                 wecom_theme::icon(),
                             )),
                     ),
@@ -24642,7 +24652,7 @@ impl PilotApp {
 
         div()
             .relative()
-            .w(px(wecom_theme::PANEL_WIDTH.max(260.)))
+            .w(px(PANEL_WIDTH))
             .flex_shrink_0()
             .h_full()
             .border_l_1()
@@ -24773,32 +24783,32 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .gap(px(4.))
-                            // 右上角只留「展开右栏」：模型/运行状态都放进栏内，
-                            // 不再直接弹模型选择框。
-                            .child(
-                                div()
-                                    .id("wechat-panel-toggle")
-                                    .size(px(28.))
-                                    .rounded(px(theme::RADIUS_TAG))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .when(self.right_panel_open, |el| {
-                                        el.bg(wecom_theme::chip_bg())
-                                    })
-                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
-                                    .on_click(cx.listener(|this, _event, window, cx| {
-                                        let next = !this.right_panel_open;
-                                        this.set_right_panel(next, window);
-                                        cx.notify();
-                                    }))
-                                    .child(icons::icon(
-                                        icons::Icon::SidebarExpand,
-                                        18.,
-                                        wecom_theme::icon(),
-                                    )),
-                            )
+                            // 只在「收起」时显示展开按钮；展开后折叠入口移到右栏内部
+                            // 右上角（见 chat_info_panel），避免同一处出现两个开合图标。
+                            .when(!self.right_panel_open, |el| {
+                                el.child(
+                                    div()
+                                        .id("wechat-panel-expand")
+                                        .size(px(28.))
+                                        .rounded(px(theme::RADIUS_TAG))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .hover(|style| {
+                                            style.bg(wecom_theme::nav_item_hover_bg())
+                                        })
+                                        .on_click(cx.listener(|this, _event, window, cx| {
+                                            this.set_right_panel(true, window);
+                                            cx.notify();
+                                        }))
+                                        .child(icons::icon(
+                                            icons::Icon::SidebarExpand,
+                                            18.,
+                                            wecom_theme::icon(),
+                                        )),
+                                )
+                            })
                             .child(
                                 div()
                                     .id("wechat-more")

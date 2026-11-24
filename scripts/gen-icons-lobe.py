@@ -73,7 +73,8 @@ BOX = {
     "Monitor": "monitor",
     "SidebarExpand": "sidebar",
     # 折叠 = 箭头指向右边缘；展开 = 指向左
-    "PaneCollapse": "arrow-to-right",
+    "SidebarCollapse": "sidebar-right",
+    "PaneCollapse": "sidebar-right",
     "PaneExpand": "arrow-to-left",
 }
 
