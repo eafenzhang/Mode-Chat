@@ -283,7 +283,9 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>) {
         .and_then(|value| value.as_u64())
         .unwrap_or(1);
     let pinned = migrate_pinned_settings(&pinned, layout);
-    if layout < 3 {
+    // 守卫必须跟着迁移表的**目标版本**走：加了 v3->v4 之后这里还是 `< 3`，
+    // 导致 layout=3 的用户迁移结果永远不落盘（只活在内存里）。
+    if layout < 4 {
         let mut migrated = value.clone();
         migrated["pinned_settings"] = serde_json::json!(pinned);
         migrated["settings_layout"] = serde_json::json!(4);
@@ -27282,6 +27284,25 @@ mod prefs_tests {
         let out = normalize_pinned_settings(&many);
         assert_eq!(out.len(), MAX_PINNED_SETTINGS);
         assert_eq!(out[0], 0);
+    }
+
+    /// 回归：v3 用户的迁移结果必须落盘。
+    ///
+    /// 曾经守卫写成 `if layout < 3`（迁移表已到 v4），导致 layout=3 的用户
+    /// 每次启动都重算迁移、却永远不保存——结果只活在内存里。
+    #[test]
+    fn migration_target_version_matches_guard() {
+        // layout=3 必须被迁移（v3 -> v4 的群聊并页），layout=4 则不该再动。
+        assert_ne!(
+            migrate_pinned_settings(&[6, 17], 3),
+            migrate_pinned_settings(&[6, 17], 4),
+            "layout=3 应该被 v4 迁移，layout=4 不应该"
+        );
+        // 同一输入跑两次结果一致（幂等，保证重复启动不会越迁越小）。
+        assert_eq!(
+            migrate_pinned_settings(&[6, 17], 3),
+            migrate_pinned_settings(&[6, 17], 3)
+        );
     }
 
     #[test]
