@@ -10525,9 +10525,9 @@ impl PilotApp {
     ) -> Vec<Entity<SimpleInput>> {
         if self.settings_detail_extra.len() + usize::from(self.settings_detail_input.is_some())
             == specs.len()
-            && self.settings_detail_input.is_some()
+            && let Some(primary) = self.settings_detail_input.clone()
         {
-            let mut all = vec![self.settings_detail_input.clone().expect("checked")];
+            let mut all = vec![primary];
             all.extend(self.settings_detail_extra.iter().cloned());
             return all;
         }
@@ -14011,7 +14011,10 @@ impl PilotApp {
         if self.automations_view.is_none() {
             self.reload_automations();
         }
-        let view = self.automations_view.as_ref().expect("just loaded");
+        let Some(view) = self.automations_view.as_ref() else {
+            // 理论上 reload 一定写 Some；这里兜底成空视图，宁可少显示也不要 panic。
+            return settings_page_body("定时任务").into_any_element();
+        };
         let db_path = automations::db_path(&self.roster.data_root);
         let mut body = settings_page_body("定时任务");
         if let Some(error) = &view.error {
@@ -14353,7 +14356,10 @@ impl PilotApp {
         if self.usage_totals_view.is_none() {
             self.usage_totals_view = Some(crate::rpi_engine::usage_totals());
         }
-        self.usage_totals_view.as_ref().expect("just loaded")
+        // 同上：刚写过 Some，但用 as_ref().unwrap_or(&None) 同一语义更安全。
+        self.usage_totals_view
+            .as_ref()
+            .unwrap_or(&const { None })
     }
 
     /// 用量：对齐 DS 的看板排版——顶部四张数字卡，中间 7 天堆叠柱，底部会话明细。
@@ -21293,6 +21299,27 @@ fn history_attachment_view(
 }
 
 /// 按字符截断（id 可能不是纯 ASCII；不能按字节切）。
+/// 只压前 `limit` 个字符里的连续空白，返回单行片段。
+///
+/// 列表预览只需要开头几十个字符；对整条消息做 `split_whitespace().join(" ")`
+/// 的代价与消息长度成正比，而这个函数只看前缀，长消息下省掉大部分分配。
+fn collapse_whitespace_prefix(text: &str, limit: usize) -> String {
+    let mut out = String::with_capacity(limit.min(text.len()));
+    let mut prev_space = true; // 首部空白也压掉
+    for ch in text.chars().take(limit) {
+        if ch.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(ch);
+            prev_space = false;
+        }
+    }
+    out.trim_end().to_string()
+}
+
 fn truncate_chars(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
@@ -24100,6 +24127,8 @@ impl PilotApp {
             } else {
                 bot_key(&id)
             };
+            // 预览只要 32 字符：先截前 96 字符再压空白，
+            // 避免对整条消息做 split+collect+join（长度与消息成正比）。
             let preview = self
                 .chats
                 .get(&key)
@@ -24108,13 +24137,7 @@ impl PilotApp {
                         .iter()
                         .rev()
                         .find(|message| !message.text.trim().is_empty())
-                        .map(|message| {
-                            message
-                                .text
-                                .split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
+                        .map(|message| collapse_whitespace_prefix(&message.text, 96))
                 })
                 .map(|text| truncate_chars(&text, 32))
                 .filter(|text| !text.is_empty())
@@ -27087,6 +27110,20 @@ mod prefs_tests {
         let out = normalize_pinned_settings(&many);
         assert_eq!(out.len(), MAX_PINNED_SETTINGS);
         assert_eq!(out[0], 0);
+    }
+
+    #[test]
+    fn collapse_whitespace_prefix_keeps_it_cheap() {
+        // 连续空白压成单个空格，首尾空白去掉
+        assert_eq!(collapse_whitespace_prefix("  a   b \n\t c  ", 96), "a b c");
+        // 只看前缀：超出 limit 的部分不参与
+        let long = format!("{}TAIL", "x".repeat(200));
+        assert_eq!(collapse_whitespace_prefix(&long, 10), "xxxxxxxxxx");
+        // limit 内没有空白时原样返回
+        assert_eq!(collapse_whitespace_prefix("hello", 96), "hello");
+        // 空串与纯空白
+        assert_eq!(collapse_whitespace_prefix("", 96), "");
+        assert_eq!(collapse_whitespace_prefix("   \n\t  ", 96), "");
     }
 
     #[test]
