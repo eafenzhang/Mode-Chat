@@ -8133,7 +8133,8 @@ impl PilotApp {
         if self.wecom_mode || !self.settings_open {
             return None;
         }
-        const NAV_WIDTH: f32 = 198.0;
+        // 设置页左列与会话列表同宽，切页时不跳变。
+        let nav_width = wecom_theme::LIST_WIDTH;
         let viewport = window.viewport_size();
         let viewport_width = f32::from(viewport.width);
         let viewport_height = f32::from(viewport.height);
@@ -8147,7 +8148,7 @@ impl PilotApp {
         let card_width = (viewport_width - 48.).min(1100. + panel_width);
         let card_height = (viewport_height - 64.).min(780.);
         let nav = self.settings_nav(cx);
-        let content_width = (card_width - NAV_WIDTH - 46. - panel_width).max(280.);
+        let content_width = (card_width - nav_width - 46. - panel_width).max(280.);
         let page = self.settings_page(content_width, cx);
         let card = div()
             .id("settings-card")
@@ -8165,7 +8166,7 @@ impl PilotApp {
             .child(
                 div()
                     .id("settings-nav")
-                    .w(px(NAV_WIDTH))
+                    .w(px(nav_width))
                     .flex_shrink_0()
                     .h_full()
                     .bg(theme::panel())
@@ -23923,13 +23924,9 @@ impl PilotApp {
     }
 
     fn wecom_list(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 设置页导航照 DS 的 198px；普通会话列表仍是微信的 246px。
+        // 设置页菜单与会话列表同宽（246），切页时左列不跳变。
         let list = div()
-            .w(px(if self.settings_open {
-                198.
-            } else {
-                wecom_theme::LIST_WIDTH
-            }))
+            .w(px(wecom_theme::LIST_WIDTH))
             .flex_shrink_0()
             .h_full()
             .flex()
@@ -24172,7 +24169,7 @@ impl PilotApp {
         // 右侧主区：窗口 - 导轨 - 设置列表 - 页面左右内边距(14+8) - 滚动条槽(6)。
         let content_width = (f32::from(window.viewport_size().width)
             - wecom_theme::NAV_WIDTH
-            - 198.
+            - wecom_theme::LIST_WIDTH
             - 28.
             - if self.settings_detail.is_some() {
                 ui_kit::PANEL_W
