@@ -11039,20 +11039,23 @@ impl PilotApp {
     }
 
     /// DS 的三张主题卡：浅色 / 深色 / 跟随系统。
-    fn theme_picker_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        fn theme_picker_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let wechat = wecom_theme::active();
         let mut cards = div().flex().gap(px(8.)).w_full();
-        for (value, label, icon) in [
-            ("light", "浅色", icons::Icon::Sun),
-            ("dark", "深色", icons::Icon::Moon),
-            ("system", "跟随系统", icons::Icon::Monitor),
+        // 三张紧凑 tile：图标 + 名称一行、说明一行。原来是 76px 居中大卡，
+        // 只放一个 18px 图标和两个字，上下全是空白。
+        for (value, label, note, icon) in [
+            ("light", "浅色", "白底深灰字", icons::Icon::Sun),
+            ("dark", "深色", "深灰底浅字", icons::Icon::Moon),
+            ("system", "跟随系统", "随 Windows 切换", icons::Icon::Monitor),
         ] {
             let active = self.theme_pref == value;
             cards = cards.child(
                 div()
                     .id(SharedString::from(format!("theme-{value}")))
                     .flex_1()
-                    .h(px(76.))
+                    .min_w(px(0.))
+                    .h(px(52.))
                     .rounded(px(theme::RADIUS_FIELD))
                     .border_1()
                     .border_color(if active {
@@ -11077,11 +11080,11 @@ impl PilotApp {
                     } else {
                         theme::card()
                     })
+                    .px(px(12.))
+                    .py(px(8.))
                     .flex()
-                    .flex_col()
                     .items_center()
-                    .justify_center()
-                    .gap(px(6.))
+                    .gap(px(10.))
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.9))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -11089,7 +11092,7 @@ impl PilotApp {
                     }))
                     .child(icons::icon(
                         icon,
-                        18.,
+                        16.,
                         if active {
                             if wechat {
                                 wecom_theme::send_enabled()
@@ -11104,25 +11107,51 @@ impl PilotApp {
                     ))
                     .child(
                         div()
-                            .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
-                            } else {
-                                theme::FONT_FAMILY
-                            })
-                            .text_size(px(12.))
-                            .line_height(px(18.))
-                            .text_color(if active {
-                                if wechat {
-                                    wecom_theme::chat_title()
-                                } else {
-                                    theme::ink()
-                                }
-                            } else if wechat {
-                                wecom_theme::panel_text()
-                            } else {
-                                theme::ink_secondary()
-                            })
-                            .child(i18n::t(label)),
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(if wechat {
+                                        wecom_theme::FONT_FAMILY
+                                    } else {
+                                        theme::FONT_FAMILY
+                                    })
+                                    .text_size(px(12.5))
+                                    .line_height(px(17.))
+                                    .text_color(if active {
+                                        if wechat {
+                                            wecom_theme::chat_title()
+                                        } else {
+                                            theme::ink()
+                                        }
+                                    } else if wechat {
+                                        wecom_theme::panel_text()
+                                    } else {
+                                        theme::ink_secondary()
+                                    })
+                                    .child(i18n::t(label)),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(if wechat {
+                                        wecom_theme::FONT_FAMILY
+                                    } else {
+                                        theme::FONT_FAMILY
+                                    })
+                                    .text_size(px(11.))
+                                    .line_height(px(15.))
+                                    .text_color(if wechat {
+                                        wecom_theme::list_preview()
+                                    } else {
+                                        theme::ink_tertiary()
+                                    })
+                                    .child(i18n::t(note)),
+                            ),
                     ),
             );
         }
@@ -22509,63 +22538,63 @@ fn settings_row_inner(
     detail: Option<String>,
 ) -> gpui::Div {
     let wechat = wecom_theme::active();
+    // 三栏布局：标签固定 130 / 说明吃掉中间 / 控件贴右缘。
+    // 原来是「标题 + 说明」竖堆在左、控件在右，说明只能占很窄一截，
+    // 而且每行高度被说明撑高一倍。
     let mut row = div()
         .w_full()
         .min_h(px(42.))
         .px(px(12.))
-        .py(px(10.))
+        .py(px(9.))
         .flex()
         .items_center()
-        .justify_between()
-        .gap(px(12.));
+        .gap(px(14.));
     if let Some(leading) = leading {
         row = row.child(leading);
     }
-    row.child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .font_family(if wechat {
-                            wecom_theme::FONT_FAMILY
-                        } else {
-                            theme::FONT_FAMILY
-                        })
-                        .text_size(px(13.))
-                        .line_height(px(18.))
-                        .text_color(if wechat {
-                            wecom_theme::chat_title()
-                        } else {
-                            theme::ink()
-                        })
-                        .truncate()
-                        .child(SharedString::from(title)),
-                )
-                .children(detail.map(|detail| {
-                    div()
-                        .font_family(if wechat {
-                            wecom_theme::FONT_FAMILY
-                        } else {
-                            theme::FONT_FAMILY
-                        })
-                        .text_size(px(12.))
-                        .line_height(px(16.))
-                        .text_color(if wechat {
-                            wecom_theme::list_preview()
-                        } else {
-                            theme::ink_secondary()
-                        })
-                        .truncate()
-                        .child(SharedString::from(detail))
-                })),
-        )
+    row = row.child(
+        div()
+            .w(px(130.))
+            .flex_shrink_0()
+            .truncate()
+            .font_family(if wechat {
+                wecom_theme::FONT_FAMILY
+            } else {
+                theme::FONT_FAMILY
+            })
+            .text_size(px(13.))
+            .line_height(px(18.))
+            .text_color(if wechat {
+                wecom_theme::chat_title()
+            } else {
+                theme::ink()
+            })
+            .child(SharedString::from(title)),
+    );
+    // 说明列：窄窗口下让它先被压缩（truncate），控件永远完整。
+    row = row.child(
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .truncate()
+            .font_family(if wechat {
+                wecom_theme::FONT_FAMILY
+            } else {
+                theme::FONT_FAMILY
+            })
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(if wechat {
+                wecom_theme::list_preview()
+            } else {
+                theme::ink_secondary()
+            })
+            .child(SharedString::from(detail.unwrap_or_default())),
+    );
+    // 控件槽：调用方 `.child(...)` 追加到这里。
+    row
 }
 
-/// 设置分组卡：行与行之间用细分割线，整组一个圆角卡（对齐原版 SettingsGroupCard）。
 fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
     let wechat = wecom_theme::active();
     let count = rows.len();
