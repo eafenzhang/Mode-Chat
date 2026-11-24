@@ -151,8 +151,8 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
         .overflow_hidden()
         .bg(linear_gradient(
             135.0,
-            linear_color_stop(gpui::rgba(0x1ad6a8ff), 0.0),
-            linear_color_stop(gpui::rgba(0x28be70ff), 1.0),
+            linear_color_stop(gpui::rgb(0x26262a), 0.0),
+            linear_color_stop(gpui::rgb(0x131316), 1.0),
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-bubble.svg"),
@@ -160,7 +160,7 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-visor.svg"),
-            gpui::rgb(0x0eac78),
+            gpui::rgb(0x3a3a40),
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-eyes.svg"),
