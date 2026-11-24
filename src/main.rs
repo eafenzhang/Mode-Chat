@@ -972,7 +972,10 @@ fn status_dot_color(status: &str) -> Option<gpui::Rgba> {
     }
 }
 
-/// 侧栏头像右下状态点（working/waiting 黄、error 红）。
+/// 头像右下角的状态点（working/waiting 黄、error 红、waiting_on_bot 灰）。
+///
+/// 状态来自 `chat_runtime_status`：error > 待审批/待回答 > streaming > idle。
+/// 侧栏的 Bot 行和群聊行都挂了它；列表行内的小圆点用 `status_dot_color`。
 fn sidebar_status_badge(status: &str) -> Option<gpui::AnyElement> {
     let color = status_dot_color(status)?;
     Some(
@@ -2472,6 +2475,7 @@ impl Render for BotFormState {
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
+                        .hover(|style| style.bg(theme::hover()))
                         .border_2()
                         .border_color(if selected { theme::ink() } else { transparent })
                         .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -7620,6 +7624,7 @@ impl PilotApp {
                                                 .flex()
                                                 .items_center()
                                                 .cursor_pointer()
+                                                .hover(|style| style.opacity(0.85))
                                                 .font_family(theme::FONT_FAMILY)
                                                 .text_size(px(11.))
                                                 .text_color(theme::accent_ink())
@@ -7656,6 +7661,7 @@ impl PilotApp {
                                                 .flex()
                                                 .items_center()
                                                 .cursor_pointer()
+                                                .hover(|style| style.bg(theme::raised_hover()))
                                                 .font_family(theme::FONT_FAMILY)
                                                 .text_size(px(11.))
                                                 .text_color(theme::ink_secondary())
@@ -7841,6 +7847,7 @@ impl PilotApp {
                                         .flex()
                                         .items_center()
                                         .cursor_pointer()
+                                        .hover(|style| style.opacity(0.85))
                                         .font_family(theme::FONT_FAMILY)
                                         .text_size(px(11.))
                                         .text_color(theme::accent_ink())
@@ -7942,6 +7949,7 @@ impl PilotApp {
                                 .items_center()
                                 .justify_center()
                                 .cursor_pointer()
+                                .hover(|style| style.opacity(0.85))
                                 .opacity(if side.streaming { 0.4 } else { 1.0 })
                                 .on_click(cx.listener(|this, _event, window, cx| {
                                     this.send_side(window, cx);
@@ -8140,6 +8148,7 @@ impl PilotApp {
                             on,
                         )
                         .cursor_pointer()
+                        .hover(|style| style.bg(theme::hover()))
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.open_plugin_confirm_dialog(
                                 PluginSwitchConfirm {
@@ -8373,6 +8382,7 @@ impl PilotApp {
                 .justify_center()
                 .gap(px(8.))
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.image_preview = None;
                     cx.notify();
@@ -11210,6 +11220,7 @@ impl PilotApp {
                     .border_2()
                     .border_color(if selected { theme::ink() } else { theme::edge() })
                     .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.accent = if is_default { None } else { Some(color) };
                         theme::set_accent(this.accent);
@@ -13059,6 +13070,7 @@ impl PilotApp {
             let mut element = settings_row(title, Some(detail))
                 .id(SharedString::from(format!("im-bot-{}", row.id)))
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .child(
                     div()
                         .font_family(theme::FONT_FAMILY)
@@ -16012,6 +16024,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .items_center()
                 .gap(px(8.))
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .font_family(if wechat {
                     wecom_theme::FONT_FAMILY
                 } else {
@@ -16173,6 +16186,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .items_center()
                     .gap(px(6.))
                     .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
                     .font_family(if wechat {
                         wecom_theme::FONT_FAMILY
                     } else {
@@ -16294,6 +16308,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .items_center()
                     .gap(px(6.))
                     .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
                     .font_family(if wechat {
                         wecom_theme::FONT_FAMILY
                     } else {
@@ -18258,6 +18273,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 .border_color(theme::edge())
                                 .overflow_hidden()
                                 .cursor_pointer()
+                                .hover(|style| style.bg(theme::hover()))
                                 .on_click(cx.listener({
                                     let path = path.clone();
                                     move |this, _event, _window, cx| {
@@ -18658,6 +18674,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             })
                             .opacity(if streaming || send_enabled { 1.0 } else { 0.35 })
                             .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 if this.active_key().is_some_and(|key| {
                                     this.chats.get(&key).is_some_and(|chat| chat.streaming)
@@ -19332,6 +19349,7 @@ fn bot_details(
                 .items_center()
                 .gap(px(4.))
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener({
                     let bot_id = bot.id.clone();
                     move |this, _event, _window, cx| {
@@ -20675,6 +20693,7 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
         .flex()
         .items_center()
         .cursor_pointer()
+        .hover(|style| style.bg(theme::hover()))
         .child(
             div()
                 .size(px(16.))
@@ -21192,6 +21211,7 @@ fn history_attachment_view(
                     .border_1()
                     .border_color(wecom_theme::composer_border())
                     .cursor_pointer()
+                    .hover(|style| style.bg(theme::hover()))
                     .on_click(move |_event, _window, cx| {
                         let path = thumb_path.clone();
                         let _ = weak.update(cx, |this, cx| {
@@ -21222,6 +21242,7 @@ fn history_attachment_view(
                 .items_center()
                 .gap(px(4.))
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .when(!loading, |el| {
                     el.on_click(move |_event, _window, cx| {
                         let meta = click_meta.clone();
@@ -21720,6 +21741,7 @@ fn connector_chip(
         .flex()
         .items_center()
         .cursor_pointer()
+        .hover(|style| style.bg(theme::hover()))
         .font_family(theme::FONT_FAMILY)
         .text_size(px(12.))
         .line_height(px(18.))
@@ -22773,6 +22795,7 @@ fn tool_images_row(
                 .border_color(wecom_theme::composer_border())
                 .overflow_hidden()
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .on_click(move |_event, _window, cx| {
                     let path = click_path.clone();
                     let _ = weak.update(cx, |this, cx| {
@@ -23885,6 +23908,7 @@ impl PilotApp {
                 .id("wechat-me")
                 .relative()
                 .cursor_pointer()
+                .hover(|style| style.bg(theme::hover()))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.me_card_open = !this.me_card_open;
                     this.detail_menu_open = false;
@@ -26317,6 +26341,7 @@ impl PilotApp {
                             .flex()
                             .items_center()
                             .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
                             .font_family(wecom_theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(18.))

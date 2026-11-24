@@ -264,18 +264,6 @@ pub fn unread_dot(size: f32) -> impl IntoElement {
         .shadow(vec![ring])
 }
 
-/// 状态徽标（12px / 工作中 8px；颜色由调用方按状态给）。
-// TODO(visual): 名册状态数据接入后启用（当前 D8 不显示）。
-#[allow(dead_code)]
-pub fn status_dot(size: f32, color: Rgba) -> impl IntoElement {
-    let ring = BoxShadow::new(px(0.), px(0.), Hsla::from(theme::panel())).spread_radius(px(1.5));
-    div()
-        .size(px(size))
-        .rounded_full()
-        .bg(color)
-        .shadow(vec![ring])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
