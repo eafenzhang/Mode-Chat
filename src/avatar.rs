@@ -149,22 +149,20 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
         .flex_shrink_0()
         .rounded(px(radius))
         .overflow_hidden()
-        .bg(linear_gradient(
-            135.0,
-            linear_color_stop(gpui::rgb(0x26262a), 0.0),
-            linear_color_stop(gpui::rgb(0x131316), 1.0),
-        ))
+        // 白底黑标：与 app.png / app.ico 完全一致。
+        // 深色任务栏上白方块本身就是强对比，符号识别度比深底白符号更高。
+        .bg(gpui::rgb(0xffffff))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-bubble.svg"),
-            gpui::rgb(0xffffff),
+            gpui::rgb(0x1a1a1c),
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-visor.svg"),
-            gpui::rgb(0x3a3a40),
+            gpui::rgb(0xffffff),
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-eyes.svg"),
-            gpui::rgb(0xffffff),
+            gpui::rgb(0x1a1a1c),
         ))
         .into_any_element()
 }
