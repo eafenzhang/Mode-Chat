@@ -1,12 +1,4 @@
-"""抓图标资产：Phosphor(通用) + Iconify logos(连接器) + LobeHub(模型厂商)。
-
-数据源是本地已下载的 @iconify-json 包（不走 API，避免限流），产物入库，
-不进构建链（与 scripts/gen-icons.mjs 同定位）。
-
-用法：
-    node ../AppData/Local/Temp/icon-sets 里已有的包
-    python scripts/gen-icons-lobe.py [--icon-sets DIR] [--lobe DIR]
-"""
+"""生成图标资产：Boxicons(通用线框+实心) + Iconify logos(连接器) + LobeHub(模型厂商)。"""
 import argparse
 import json
 import os
@@ -22,92 +14,93 @@ APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(APP, "assets", "icons")
 
 # ---- Phosphor：Rust 枚举名 → 图标名 -----------------------------------------
-# ---- Remix Icon：Icon 枚举名 -> Remix 图标名 ----------------------------------
+# ---- Boxicons：Icon 枚举名 -> Boxicons 图标名（线框；实心自动加 -filled）----------
 #
-# 全部用 `-line` 变体：线框、圆角柔和，正是替换 Phosphor 实心的目的。
-# 少数没有 -line 后缀的（hashtag / list-check）直接用原名。
-RI = {
-    "Search": "search-line",
-    "Plus": "add-line",
-    "Ellipsis": "more-line",
-    "Settings": "settings-3-line",
-    "X": "close-line",
-    "Check": "check-line",
-    "ArrowUp": "arrow-up-line",
-    "Stop": "stop-line",
-    "ChevronLeft": "arrow-left-s-line",
-    "ChevronRight": "arrow-right-s-line",
-    "ChevronDown": "arrow-down-s-line",
-    "Paperclip": "attachment-line",
-    "Minus": "subtract-line",
-    "WindowMaximize": "checkbox-blank-line",
-    "WindowRestore": "file-copy-line",
-    "PanelRight": "layout-right-line",
+# Boxicons 是 24×24 网格、MIT、line/fill 严格成对（1884 对）。
+# 线框版无后缀，实心版加 `-filled`。
+BOX = {
+    "Search": "search",
+    "Plus": "plus",
+    "Ellipsis": "dots-horizontal",
+    "Settings": "gear",
+    "X": "x",
+    "Check": "check",
+    "ArrowUp": "arrow-up",
+    "Stop": "stop",
+    "ChevronLeft": "chevron-left",
+    "ChevronRight": "chevron-right",
+    "ChevronDown": "chevron-down",
+    "Paperclip": "paperclip",
+    "Minus": "minus",
+    "WindowMaximize": "square",
+    "WindowRestore": "copy",
+    "PanelRight": "sidebar",
     "Hash": "hashtag",
-    "Pin": "pushpin-line",
-    "Star": "star-line",
-    "Crown": "vip-crown-line",
-    "Pencil": "edit-line",
-    "Trash": "delete-bin-line",
-    "EyeOff": "eye-off-line",
-    "Archive": "archive-line",
-    "Chart": "line-chart-line",
-    "Cpu": "cpu-line",
-    "Plug": "plug-line",
-    "Calendar": "calendar-line",
-    "Refresh": "refresh-line",
-    "Download": "download-line",
-    "MessageCircle": "chat-3-line",
-    "Bot": "robot-line",
-    "ListChecks": "list-check-2",
-    "Building": "building-line",
-    "Smile": "emotion-happy-line",
-    "Shield": "shield-check-line",
-    "Terminal": "terminal-box-line",
-    "Folder": "folder-line",
-    "Scissors": "scissors-line",
-    "Mic": "mic-line",
-    "BellOff": "notification-off-line",
-    "Key": "key-2-line",
-    "Info": "information-line",
-    "MessageSquare": "message-2-line",
-    "Sparkles": "sparkling-line",
-    "Contacts": "contacts-line",
-    "MessageCircleFilled": "chat-3-fill",
-    "Brain": "brain-line",
-    "Pushpin": "pushpin-line",
-    "Sun": "sun-line",
-    "Moon": "moon-line",
-    "Monitor": "computer-line",
-    "SidebarExpand": "layout-left-line",
-    "PaneCollapse": "arrow-right-double-line",
-    "PaneExpand": "arrow-left-double-line",
+    "Pin": "pin",
+    "Star": "star",
+    "Crown": "crown",
+    "Pencil": "pencil",
+    "Trash": "trash",
+    "EyeOff": "eye-slash",
+    "Archive": "archive",
+    "Chart": "chart-line",
+    "Cpu": "chip",
+    "Plug": "plug-connect",
+    "Calendar": "calendar",
+    "Refresh": "refresh-ccw",
+    "Download": "save",
+    "MessageCircle": "message-circle",
+    "Bot": "robot",
+    "ListChecks": "task",
+    "Building": "building",
+    "Smile": "smile",
+    "Shield": "shield",
+    "Terminal": "terminal",
+    "Folder": "folder",
+    "Scissors": "cut",
+    "Mic": "microphone",
+    "BellOff": "notification-slash",
+    "Key": "key",
+    "Info": "info-circle",
+    "MessageSquare": "message",
+    "Sparkles": "sparkle",
+    "Contacts": "group",
+    "MessageCircleFilled": "message-circle-filled",
+    "Brain": "brain",
+    "Pushpin": "pin",
+    "Sun": "sun",
+    "Moon": "moon",
+    "Monitor": "monitor",
+    "SidebarExpand": "sidebar",
+    # 折叠 = 箭头指向右边缘；展开 = 指向左
+    "PaneCollapse": "arrow-to-right",
+    "PaneExpand": "arrow-to-left",
 }
 
 # 侧栏 / 设置菜单：21 组，(线, 面)
 MENU = {
-    "chat": ("chat-3-line", "chat-3-fill"),
-    "contacts": ("contacts-line", "contacts-fill"),
-    "channels": ("hashtag", "grid-fill"),
-    "gear": ("settings-3-line", "settings-3-fill"),
-    "sliders": ("equalizer-line", "equalizer-fill"),
-    "models": ("stack-line", "stack-fill"),
-    "plugins": ("puzzle-line", "puzzle-fill"),
-    # 智能体用 CPU（电路感），Bot 用机器人：两个都用 robot 会撞脸
-    "agents": ("cpu-line", "cpu-fill"),
-    "bot": ("robot-2-line", "robot-2-fill"),
-    "memory": ("brain-line", "brain-fill"),
-    "im": ("smartphone-line", "smartphone-fill"),
-    "connectors": ("plug-2-line", "plug-2-fill"),
-    "schedules": ("calendar-line", "calendar-fill"),
-    "keys": ("key-2-line", "key-2-fill"),
-    "abilities": ("flashlight-line", "flashlight-fill"),
-    "usage": ("line-chart-line", "line-chart-fill"),
-    "about": ("information-line", "information-fill"),
-    "feedback": ("megaphone-line", "megaphone-fill"),
-    "browser": ("global-line", "global-fill"),
-    "computer": ("computer-line", "computer-fill"),
-    "more": ("more-2-line", "more-2-fill"),
+    "chat": ("message-circle", "message-circle-filled"),
+    "contacts": ("group", "group-filled"),
+    "channels": ("hashtag", "hashtag-filled"),
+    "gear": ("gear", "gear-filled"),
+    "sliders": ("slider", "slider-filled"),
+    "models": ("layers", "layers-filled"),
+    "plugins": ("puzzle", "puzzle-filled"),
+    # 智能体用 CPU，「Bot」用机器人：两个都用 robot 会撞脸
+    "agents": ("chip", "chip-filled"),
+    "bot": ("robot", "robot-filled"),
+    "memory": ("brain", "brain-filled"),
+    "im": ("mobile", "mobile-filled"),
+    "connectors": ("plug-connect", "plug-connect-filled"),
+    "schedules": ("calendar", "calendar-filled"),
+    "keys": ("key", "key-filled"),
+    "abilities": ("bolt", "bolt-filled"),
+    "usage": ("bar-chart", "bar-chart-filled"),
+    "about": ("info-circle", "info-circle-filled"),
+    "feedback": ("megaphone", "megaphone-filled"),
+    "browser": ("globe", "globe-filled"),
+    "computer": ("desktop", "desktop-filled"),
+    "more": ("dots-horizontal", "dots-horizontal-filled"),
 }
 
 # 线框字重：regular 用作默认，light 用作「细线」场景（替代原来的 stroke-width 微调）
@@ -220,7 +213,7 @@ def write(path, text):
 
 
 def main():
-    ri, ri_w, ri_h = load_set("ri")
+    box, box_w, box_h = load_set("boxicons")
     logos, logo_w, logo_h = load_set("logos")
 
     ui_dir = os.path.join(ASSETS, "ui")
@@ -237,7 +230,7 @@ def main():
             if d == old_ph:
                 os.rmdir(d)
 
-    wanted = set(RI.values())
+    wanted = set(BOX.values())
     for line, solid in MENU.values():
         wanted.add(line)
         wanted.add(solid)
@@ -245,11 +238,11 @@ def main():
     ok, fail = 0, []
 
     for name in sorted(wanted):
-        entry = ri.get(name)
+        entry = box.get(name)
         if not entry:
-            fail.append(("ri", name))
+            fail.append(("boxicons", name))
             continue
-        write(os.path.join(ui_dir, name + ".svg"), iconify_svg(entry, ri_w, ri_h))
+        write(os.path.join(ui_dir, name + ".svg"), iconify_svg(entry, box_w, box_h))
         ok += 1
 
     # 单色源：simple-icons 按文件名、mdi/tdesign 走包内 icons.json

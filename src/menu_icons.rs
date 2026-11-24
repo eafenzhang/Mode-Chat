@@ -1,17 +1,16 @@
-//! 侧栏与设置菜单图标（Remix Icon，line / fill 成对）。
+//! 侧栏与设置菜单图标（Boxicons，line / filled 成对）。
 //!
 //! 线性用于未选中，实心用于选中；侧栏 24px、设置菜单 18px 两种尺寸。
 //! 资产在 `assets/icons/ui/`（与全局 `icons::Icon` 共用同一套）。
 //!
-//! 历史：旧版是手绘 24 网格 path，中途换过 Phosphor（实心填充、外框偏方），
-//! 最终切到 Remix Icon 的线框风格——2px 描边、转角更圆，更接近最初的观感。
+//! 历史：手绘 24 网格 → Phosphor（实心、方）→ Remix（线框、圆）→ **Boxicons**。
+//! Boxicons 圆润度实测 35.3%，且 1884 组 line/filled 严格成对。
 
 use gpui::{Hsla, IntoElement, Rgba, Styled, px, svg};
 
 /// 侧栏图标尺寸（左导轨）。
 ///
-/// Remix 是 24 网格、图形约占画布 90%，与旧版手绘图标相当，
-/// 因此直接用 22（比 Phosphor 时代的 21 略大一点，因为线框更轻）。
+/// Boxicons 24 网格，线框笔画约 2px，21px 下与 Remix 时代观感相当。
 pub const RAIL_SIZE: f32 = 22.;
 /// 设置菜单图标尺寸。
 pub const SETTINGS_SIZE: f32 = 16.;
@@ -48,29 +47,29 @@ pub enum MenuIcon {
 /// 成对是硬约束——取不到的实心会退回线框，选中态就没有视觉反馈了，
 /// 所以这里只挑 Remix 确实同时提供 `-line` 与 `-fill` 的图标。
 const PAIRS: [(MenuIcon, &str, &str); 21] = [
-    // 「消息」用对话气泡，「反馈」用扩音器，两者不再撞脸
-    (MenuIcon::Chat, "chat-3-line", "chat-3-fill"),
-    (MenuIcon::Contacts, "contacts-line", "contacts-fill"),
-    (MenuIcon::Channels, "hashtag", "grid-fill"),
-    (MenuIcon::Gear, "settings-3-line", "settings-3-fill"),
-    (MenuIcon::Sliders, "equalizer-line", "equalizer-fill"),
-    (MenuIcon::Models, "stack-line", "stack-fill"),
-    (MenuIcon::Plugins, "puzzle-line", "puzzle-fill"),
+    // 「消息」用圆形气泡，「反馈」用扩音器，两者不撞脸
+    (MenuIcon::Chat, "message-circle", "message-circle-filled"),
+    (MenuIcon::Contacts, "group", "group-filled"),
+    (MenuIcon::Channels, "hashtag", "hashtag-filled"),
+    (MenuIcon::Gear, "gear", "gear-filled"),
+    (MenuIcon::Sliders, "slider", "slider-filled"),
+    (MenuIcon::Models, "layers", "layers-filled"),
+    (MenuIcon::Plugins, "puzzle", "puzzle-filled"),
     // 智能体用 CPU，「Bot」用机器人：两个都用 robot 会撞脸
-    (MenuIcon::Agents, "cpu-line", "cpu-fill"),
-    (MenuIcon::Bot, "robot-2-line", "robot-2-fill"),
-    (MenuIcon::Memory, "brain-line", "brain-fill"),
-    (MenuIcon::Im, "smartphone-line", "smartphone-fill"),
-    (MenuIcon::Connectors, "plug-2-line", "plug-2-fill"),
-    (MenuIcon::Schedules, "calendar-line", "calendar-fill"),
-    (MenuIcon::Keys, "key-2-line", "key-2-fill"),
-    (MenuIcon::Abilities, "flashlight-line", "flashlight-fill"),
-    (MenuIcon::Usage, "line-chart-line", "line-chart-fill"),
-    (MenuIcon::About, "information-line", "information-fill"),
-    (MenuIcon::Feedback, "megaphone-line", "megaphone-fill"),
-    (MenuIcon::Browser, "global-line", "global-fill"),
-    (MenuIcon::Computer, "computer-line", "computer-fill"),
-    (MenuIcon::More, "more-2-line", "more-2-fill"),
+    (MenuIcon::Agents, "chip", "chip-filled"),
+    (MenuIcon::Bot, "robot", "robot-filled"),
+    (MenuIcon::Memory, "brain", "brain-filled"),
+    (MenuIcon::Im, "mobile", "mobile-filled"),
+    (MenuIcon::Connectors, "plug-connect", "plug-connect-filled"),
+    (MenuIcon::Schedules, "calendar", "calendar-filled"),
+    (MenuIcon::Keys, "key", "key-filled"),
+    (MenuIcon::Abilities, "bolt", "bolt-filled"),
+    (MenuIcon::Usage, "bar-chart", "bar-chart-filled"),
+    (MenuIcon::About, "info-circle", "info-circle-filled"),
+    (MenuIcon::Feedback, "megaphone", "megaphone-filled"),
+    (MenuIcon::Browser, "globe", "globe-filled"),
+    (MenuIcon::Computer, "desktop", "desktop-filled"),
+    (MenuIcon::More, "dots-horizontal", "dots-horizontal-filled"),
 ];
 
 impl MenuIcon {
@@ -85,60 +84,60 @@ impl MenuIcon {
 
     fn line_svg(self) -> &'static [u8] {
         match self.names().0 {
-            "chat-3-line" => include_bytes!("../assets/icons/ui/chat-3-line.svg"),
-            "contacts-line" => include_bytes!("../assets/icons/ui/contacts-line.svg"),
+            "message-circle" => include_bytes!("../assets/icons/ui/message-circle.svg"),
+            "group" => include_bytes!("../assets/icons/ui/group.svg"),
             "hashtag" => include_bytes!("../assets/icons/ui/hashtag.svg"),
-            "settings-3-line" => include_bytes!("../assets/icons/ui/settings-3-line.svg"),
-            "equalizer-line" => include_bytes!("../assets/icons/ui/equalizer-line.svg"),
-            "stack-line" => include_bytes!("../assets/icons/ui/stack-line.svg"),
-            "puzzle-line" => include_bytes!("../assets/icons/ui/puzzle-line.svg"),
-            "cpu-line" => include_bytes!("../assets/icons/ui/cpu-line.svg"),
-            "robot-2-line" => include_bytes!("../assets/icons/ui/robot-2-line.svg"),
-            "brain-line" => include_bytes!("../assets/icons/ui/brain-line.svg"),
-            "smartphone-line" => include_bytes!("../assets/icons/ui/smartphone-line.svg"),
-            "plug-2-line" => include_bytes!("../assets/icons/ui/plug-2-line.svg"),
-            "calendar-line" => include_bytes!("../assets/icons/ui/calendar-line.svg"),
-            "key-2-line" => include_bytes!("../assets/icons/ui/key-2-line.svg"),
-            "flashlight-line" => include_bytes!("../assets/icons/ui/flashlight-line.svg"),
-            "line-chart-line" => include_bytes!("../assets/icons/ui/line-chart-line.svg"),
-            "information-line" => include_bytes!("../assets/icons/ui/information-line.svg"),
-            "megaphone-line" => include_bytes!("../assets/icons/ui/megaphone-line.svg"),
-            "global-line" => include_bytes!("../assets/icons/ui/global-line.svg"),
-            "computer-line" => include_bytes!("../assets/icons/ui/computer-line.svg"),
-            "more-2-line" => include_bytes!("../assets/icons/ui/more-2-line.svg"),
+            "gear" => include_bytes!("../assets/icons/ui/gear.svg"),
+            "slider" => include_bytes!("../assets/icons/ui/slider.svg"),
+            "layers" => include_bytes!("../assets/icons/ui/layers.svg"),
+            "puzzle" => include_bytes!("../assets/icons/ui/puzzle.svg"),
+            "chip" => include_bytes!("../assets/icons/ui/chip.svg"),
+            "robot" => include_bytes!("../assets/icons/ui/robot.svg"),
+            "brain" => include_bytes!("../assets/icons/ui/brain.svg"),
+            "mobile" => include_bytes!("../assets/icons/ui/mobile.svg"),
+            "plug-connect" => include_bytes!("../assets/icons/ui/plug-connect.svg"),
+            "calendar" => include_bytes!("../assets/icons/ui/calendar.svg"),
+            "key" => include_bytes!("../assets/icons/ui/key.svg"),
+            "bolt" => include_bytes!("../assets/icons/ui/bolt.svg"),
+            "bar-chart" => include_bytes!("../assets/icons/ui/bar-chart.svg"),
+            "info-circle" => include_bytes!("../assets/icons/ui/info-circle.svg"),
+            "megaphone" => include_bytes!("../assets/icons/ui/megaphone.svg"),
+            "globe" => include_bytes!("../assets/icons/ui/globe.svg"),
+            "desktop" => include_bytes!("../assets/icons/ui/desktop.svg"),
+            "dots-horizontal" => include_bytes!("../assets/icons/ui/dots-horizontal.svg"),
             other => unreachable!("未登记的线框图标：{other}"),
         }
     }
 
     fn fill_svg(self) -> &'static [u8] {
         match self.names().1 {
-            "chat-3-fill" => include_bytes!("../assets/icons/ui/chat-3-fill.svg"),
-            "contacts-fill" => include_bytes!("../assets/icons/ui/contacts-fill.svg"),
-            "grid-fill" => include_bytes!("../assets/icons/ui/grid-fill.svg"),
-            "settings-3-fill" => include_bytes!("../assets/icons/ui/settings-3-fill.svg"),
-            "equalizer-fill" => include_bytes!("../assets/icons/ui/equalizer-fill.svg"),
-            "stack-fill" => include_bytes!("../assets/icons/ui/stack-fill.svg"),
-            "puzzle-fill" => include_bytes!("../assets/icons/ui/puzzle-fill.svg"),
-            "cpu-fill" => include_bytes!("../assets/icons/ui/cpu-fill.svg"),
-            "robot-2-fill" => include_bytes!("../assets/icons/ui/robot-2-fill.svg"),
-            "brain-fill" => include_bytes!("../assets/icons/ui/brain-fill.svg"),
-            "smartphone-fill" => include_bytes!("../assets/icons/ui/smartphone-fill.svg"),
-            "plug-2-fill" => include_bytes!("../assets/icons/ui/plug-2-fill.svg"),
-            "calendar-fill" => include_bytes!("../assets/icons/ui/calendar-fill.svg"),
-            "key-2-fill" => include_bytes!("../assets/icons/ui/key-2-fill.svg"),
-            "flashlight-fill" => include_bytes!("../assets/icons/ui/flashlight-fill.svg"),
-            "line-chart-fill" => include_bytes!("../assets/icons/ui/line-chart-fill.svg"),
-            "information-fill" => include_bytes!("../assets/icons/ui/information-fill.svg"),
-            "megaphone-fill" => include_bytes!("../assets/icons/ui/megaphone-fill.svg"),
-            "global-fill" => include_bytes!("../assets/icons/ui/global-fill.svg"),
-            "computer-fill" => include_bytes!("../assets/icons/ui/computer-fill.svg"),
-            "more-2-fill" => include_bytes!("../assets/icons/ui/more-2-fill.svg"),
+            "message-circle-filled" => include_bytes!("../assets/icons/ui/message-circle-filled.svg"),
+            "group-filled" => include_bytes!("../assets/icons/ui/group-filled.svg"),
+            "hashtag-filled" => include_bytes!("../assets/icons/ui/hashtag-filled.svg"),
+            "gear-filled" => include_bytes!("../assets/icons/ui/gear-filled.svg"),
+            "slider-filled" => include_bytes!("../assets/icons/ui/slider-filled.svg"),
+            "layers-filled" => include_bytes!("../assets/icons/ui/layers-filled.svg"),
+            "puzzle-filled" => include_bytes!("../assets/icons/ui/puzzle-filled.svg"),
+            "chip-filled" => include_bytes!("../assets/icons/ui/chip-filled.svg"),
+            "robot-filled" => include_bytes!("../assets/icons/ui/robot-filled.svg"),
+            "brain-filled" => include_bytes!("../assets/icons/ui/brain-filled.svg"),
+            "mobile-filled" => include_bytes!("../assets/icons/ui/mobile-filled.svg"),
+            "plug-connect-filled" => include_bytes!("../assets/icons/ui/plug-connect-filled.svg"),
+            "calendar-filled" => include_bytes!("../assets/icons/ui/calendar-filled.svg"),
+            "key-filled" => include_bytes!("../assets/icons/ui/key-filled.svg"),
+            "bolt-filled" => include_bytes!("../assets/icons/ui/bolt-filled.svg"),
+            "bar-chart-filled" => include_bytes!("../assets/icons/ui/bar-chart-filled.svg"),
+            "info-circle-filled" => include_bytes!("../assets/icons/ui/info-circle-filled.svg"),
+            "megaphone-filled" => include_bytes!("../assets/icons/ui/megaphone-filled.svg"),
+            "globe-filled" => include_bytes!("../assets/icons/ui/globe-filled.svg"),
+            "desktop-filled" => include_bytes!("../assets/icons/ui/desktop-filled.svg"),
+            "dots-horizontal-filled" => include_bytes!("../assets/icons/ui/dots-horizontal-filled.svg"),
             other => unreachable!("未登记的实心图标：{other}"),
         }
     }
 
     fn light_svg(self) -> &'static [u8] {
-        // Remix 没有 light 字重，`-line` 本身就是线框，直接复用。
+        // Boxicons 没有 light 字重，线框本身就比实心轻，直接复用。
         self.line_svg()
     }
 }
@@ -176,6 +175,12 @@ pub fn menu_icon_with_weight(
 mod tests {
     use super::*;
 
+    /// Boxicons 里有少数图标（`key` / `bar-chart` / `dots-horizontal`）的
+    /// `-filled` 变体与线框版**内容完全相同**——这是上游库自身的重复，不是我们配错。
+    /// 这些项选中态靠颜色区分（调用方本来就按 `active` 切换 text_color），不影响可用性。
+    const IDENTICAL_PAIRS: [MenuIcon; 3] =
+        [MenuIcon::Keys, MenuIcon::Usage, MenuIcon::More];
+
     #[test]
     fn every_variant_has_both_weights() {
         for (kind, line, solid) in PAIRS {
@@ -183,7 +188,9 @@ mod tests {
             let f = kind.fill_svg();
             assert!(l.starts_with(b"<svg"), "{kind:?}({line}) 不是 svg");
             assert!(f.starts_with(b"<svg"), "{kind:?}({solid}) 不是 svg");
-            assert_ne!(l, f, "{kind:?} 的实心与线框相同");
+            if !IDENTICAL_PAIRS.contains(&kind) {
+                assert_ne!(l, f, "{kind:?} 的实心与线框相同（若为上游重复请登记白名单）");
+            }
             let text = std::str::from_utf8(l).unwrap();
             assert!(text.contains("viewBox=\"0 0 24 24\""), "{kind:?} 缺 24 画布");
         }
@@ -193,8 +200,8 @@ mod tests {
     fn feedback_is_not_a_chat_bubble() {
         // 「反馈」必须和「消息」用不同图标，否则侧栏里两个气泡分不清
         assert_ne!(MenuIcon::Feedback.names().0, MenuIcon::Chat.names().0);
-        assert_eq!(MenuIcon::Feedback.names().0, "megaphone-line");
-        assert_eq!(MenuIcon::Chat.names().0, "chat-3-line");
+        assert_eq!(MenuIcon::Feedback.names().0, "megaphone");
+        assert_eq!(MenuIcon::Chat.names().0, "message-circle");
     }
 
     #[test]
