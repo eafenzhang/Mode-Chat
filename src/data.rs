@@ -1428,14 +1428,22 @@ fn builtin_provider_path() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// 编译进二进制的 provider 模板（`assets/provider/mode-builtin.json`）。
+///
+/// 为什么要有内置兜底：模板文件原本只从 exe 同级的 `config/provider/`
+/// 读，但 build.rs 和打包脚本都没拷它，于是 `provider_templates()` 返回空，
+/// 设置页「+ 添加服务商」点了毫无反应。编译进来之后，无论开发构建、
+/// 本地打包还是 CI 发版都不会再缺这个文件。
+const BUILTIN_PROVIDER_JSON: &str =
+    include_str!("../assets/provider/mode-builtin.json");
+
 pub fn provider_templates() -> Vec<ProviderTemplate> {
-    let Some(path) = builtin_provider_path() else {
-        return Vec::new();
-    };
-    let Ok(bytes) = std::fs::read(&path) else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+    // 外部文件优先（用户/发行版可以覆盖模板），缺失则用内置的那份。
+    let value = builtin_provider_path()
+        .and_then(|path| std::fs::read(&path).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .or_else(|| serde_json::from_str::<serde_json::Value>(BUILTIN_PROVIDER_JSON).ok());
+    let Some(value) = value else {
         return Vec::new();
     };
     let Some(rules) = value
@@ -1511,10 +1519,11 @@ pub fn add_provider_from_template(
     {
         return Err("provider id 只能包含字母、数字、- 和 _".to_string());
     }
+    // API Key 允许留空：面板里本来就写着「可留空」。
+    // 添加 provider 和填 key 是两个独立动作——用户可能先建骨架、
+    // 之后再补 key（团队协作时 key 常由别人提供）。
+    // 空 key 的 provider 只是「未设置 key」，UI 会显示成待配置状态。
     let api_key = api_key.trim();
-    if api_key.is_empty() {
-        return Err("API Key 不能为空".to_string());
-    }
     let template = provider_templates()
         .into_iter()
         .find(|template| template.template_id == template_id)
@@ -2304,6 +2313,36 @@ impl GroupJson {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：provider 模板必须始终可用。
+    ///
+    /// 曾经模板只从 exe 同级的 `config/provider/` 读，但 build.rs 和打包
+    /// 脚本都没拷这个文件 -> 模板列表为空 -> 「+ 添加服务商」点了没反应。
+    /// 现在模板编译进二进制做兜底，这条测试保证它不会再次变空。
+    #[test]
+    fn provider_templates_are_always_available() {
+        let templates = provider_templates();
+        assert!(
+            !templates.is_empty(),
+            "模板列表为空：内置 provider 模板丢了，添加服务商会失效"
+        );
+        assert!(
+            templates.len() >= 10,
+            "只剩 {} 个模板，明显不完整",
+            templates.len()
+        );
+        for template in &templates {
+            assert!(!template.template_id.is_empty(), "模板缺 templateId");
+            assert!(!template.name.is_empty(), "模板缺显示名");
+            assert!(
+                template.access_type == "api-key"
+                    || template.access_type == "zhipu-coding-plan-api-key",
+                "模板 {} 的 access 类型不可用：{}",
+                template.template_id,
+                template.access_type
+            );
+        }
+    }
 
     /// 模型增删：直接测纯 JSON 版本，不碰文件、不设环境变量，
     /// 因此可以和其它测试并行跑。

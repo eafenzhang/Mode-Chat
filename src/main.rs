@@ -9472,25 +9472,63 @@ impl PilotApp {
                     .subtitle(i18n::t(
                         "从内置模板创建 personal provider；模型列表取模板的 builtinModelIds。",
                     ));
-                let mut pills = div().flex().flex_wrap().gap(px(ui::S1));
+                // 模板卡片网格：厂商 logo + 名称，选中用强调色描边。
+                // 之前是纯文字 chip，23 个模板挤成一片，看不出是哪个厂商。
+                let mut pills = div().flex().flex_wrap().gap(px(ui::S2));
                 for (index, template) in templates.iter().enumerate() {
                     let active = index == selected;
                     let template_id = template.template_id.clone();
+                    let logo_key = template_logo_key(&template.template_id).to_string();
+                    let logo = brand_icons::provider_color(&logo_key, 20.)
+                        .unwrap_or_else(|| provider_initial_tile(&template.name, 20.));
                     pills = pills.child(
-                        ui::chip(
-                            SharedString::from(format!("provider-tpl-{index}")),
-                            template.name.clone(),
-                            active,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                let mut entries = this.settings_detail_entries.clone();
-                                entries.clear();
-                                entries.push(template_id.clone());
-                                this.settings_detail_entries = entries;
-                                cx.notify();
-                            },
-                        )),
+                        div()
+                            .id(SharedString::from(format!("provider-tpl-{index}")))
+                            .w(px(150.))
+                            .flex_shrink_0()
+                            .rounded(px(ui::R_CARD))
+                            .border_1()
+                            .border_color(if active {
+                                ui::accent()
+                            } else {
+                                ui::describe_edge()
+                            })
+                            .bg(if active {
+                                theme::accent_soft()
+                            } else {
+                                ui::card_bg()
+                            })
+                            .p(px(ui::S2))
+                            .flex()
+                            .items_center()
+                            .gap(px(ui::S2))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::hover()))
+                            .on_click(cx.listener(
+                                move |this, _event, _window, cx| {
+                                    let mut entries = this.settings_detail_entries.clone();
+                                    entries.clear();
+                                    entries.push(template_id.clone());
+                                    this.settings_detail_entries = entries;
+                                    cx.notify();
+                                },
+                            ))
+                            .child(logo)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .line_height(px(15.))
+                                    .text_color(if active {
+                                        ui::ink()
+                                    } else {
+                                        ui::ink_secondary()
+                                    })
+                                    .child(template.name.clone()),
+                            ),
                     );
                 }
                 let chosen = self
@@ -21788,6 +21826,41 @@ fn settings_nav_focus_key(index: usize) -> &'static str {
         13 => "settings-nav-13",
         _ => "settings-nav-14",
     }
+}
+
+/// 把模板 id 归一化成 `brand_icons::provider_logo` 认识的厂商 id。
+///
+/// 模板 id 常带后缀区分接入方式（`zai-api` / `zai-standard-api` /
+/// `qwen-alibaba-model-studio-cn`），logo 表用的是规范厂商名。
+fn template_logo_key(template_id: &str) -> &str {
+    let id = template_id.trim();
+    // 先按前缀匹配（长的放前面，避免 `qwen-alibaba` 被 `qwen` 抢先）。
+    const PREFIX: [(&str, &str); 18] = [
+        ("qwen-alibaba", "qwen"),
+        ("xiaomi-mimo", "xiaomi"),
+        ("opencode-zen", "opencode"),
+        ("opencode-go", "opencode"),
+        ("bigmodel", "zhipu"),
+        ("zai", "zhipu"),
+        ("moonshot-kimi", "moonshot"),
+        ("minimax", "minimax"),
+        ("deepseek", "deepseek"),
+        ("openai", "openai"),
+        ("anthropic", "anthropic"),
+        ("xai", "xai"),
+        ("openrouter", "openrouter"),
+        ("orcarouter", "openrouter"),
+        ("tokendance", "tokendance"),
+        ("kimi", "kimi"),
+        ("glm", "chatglm"),
+        ("siliconflow", "siliconflow"),
+    ];
+    for (prefix, key) in PREFIX {
+        if id.starts_with(prefix) {
+            return key;
+        }
+    }
+    id
 }
 
 fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
