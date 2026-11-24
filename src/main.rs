@@ -5,7 +5,8 @@
 //! - 中栏：按 Bot 隔离的 Agent 会话（`workspaceIdentity = mode-bot:teammate:<id>`）；
 //! - 右栏：所选 Bot 的模型 / 最近会话 / 工作目录 / 说明；群聊显示成员与资料。
 //!
-//! 群聊消息流（v4 群聊编排）尚未接入，中栏先显示群聊资料占位。
+//! 群聊消息流已接入（`dispatch_group_send`：成员路由 / `@` 指定 / 任务树 /默认接话），
+//! 会话列表空选时中栏显示群聊资料占位。
 
 // 所有构建都用 GUI 子系统：控制台子系统双击启动会先开一个黑框窗口，关掉那个窗口
 // 等于关掉程序（2026-11-23 用户反馈）。需要日志时从终端启动并重定向 stdout/stderr。
@@ -18124,6 +18125,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             && !pending_approval
             && !chat.is_some_and(|chat| chat.elicitations.iter().any(|pending| !pending.sent))
             && (!self.input.read(cx).content().trim().is_empty() || has_attachments);
+        // 没选中任何会话（既不是 Bot 也不是群聊）：输入框只做占位提示。
+        //
+        // 这里原本写的是「群聊会话需要 v4 群聊编排，试点暂不支持发送」——
+        // 文案和场景对不上：群聊发送其实是完整的（见 dispatch_group_send），
+        // 这段只在「空选」时出现，用户会误以为群聊不能发消息。
         if !is_bot && !is_group {
             return div()
                 .w_full()
@@ -18145,7 +18151,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .font_family(theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .text_color(theme::ink_tertiary())
-                        .child(i18n::t("群聊会话需要 v4 群聊编排，试点暂不支持发送")),
+                        .child(i18n::t("先从左侧选择一个 Bot 或群聊")),
                 );
         }
         let quote = chat.and_then(|chat| chat.quote.clone());

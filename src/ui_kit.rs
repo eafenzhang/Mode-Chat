@@ -263,15 +263,6 @@ pub fn list_row(row_title: impl Into<SharedString>, detail: Option<SharedString>
         .child(text)
 }
 
-/// 带前置图标/头像的列表行。
-pub fn list_row_leading(
-    leading: impl IntoElement,
-    row_title: impl Into<SharedString>,
-    detail: Option<SharedString>,
-) -> Div {
-    list_row(row_title, detail).child(leading.into_any_element())
-}
-
 /// 键值行：左标签 11px，右值 12px。
 ///
 /// 值一侧强制可收缩 + 省略号：会话 ID、工作目录这类长文本在窄栏里
@@ -660,61 +651,6 @@ pub fn segment(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, ac
                 })
                 .child(text.into()),
         )
-}
-
-/// 横向 tab 条：底部一条细分隔线，选中项自带 2px 强调色下划线。
-///
-/// 和 `segment`（胶囊切换）的区别：segment 用于「同一表单里的取值切换」，
-/// tab 用于「一个页面内的多个子视图」——层级更高，所以用下划线而不是实心块，
-/// 避免和页面里的 segment 抢视觉。
-///
-/// 下划线画在每个 tab 自己身上（`border_b`），不靠百分比定位：
-/// 标签宽度不同时也能精确贴合。
-pub fn tab_bar(tabs: &[(SharedString, bool)]) -> Div {
-    let mut row = div()
-        .w_full()
-        .flex()
-        .items_center()
-        .border_b_1()
-        .border_color(edge());
-    for (label, active) in tabs {
-        let (fg, weight) = if *active {
-            (accent(), gpui::FontWeight::SEMIBOLD)
-        } else {
-            (ink_secondary(), gpui::FontWeight::NORMAL)
-        };
-        row = row.child(
-            div()
-                .h(px(36.))
-                .px(px(S3))
-                .flex()
-                .items_center()
-                .justify_center()
-                // 下划线贴住 tab 底部，与容器的 1px 分隔线重合。
-                .border_b_2()
-                .border_color(if *active {
-                    accent()
-                } else {
-                    Rgba {
-                        r: 0.,
-                        g: 0.,
-                        b: 0.,
-                        a: 0.,
-                    }
-                })
-                .mb(gpui::px(-1.))
-                .child(
-                    div()
-                        .font_family(font())
-                        .text_size(px(T_BODY))
-                        .line_height(px(T_BODY_LH))
-                        .font_weight(weight)
-                        .text_color(fg)
-                        .child(label.clone()),
-                ),
-        );
-    }
-    row
 }
 
 /// 把 `Rgba` 转成 `Hsla`（给需要直接设文字色的地方用）。

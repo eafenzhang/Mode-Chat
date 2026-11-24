@@ -134,11 +134,6 @@ pub fn is_light() -> bool {
     LIGHT.load(Ordering::Relaxed)
 }
 
-/// 只切运行期模式、不落盘（企微皮肤启动时强制深色，退出后不影响用户偏好）。
-pub fn force_dark() {
-    LIGHT.store(false, Ordering::Relaxed);
-}
-
 /// 只切运行期模式、不落盘（模式偏好由 main 的 prefs `theme` 统一管理）。
 pub fn set_light_runtime(light: bool) {
     LIGHT.store(light, Ordering::Relaxed);
@@ -299,16 +294,6 @@ pub fn subtle_hover() -> Rgba {
     ink_alpha(0.10)
 }
 
-/// 近黑品牌标的浅色底板：深色主题下给 GitHub / Linear 这类 logo 垫底，
-/// 否则它们和 `#262626` 图标槽几乎同色（对比度 < 1.2:1）。
-pub fn avatar_light_plate() -> Rgba {
-    if is_light() {
-        rgba(0xec, 0xec, 0xec, 255)
-    } else {
-        rgba(0xf0, 0xf0, 0xf0, 255)
-    }
-}
-
 /// 占位文字（原版 `ink 36%`）。
 pub fn ink_placeholder() -> Rgba {
     ink_alpha(0.36)
@@ -417,25 +402,11 @@ pub fn danger_soft() -> Rgba {
 pub fn warning() -> Rgba {
     pick(DARK_WARNING, LIGHT_WARNING)
 }
-pub fn warning_soft() -> Rgba {
-    let color = warning();
-    rgba_a(
-        (color.r * 255.0) as u8,
-        (color.g * 255.0) as u8,
-        (color.b * 255.0) as u8,
-        if is_light() { 0.14 } else { 0.16 },
-    )
-}
 pub fn chief() -> Rgba {
     pick(DARK_CHIEF, LIGHT_CHIEF)
 }
 
 // ---- 代码高亮 ----
-/// 语法高亮「类型」色（沿用试点原有紫，深浅两套）。
-pub fn code_type() -> Rgba {
-    pick(rgba(0xa7, 0x8b, 0xfa, 255), rgba(0x6d, 0x4b, 0xd8, 255))
-}
-
 // ---- 气泡 ----
 pub fn bubble_user() -> Rgba {
     pick(DARK_BUBBLE_USER, LIGHT_BUBBLE_USER)

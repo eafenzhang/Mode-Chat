@@ -105,16 +105,9 @@ pub fn nav_text_active() -> Rgba {
 pub fn nav_icon() -> Rgba {
     pick(0x9a9a9c, 0x666666)
 }
-pub fn nav_icon_active() -> Rgba {
-    accent_color()
-}
 pub fn nav_badge_bg() -> Rgba {
     pick(0xe24747, 0xfa5151)
 }
-pub fn nav_separator() -> Rgba {
-    pick(0x3a3a3b, 0xe0e0e0)
-}
-
 // 会话列表
 pub fn list_hover() -> Rgba {
     pick(0x3a3a3b, 0xe8e8e8)
@@ -190,9 +183,6 @@ pub fn composer_bg() -> Rgba {
 pub fn composer_border() -> Rgba {
     pick(0x2f2f30, 0xededed)
 }
-pub fn composer_placeholder() -> Rgba {
-    pick(0x7a7a7c, 0xb0b0b0)
-}
 pub fn send_disabled_bg() -> Rgba {
     pick(0x3a3a3b, 0xe5e5e5)
 }
@@ -221,9 +211,6 @@ pub fn divider() -> Rgba {
 pub fn panel_bg() -> Rgba {
     pick(0x252526, 0xfafafa)
 }
-pub fn panel_title() -> Rgba {
-    pick(0xd8d8da, 0x1a1a1a)
-}
 pub fn panel_text() -> Rgba {
     pick(0xa9a9ab, 0x555555)
 }
@@ -239,10 +226,6 @@ pub fn online_dot() -> Rgba {
 /// 群头像默认底色（微信灰白）。
 pub fn group_avatar_bg() -> Rgba {
     rgb(0xf2f2f2)
-}
-
-pub fn watermark() -> Rgba {
-    rgba(0xffffff, 0)
 }
 
 /// 导轨/列表背景：微信是纯色，这里仍返回 Background 方便调用点统一。

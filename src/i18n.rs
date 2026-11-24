@@ -755,7 +755,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "隐藏" => Some("Hide"),
         "静默运行" => Some("Quiet runs"),
         "群聊 quiet 与跨会话整轮合并通知。" => Some("Group chat quiet mode and whole-turn merged notifications across sessions."),
-        "群聊会话需要 v4 群聊编排，试点暂不支持发送" => Some("Group chats need v4 group orchestration; sending is not supported yet."),
+        "先从左侧选择一个 Bot 或群聊" => Some("Pick a bot or group chat on the left first."),
         "群聊名（必填）" => Some("Group chat name (required)"),
         "群聊指令" => Some("Group chat instructions"),
         "群聊文件记忆" => Some("Group chat file memory"),
