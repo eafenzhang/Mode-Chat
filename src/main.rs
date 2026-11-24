@@ -3896,11 +3896,11 @@ impl PilotApp {
                             })
                             .map(|group| group.name.clone())
                     })
-                    .unwrap_or_else(|| "会话".to_string());
+                    .unwrap_or_else(|| i18n::t("会话").to_string());
                 notify_background(
                     self.background_notifications,
                     "Mode Chat",
-                    &format!("{name}：回合失败"),
+                    &tri!("{name}回合失败", "{name}: turn failed"),
                 );
             }
         }
@@ -5069,11 +5069,11 @@ impl PilotApp {
             .iter()
             .map(|message| {
                 let who = match message.role {
-                    Role::User => "用户".to_string(),
+                    Role::User => i18n::t("用户").to_string(),
                     Role::Assistant => message
                         .member
                         .as_deref()
-                        .map(|name| format!("成员（{name}）"))
+                        .map(|name| tri!("成员（{name}）", "Member ({name})"))
                         .unwrap_or_else(|| group_name.clone()),
                 };
                 crate::memory_review::TranscriptLine {
@@ -5108,7 +5108,7 @@ impl PilotApp {
         let text = if expected.trim().is_empty() {
             "继续这个任务".to_string()
         } else {
-            format!("继续任务：{}", expected.trim())
+            tri!("继续任务：{}", "Continue task: {}", expected.trim())
         };
         self.backend.continue_task_in_turn(
             group_key,
@@ -7340,7 +7340,7 @@ impl PilotApp {
             SessionEvent::Tool(card) => {
                 if card.state == "running" || card.state == "done" {
                     let line = if card.state == "running" {
-                        format!("调用工具 · {}", card.name)
+                        tri!("调用工具 · {}", "Calling tool · {}", card.name)
                     } else {
                         format!("完成工具 · {}", card.name)
                     };
@@ -8724,7 +8724,7 @@ impl PilotApp {
         let engine_label = if group.is_some() {
             i18n::t("群聊 · 按成员").to_string()
         } else if engine.is_empty() || engine.eq_ignore_ascii_case("mode") {
-            "Pi-Rust（内置）".to_string()
+            tri!("Pi-Rust（内置）", "Pi-Rust (built-in)").to_string()
         } else {
             engine.to_string()
         };
@@ -9112,7 +9112,7 @@ impl PilotApp {
                     }
                 })));
 
-                (format!("{}记忆", label), Some(label.to_string()), panel)
+                (tri!("{}记忆", "{} memory", label), Some(label.to_string()), panel)
             }
             SettingsDetail::AddSecret => {
                 let fields = self.ensure_detail_fields(
@@ -9192,7 +9192,8 @@ impl PilotApp {
                 }
                 let fields = self.ensure_detail_fields(cx, &specs);
                 let root = self.roster.data_root.clone();
-                let mut panel = ui::DetailPanel::new(format!("{} · 密钥", spec.name))
+        let mut panel =
+            ui::DetailPanel::new(tri!("{} · 密钥", "{} · API key", spec.name))
                     .subtitle(i18n::t("密钥只写不读，保存后清空输入框。"));
                 for (index, (secret, input)) in spec.secrets.iter().zip(fields.iter()).enumerate() {
                     let id: &'static str = ["detail-connector-0", "detail-connector-1",
@@ -9252,7 +9253,11 @@ impl PilotApp {
                             cx.notify();
                         }),
                     ));
-                (format!("{} · 密钥", spec.name), Some(spec.name.to_string()), panel)
+                (
+                    tri!("{} · 密钥", "{} · API key", spec.name),
+                    Some(spec.name.to_string()),
+                    panel,
+                )
             }
             SettingsDetail::NewSchedule => {
                 let bot = self.selected_bot().cloned()?;
@@ -10136,7 +10141,10 @@ impl PilotApp {
                                 {
                                     this.ensure_bot(index);
                                 }
-                                this.toast(format!("已切换到 {label}"), cx);
+                                this.toast(
+                                    tri!("已切换到 {label}", "Switched to {label}"),
+                                    cx,
+                                );
                                 this.settings_detail = None;
                                 cx.notify();
                             }
@@ -10623,7 +10631,7 @@ impl PilotApp {
     fn settings_page_browser(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let mut body = settings_page_body("浏览器");
         let status = crate::browser_tools::browser_path()
-            .map(|path| format!("已找到：{path}"))
+                .map(|path| tri!("已找到：{path}", "Found: {path}"))
             .unwrap_or_else(|| i18n::t("未找到 Edge/Chrome，浏览器控制不可用").to_string());
         body = body
             .child(settings_section(i18n::t("状态")))
@@ -12036,7 +12044,7 @@ impl PilotApp {
             .unwrap_or("mode")
             .to_string();
         let current_label = if current == "mode" {
-            "内置引擎（Pi-Rust）".to_string()
+            tri!("内置引擎（Pi-Rust）", "Built-in engine (Pi-Rust)").to_string()
         } else {
             agents
                 .iter()
@@ -13048,7 +13056,7 @@ impl PilotApp {
             let workspaces = if i18n::is_en() {
                 i18n::n(row.workspace_count, "workspace", "workspaces")
             } else {
-                format!("工作区 {} 个", row.workspace_count)
+                    tri!("工作区 {} 个", "{} workspaces", row.workspace_count)
             };
             let credentials = if row.credential_registered {
                 i18n::t("凭据已就绪")
@@ -14193,7 +14201,7 @@ impl PilotApp {
     /// 密钥：本机插件密钥库（`v2/secrets.json`），值只写不读。
     fn settings_page_secrets(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
-        let mut body = settings_page_body("密钥").child(settings_note(
+        let mut body = settings_page_body(i18n::t("密钥")).child(settings_note(
             i18n::t("值只写不读，供 ${secret:NAME} 引用。"),
         ));
         let names = match secrets::list(&data_root) {
@@ -14559,7 +14567,10 @@ impl PilotApp {
             ),
             ("会话库（隔离）", session_db),
             ("记忆存储（隔离）", storage_dir),
-            ("试点状态文件", state::state_path().display().to_string()),
+                (
+                    i18n::t("试点状态文件"),
+                    state::state_path().display().to_string(),
+                )
         ];
         let mut body = settings_page_body("关于")
             .child(settings_section(i18n::t("版本")))
@@ -20585,9 +20596,10 @@ fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
     } else {
         format!("{author}：")
     };
-    format!("引用 {header}{body}
-
-{text}")
+    tri!(
+        "引用 {header}{body}\n\n{text}",
+        "Quoted {header}{body}\n\n{text}"
+    )
 }
 
 /// 对话框里的单行/多行字段（标签 + 输入框外壳）。`id` 必须窗口内唯一。
@@ -22535,9 +22547,9 @@ fn elapsed_label(ms: u64) -> String {
             format!("{}m {}s", secs / 60, secs % 60)
         }
     } else if secs < 60 {
-        format!("{secs} 秒")
+            tri!("{secs} 秒", "{secs}s")
     } else {
-        format!("{} 分 {} 秒", secs / 60, secs % 60)
+            tri!("{} 分 {} 秒", "{}m {}s", secs / 60, secs % 60)
     }
 }
 
