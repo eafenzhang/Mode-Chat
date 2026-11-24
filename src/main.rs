@@ -901,6 +901,10 @@ struct SideChat {
     scroll: ScrollHandle,
     /// 旁路里的审批卡（只支持允许一次/拒绝；工具仍走同一审批矩阵）。
     permissions: Vec<backend::PermissionPrompt>,
+    /// 旁路里的提问卡（原来直接自动取消，用户看不到）。
+    questions: Vec<PendingQuestion>,
+    /// 旁路里的表单卡。
+    elicitations: Vec<PendingElicitation>,
 }
 
 struct SideMessage {
@@ -2168,12 +2172,14 @@ impl Render for GroupFormState {
 }
 
 /// 一张待处理问题卡及其提交态。
+#[derive(Clone)]
 struct PendingQuestion {
     card: QuestionCard,
     sent: bool,
 }
 
 /// 一张待填写的 ACP elicitation 表单。
+#[derive(Clone)]
 struct PendingElicitation {
     card: ElicitationCard,
     sent: bool,
@@ -7230,6 +7236,8 @@ impl PilotApp {
             input: input.clone(),
             scroll: ScrollHandle::new(),
             permissions: Vec::new(),
+            questions: Vec::new(),
+            elicitations: Vec::new(),
         });
         self.backend
             .ensure(key, workspace, identity, model, None, engine);
@@ -7338,32 +7346,54 @@ impl PilotApp {
                     .retain(|pending| pending.request_id != request_id);
             }
             SessionEvent::Question(card) => {
-                let key = side.key.clone();
-                side.messages.push(SideMessage {
-                    user: false,
-                    text: tri!(
-                        "旁路会话暂不支持提问卡：{}",
-                        "Side chat does not support question cards yet: {}",
-                        card.question
-                    ),
-                    tool: false,
-                });
-                self.backend
-                    .answer_question(key, card.request_id, card.question, None);
+                // 入队显示，由用户点选项回答；不再自动取消。
+                if !side
+                    .questions
+                    .iter()
+                    .any(|pending| pending.card.request_id == card.request_id)
+                {
+                    side.questions.push(PendingQuestion { card, sent: false });
+                }
+            }
+            SessionEvent::QuestionResolved { request_id } => {
+                side.questions
+                    .retain(|pending| pending.card.request_id != request_id);
             }
             SessionEvent::Elicitation(card) => {
-                let key = side.key.clone();
-                side.messages.push(SideMessage {
-                    user: false,
-                    text: tri!(
-                        "旁路会话暂不支持表单：{}",
-                        "Side chat does not support forms yet: {}",
-                        card.message
-                    ),
-                    tool: false,
-                });
-                self.backend
-                    .answer_elicitation(key, card.request_id, None);
+                // 表单需要为每个文本字段建输入框，和主会话同一套初始化。
+                if !side
+                    .elicitations
+                    .iter()
+                    .any(|pending| pending.card.request_id == card.request_id)
+                {
+                    let mut texts = std::collections::HashMap::new();
+                    for field in &card.fields {
+                        if matches!(
+                            field.kind,
+                            backend::ElicitationFieldKind::Text
+                                | backend::ElicitationFieldKind::Number { .. }
+                                | backend::ElicitationFieldKind::TextList
+                        ) {
+                            texts.insert(
+                                field.key.clone(),
+                                cx.new(|cx| {
+                                    SimpleInput::new(
+                                        i18n::t("填写"),
+                                        theme::ink_tertiary,
+                                        cx,
+                                    )
+                                }),
+                            );
+                        }
+                    }
+                    side.elicitations.push(PendingElicitation {
+                        card,
+                        sent: false,
+                        single: std::collections::HashMap::new(),
+                        multi: std::collections::HashMap::new(),
+                        texts,
+                    });
+                }
             }
             SessionEvent::Done { .. } => {
                 side.streaming = false;
@@ -7402,6 +7432,8 @@ impl PilotApp {
         let side = self.side_chat.as_ref()?;
         let key = side.key.clone();
         let permissions = side.permissions.clone();
+        let questions = side.questions.clone();
+        let elicitations = side.elicitations.clone();
         let mut messages = div()
             .id("side-messages")
             .flex_1()
@@ -7627,6 +7659,230 @@ impl PilotApp {
                                                 })),
                                         ),
                                 ),
+                        );
+                    }
+                    cards
+                }))
+                // 旁路里的提问卡：点选项即答，不再自动取消。
+                .children((!questions.is_empty()).then(|| {
+                    let mut cards = div()
+                        .px(px(12.))
+                        .pb(px(4.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.));
+                    for pending in questions {
+                        let request_id = pending.card.request_id.clone();
+                        let answer_key = key.clone();
+                        let question = pending.card.question.clone();
+                        let mut options = div().flex().flex_wrap().gap(px(6.));
+                        for (value, label) in pending.card.options.clone() {
+                            let value_for_click = value.clone();
+                            let request_id = request_id.clone();
+                            let answer_key = answer_key.clone();
+                            let question = question.clone();
+                            options = options.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "side-q-{request_id}-{value}"
+                                    )))
+                                    .h(px(24.))
+                                    .px(px(10.))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(theme::edge())
+                                    .bg(theme::raised())
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::hover()))
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .text_color(theme::ink())
+                                    .child(SharedString::from(label))
+                                    .on_click(cx.listener(
+                                        move |this, _event, _window, cx| {
+                                            this.backend.answer_question(
+                                                answer_key.clone(),
+                                                request_id.clone(),
+                                                question.clone(),
+                                                Some(value_for_click.clone()),
+                                            );
+                                            if let Some(side) = this.side_chat.as_mut() {
+                                                side.questions.retain(|pending| {
+                                                    pending.card.request_id != request_id
+                                                });
+                                            }
+                                            cx.notify();
+                                        },
+                                    )),
+                            );
+                        }
+                        cards = cards.child(
+                            div()
+                                .rounded(px(theme::RADIUS_FIELD))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::raised())
+                                .p(px(8.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(11.))
+                                        .line_height(px(16.))
+                                        .text_color(theme::ink_secondary())
+                                        .child(SharedString::from(question)),
+                                )
+                                .child(options),
+                        );
+                    }
+                    cards
+                }))
+                // 旁路里的表单卡：文本字段给输入框，提交走 answer_elicitation。
+                .children((!elicitations.is_empty()).then(|| {
+                    let mut cards = div()
+                        .px(px(12.))
+                        .pb(px(4.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.));
+                    for pending in elicitations {
+                        let request_id = pending.card.request_id.clone();
+                        let submit_key = key.clone();
+                        let message = pending.card.message.clone();
+                        let mut body = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_FAMILY)
+                                    .text_size(px(11.))
+                                    .line_height(px(16.))
+                                    .text_color(theme::ink_secondary())
+                                    .child(SharedString::from(message)),
+                            );
+                        for field in pending.card.fields.clone() {
+                            let title = field.title.clone();
+                            let mut row = div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(10.))
+                                        .text_color(theme::ink_tertiary())
+                                        .child(SharedString::from(title)),
+                                );
+                            if let Some(input) = pending.texts.get(&field.key) {
+                                row = row.child(
+                                    div()
+                                        .h(px(28.))
+                                        .rounded(px(theme::RADIUS_TAG))
+                                        .border_1()
+                                        .border_color(theme::edge())
+                                        .bg(theme::composer_card())
+                                        .px(px(8.))
+                                        .flex()
+                                        .items_center()
+                                        .child(input.clone()),
+                                );
+                            } else {
+                                // 选择类字段旁路里暂用文本输入兜底，避免面板过宽。
+                                row = row.child(
+                                    div()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(10.))
+                                        .text_color(theme::ink_tertiary())
+                                        .child(i18n::t("该项请在主会话中填写")),
+                                );
+                            }
+                            body = body.child(row);
+                        }
+                        body = body.child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "side-elic-{request_id}"
+                                        )))
+                                        .h(px(24.))
+                                        .px(px(10.))
+                                        .rounded_full()
+                                        .bg(theme::accent())
+                                        .flex()
+                                        .items_center()
+                                        .cursor_pointer()
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(11.))
+                                        .text_color(theme::accent_ink())
+                                        .child(i18n::t("提交"))
+                                        .on_click(cx.listener({
+                                            let request_id = request_id.clone();
+                                            let submit_key = submit_key.clone();
+                                            move |this, _event, _window, cx| {
+                                                // 只收文本类字段；选择类留给主会话。
+                                                let mut content = std::collections::HashMap::new();
+                                                if let Some(side) = this.side_chat.as_ref()
+                                                    && let Some(pending) = side
+                                                        .elicitations
+                                                        .iter()
+                                                        .find(|pending| {
+                                                            pending.card.request_id == request_id
+                                                        })
+                                                {
+                                                    for field in &pending.card.fields {
+                                                        if let Some(input) =
+                                                            pending.texts.get(&field.key)
+                                                        {
+                                                            let text = input
+                                                                .read(cx)
+                                                                .content()
+                                                                .trim()
+                                                                .to_string();
+                                                            if !text.is_empty() {
+                                                                content.insert(
+                                                                    field.key.clone(),
+                                                                    backend::ElicitationValue::Text(
+                                                                        text,
+                                                                    ),
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                this.backend.answer_elicitation(
+                                                    submit_key.clone(),
+                                                    request_id.clone(),
+                                                    Some(content),
+                                                );
+                                                if let Some(side) = this.side_chat.as_mut() {
+                                                    side.elicitations.retain(|pending| {
+                                                        pending.card.request_id != request_id
+                                                    });
+                                                }
+                                                cx.notify();
+                                            }
+                                        })),
+                                ),
+                        );
+                        cards = cards.child(
+                            div()
+                                .rounded(px(theme::RADIUS_FIELD))
+                                .border_1()
+                                .border_color(theme::edge())
+                                .bg(theme::raised())
+                                .p(px(8.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(body),
                         );
                     }
                     cards
