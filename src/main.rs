@@ -6722,7 +6722,8 @@ impl PilotApp {
         self.jump_to_hit(&hit, cx);
     }
 
-    /// 跳到搜索结果：私聊直接切换会话；群聊成员会话只切过去（暂不支持换成员会话）。
+    /// 跳到搜索结果：私聊直接切到那个会话；群聊成员会话切群后再把
+    /// 命中成员那一行滚到可见位置。
     fn jump_to_hit(&mut self, hit: &session_db::SearchHit, cx: &mut Context<Self>) {
         let session_id = hit.session_id.clone();
         // JSONL 历史会话可能不在当前 Bot 的会话映射里（不同 Bot/旧槽位）：退回当前
@@ -12000,7 +12001,7 @@ impl PilotApp {
             .into_any_element()
     }
 
-    /// 历史消息里的附件图片按需回源（内嵌引擎暂不支持，后端回错误占位）。
+    /// 历史消息里的附件图片按需回源；取不到时后端回错误占位，UI 显示占位块。
     fn load_history_image(&mut self, meta: &backend::HistoryAttachment, cx: &mut Context<Self>) {
         if self.history_images.contains_key(&meta.attachment_ref)
             || !self
