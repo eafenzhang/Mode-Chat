@@ -1,62 +1,67 @@
 # Mode Chat
 
-Rust + GPUI desktop client for Mode Bot (the successor to the WebView shell).
+Rust + GPUI 桌面客户端，Mode Bot 的新一代外壳（替代 WebView 版本）。
 
-This repository was extracted from the Mode monorepo as a standalone workspace.
-It builds without Node or the TypeScript agent bundle; the agent engine is being
-replaced by an embedded [pi-rust](https://github.com/bigfish1913/pi-rust) runtime.
+单二进制、无 Node / TypeScript 运行时；对话引擎内嵌
+[pi-rust](https://github.com/bigfish1913/pi-rust)。
 
-## Status
+## 下载
 
-- Standalone workspace builds (`cargo check` / `cargo test` green).
-- The embedded pi-rust engine is the only engine for private chat, channels, IM
-  turns and automations; sessions persist as JSONL under
-  `~/.mode-bot/.mode/v2/mode-chat-sessions`.
-- The legacy v4 client and its crates (`agent-process`, `agent-protocol`,
-  `mode-protocol-client`) have been removed; no Node/TS runtime is bundled.
-- Known gaps until the host-side MCP bridge lands: plugin market, connectors, and
-  non-image attachments are unavailable in the embedded engine.
+安装包在 [Releases](https://github.com/eafenzhang/Mode-Chat/releases/latest)：
 
-## Capabilities
+| 文件 | 说明 |
+| --- | --- |
+| `ModeChat-v<版本>-setup.exe` | 安装版，按用户装到 `%LOCALAPPDATA%\Programs\ModeChat` |
+| `ModeChat-v<版本>-windows-x64.zip` | 免安装，解压后直接跑 `ModeChat.exe` |
 
-- **Steering (插话)** — during a running turn `Ctrl+Enter` (or the composer's
-  steer button) pushes the text into the engine's steering queue instead of
-  queueing it for later; plain `Enter` still queues. Only the embedded engine has
-  a steering channel — external ACP sessions fall back to queueing.
-- **Side chat (`/side`)** — a throwaway session that is neither written to the
-  main transcript nor shown in history or global search; its JSONL lands under
-  `mode-chat-sessions/.side`. Open it from the composer (`/side`), the `⋯` menu,
-  or the command palette. Attachments, question cards and forms are not
-  supported there yet.
-- **Private bots** — a private bot keeps its sessions under
-  `mode-chat-sessions/.private/<botId>`, is excluded from global search, cannot
-  join a group, and cannot be the team Chief.
-- **Team Chief** — only the single `isChief` bot (enforced on create and update)
-  gets the team tools in a group: `team_roster`, `team_goal_show|create|stage`,
-  `team_task_list`, `team_assign`. `team_assign` writes a child task onto the
-  group task ledger and dispatches the target member's turn; re-dispatch of a
-  member already running in the same turn is rejected, and one turn dispatches
-  at most 4 tasks.
+应用内「设置 → 关于」可检查更新，更新源就是本仓库的 Release。
 
-## Build
+## 能力
+
+- **会话** — 私聊 / 群聊 / IM 频道，右侧常驻信息栏（引擎、模型、用量、待办、本轮改动）
+- **插话（Steering）** — 回合进行中 `Ctrl+Enter` 把文字推进引擎的 steering 队列，而不是排队等下一轮；普通 `Enter` 仍是排队。仅内嵌引擎支持，外部 ACP 会话退化为排队
+- **旁路会话（`/side`）** — 一次性会话，不写主 transcript、不进历史与全局搜索，落盘在 `mode-chat-sessions/.side`
+- **隐私 Bot** — 会话单独落在 `mode-chat-sessions/.private/<botId>`，不进全局搜索、不能进群、不能当团队管理员
+- **团队管理员（Chief）** — 全局唯一（新建与编辑都会校验），在群里额外持有团队工具：`team_roster`、`team_goal_show|create|stage`、`team_task_list`、`team_assign`。一轮最多派发 4 个任务
+- **定时任务** — cron 触发的自动化，跨 Bot 汇总
+- **连接器** — GitHub / Notion / Slack / Linear / Postgres 等 MCP 连接器
+
+## 构建
 
 ```powershell
-cargo build --release
+cargo build --release          # 产物 target/release/bot-gpui-pilot.exe
+cargo test                     # 152 个测试
+cargo clippy --all-targets --locked -- -D warnings
 ```
 
-The binary is `target/release/bot-gpui-pilot.exe` (rename pending).
+打包（需要 NSIS）：
 
-## Data
+```powershell
+$env:MAKENSIS = "D:\ModeChat\.release-tools\nsis-3.10\makensis.exe"
+node scripts/package-mode-chat.mjs --version=0.2.1 --require-installer
+```
 
-Same data root as Mode Bot: `~/.mode-bot/.mode` (roster, groups, sessions,
-credentials, automations). Set `MODE_BOT_DATA_ROOT` to isolate a test instance.
+## 数据
 
-## Layout
+数据根与 Mode Bot 相同：`~/.mode-bot/.mode`（名册、群聊、会话、凭据、自动化）。
+用 `MODE_BOT_DATA_ROOT` 可隔离一个测试实例。
 
-- `src/` — GPUI app (Windows).
-- `crates/` — pure-Rust services extracted from the Mode monorepo
-  (roster/identity, groups/memory/IM, automations, connectors config, credentials).
-- `assets/` — icons and fonts.
-- `examples/` — developer probes.
+## 目录结构
 
-See `docs/pilot-notes.md` for the original pilot implementation notes.
+```
+src/         GPUI 应用（Windows）
+crates/      纯 Rust 服务（名册/身份、群聊/记忆/IM、自动化、连接器、凭据）
+assets/      图标与字体
+examples/    开发用探针
+docs/        设计规范与发布说明
+```
+
+## 文档
+
+- [UI 设计规范](docs/ui-design-spec.md) — 组件层、间距/字号/圆角令牌、弹窗 vs 详情栏规则
+- [发布说明](docs/release.md) — CI 流程、本地兜底打包、更新源约定
+- [试点笔记](docs/pilot-notes.md) — 早期实现记录
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。第三方组件与图标许可见 [NOTICE.md](NOTICE.md)。
