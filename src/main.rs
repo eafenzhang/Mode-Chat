@@ -14388,7 +14388,7 @@ impl PilotApp {
         id: &'static str,
         title: &'static str,
         reason: &'static str,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let wechat = wecom_theme::active();
         div()
@@ -14412,9 +14412,13 @@ impl PilotApp {
             .flex()
             .items_center()
             .gap(px(12.))
-            // 灰化：禁用语义靠 opacity + 徽标 + 不跳转三件事共同表达。
-            // 不挂 on_click：卡片不可用就不该响应用户，避免和"点了没反应"混淆。
+            // 灰化 + 徽标 + 不跳转共同表达"不可用"（契约 §2.9）。
+            // 仍保留点击：只弹 toast 复述原因，绝不打开创建页——否则用户会以为界面卡了。
+            .pointer()
             .opacity(0.55)
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.toast(reason, cx);
+            }))
             .child(
                 div()
                     .size(px(36.))
@@ -17887,7 +17891,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .items_center()
                     .gap(px(6.))
                     .pointer()
-                    .hover(|style| style.bg(theme::hover()))
                     .font_family(if wechat {
                         wecom_theme::FONT_FAMILY
                     } else {
