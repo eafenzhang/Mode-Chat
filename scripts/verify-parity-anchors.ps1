@@ -207,6 +207,7 @@ $STRICT_LINES = 12
 $LOOSE_LINES = 60
 
 $identRx = [regex]'[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*'
+$backtickRx = [regex]'[\u0060]([^\u0060]+)[\u0060]'
 $lineCache = @{}
 function Get-SourceLines([string]$path) {
   if (-not $lineCache.ContainsKey($path)) { $lineCache[$path] = [System.IO.File]::ReadAllLines($path) }
@@ -218,13 +219,10 @@ function Measure-Label([string]$relAnchor, [int]$n, [string[]]$candidateIdentifi
   if (-not $full) { return $null }
   $lines = Get-SourceLines $full
   if ($n -lt 1 -or $n -gt $lines.Count) { return $null }
-  $idents = @()
-  foreach ($w in $candidateIdentifiers) {
-    if ($w.Length -lt 4) { continue }
-    if ($w -notmatch '_' -and $w -notmatch '::' -and $w -cnotmatch '[A-Z]') { continue }
-    $idents += $w
-  }
-  $idents = @($idents | Sort-Object -Unique)
+  # 候选标识符已经由 Get-Identifiers 筛过一遍（那里负责「是不是符号」的判定）。
+  # 这里**不能**再按命名风格过滤一次：那样会把反引号里的 `precheck` / `rows` / `read`
+  # 这类全小写短名在第二道口子重新丢掉，改动等于没生效（实测撞过）。
+  $idents = @($candidateIdentifiers | Where-Object { $_ -and $_.Length -ge 2 } | Sort-Object -Unique)
   if ($idents.Count -eq 0) { return @{ distance = -1; name = '' } }
   $best = -1
   $bestName = ''
@@ -247,6 +245,21 @@ function Get-Identifiers([string]$text) {
     if ($w.Length -lt 4) { continue }
     if ($w -notmatch '_' -and $w -notmatch '::' -and $w -cnotmatch '[A-Z]') { continue }
     $out += $w
+  }
+  # 反引号里的裸符号一律认作「这是代码符号」，不再追问命名风格。
+  # 命名风格（含 _ / :: / 大写）只是「这词是不是符号」的代理判据，反引号是作者显式
+  # 声明的符号，信号更强。Rust 里 `read` / `precheck` / `rows` 这类全小写短名最常见，
+  # 被风格判据整类否掉是误伤：实测 privacy.rs:201 加不加反引号都被跳过，只有写成
+  # privacy::precheck 才过，等于逼文档作者去查模块路径，而这个信息锚点本身不需要。
+  # 只认「裸符号」：含 / \ . 或冒号的是路径、锚点或别的引用，不能当本行符号用。
+  foreach ($bm in $backtickRx.Matches($text)) {
+    $core = $bm.Groups[1].Value.Trim()
+    $core = $core -replace '::', '__SEP__'
+    if ($core -match '/' -or $core -match '\\' -or $core -match '\.' -or $core -match ':') { continue }
+    $core = $core -replace '__SEP__', '::'
+    if ($core -notmatch '^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$') { continue }
+    if ($core.Length -lt 4) { continue }
+    $out += $core
   }
   return @($out | Sort-Object -Unique)
 }
@@ -395,8 +408,28 @@ foreach ($doc in $docs) {
 }
 $lockLines = @($lockLines | Sort-Object -Unique)
 if ($UpdateAnchors) {
+  # 合并写，不是覆盖写。锁里那些本次扫描够不到的条目（外部对照树没配
+  # MODE_PARITY_DS_ROOT 时那 53 条 ds-bot/README 锚点）必须原样保留：
+  # 覆盖写会在 CI 口径下把它们删掉，等下次带外部树跑就变成一片 unlocked 失败。
+  # 保留的值仍是上次实时记录的指纹，够不到就没法验证它对不对——所以保留，
+  # 由「stale-in-lock」计数如实报告，而不是假装它不存在。
+  $kept = 0
+  if (Test-Path $lockPath) {
+    $merged = @{}
+    foreach ($l in $lockLines) { $i = $l.IndexOf('|'); if ($i -gt 0) { $merged[$l.Substring(0, $i)] = $l.Substring($i + 1) } }
+    foreach ($l in [System.IO.File]::ReadAllLines($lockPath, [System.Text.Encoding]::UTF8)) {
+      $i = $l.IndexOf('|')
+      if ($i -le 0) { continue }
+      $k = $l.Substring(0, $i)
+      if ($merged.ContainsKey($k)) { continue }
+      if ($lockSeen.ContainsKey($k)) { continue }  # 文档里已删除 -> 真的作废，丢弃
+      $merged[$k] = $l.Substring($i + 1)
+      $kept++
+    }
+    $lockLines = @($merged.Keys | Sort-Object | ForEach-Object { "$_|$($merged[$_])" })
+  }
   [System.IO.File]::WriteAllLines($lockPath, $lockLines, (New-Object System.Text.UTF8Encoding($false)))
-  Write-Output "anchor lock rewritten: $($lockLines.Count) entries -> docs/parity-anchors.lock"
+  Write-Output "anchor lock rewritten: $($lockLines.Count) entries (本次可达 $($lockLines.Count - $kept)，保留 $kept 条够不到的) -> docs/parity-anchors.lock"
 } elseif (Test-Path $lockPath) {
   $locked = @{}
   foreach ($l in [System.IO.File]::ReadAllLines($lockPath, [System.Text.Encoding]::UTF8)) {
