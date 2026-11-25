@@ -1,7 +1,10 @@
 ﻿# Verify every cited file:line anchor in docs/parity-matrix.md and docs/prd-0.5.md.
 # Checks: file resolves under one of the three roots, line number in range, and (for
 # cited lines that name a symbol in backticks) that the line is non-empty.
-param([switch]$UpdateAnchors)
+param(
+  [switch]$UpdateAnchors,
+  [ValidateSet('Head', 'WorkTree')][string]$Baseline = 'Head'
+)
 # -UpdateAnchors：把当前每个锚点指向的源码行内容重新记入 docs/parity-anchors.lock。
 # 只有在「确认锚点已按新代码重新映射过」之后才该跑它；它本身不做任何映射。
 $ErrorActionPreference = 'Stop'
@@ -26,12 +29,38 @@ $script:skippedExternal = 0
 
 function Resolve-Path3([string]$p) {
   if ([System.IO.Path]::IsPathRooted($p)) { if (Test-Path $p) { return $p } else { return $null } }
-  foreach ($r in $roots) {
+  foreach ($r in $rootOrder) {
     $full = Join-Path $r $p
     if (Test-Path $full) { return $full }
   }
   return $null
 }
+
+# --- 基线：默认按 `git HEAD` 的已提交内容校验，而不是工作区 ---------------------
+# 锚点是对着「已提交的代码」写的。工作区若有人正在改 src/main.rs，行号会整体偏移，
+# 让好锚点看起来像指到了 `}`（本轮前端 +45 行就制造了 10 个假失败）。
+# 用 `-Baseline WorkTree` 可以改回校验工作区（改完代码、准备重排锚点前用）。
+if (-not $Baseline) { $Baseline = 'Head' }
+$baselineDir = $null
+if ($Baseline -eq 'Head') {
+  $baselineDir = Join-Path ([System.IO.Path]::GetTempPath()) ('parity-head-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  New-Item -ItemType Directory -Path $baselineDir -Force | Out-Null
+  # 只导出锚点会用到的源码树，别把整个仓库拷出来。
+  foreach ($sub in @('src', 'crates')) {
+    $paths = & git -C $root ls-tree -r --name-only HEAD -- $sub 2>$null
+    foreach ($rel in $paths) {
+      if ($rel -notmatch '\.(rs|js|mjs|toml)$') { continue }
+      $dst = Join-Path $baselineDir $rel
+      $dir = Split-Path -Parent $dst
+      if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+      & git -C $root show "HEAD:$rel" 2>$null | Set-Content -LiteralPath $dst -Encoding UTF8
+    }
+  }
+  Write-Output "baseline: git HEAD ($baselineDir)"
+} else {
+  Write-Output 'baseline: working tree'
+}
+$rootOrder = if ($baselineDir) { @($baselineDir) + $roots } else { $roots }
 
 # Anchors look like `path/file.ext:12` or `path/file.ext:12-34`.
 # 锚点有三种写法，全都要覆盖：
@@ -162,6 +191,111 @@ foreach ($doc in $docs) {
   }
 }
 Write-Output "bare-line anchors checked: $bareChecked  skipped(no file earlier on the line): $bareUnresolved"
+
+# --- 邻近符号校验：锚点后面的 `（…）` 标签里写的符号必须真的在附近 ---------------
+# 挡的是「指到一段无关但合法的代码」——这类漂移行非空、也不是纯括号，前两道检查都放过。
+# 实测教训（v0.5.1 审查）：F06 的 `:19273` 实际指向 `.pointer()`、`:7349` 指向一段
+# 无关代码，全都「非空、非结构行」地通过了。所以标签里的符号必须在附近出现。
+#
+# 双阈值，因为锚点的写法本身分两类：
+#   - 严格（≤ $STRICT_LINES 行）：锚点就指在符号那一行附近，必须命中；
+#   - 宽松（≤ $LOOSE_LINES 行）：锚点指「整块注册表/函数」的起点，符号在块内几十行处
+#     （如 `bot_tools.rs` 的 `tools` 里 whoami/list_bots/... 各在 69/78/87/104 行）
+#     是合法写法，但会单独计数并在 `-Verbose` 明细里列出，避免整类锚点被迫改成散点。
+# 超过宽松阈值的直接判错，并打出每个候选符号的实际最近距离。
+$STRICT_LINES = 12
+$LOOSE_LINES = 60
+
+$identRx = [regex]'[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*'
+$lineCache = @{}
+function Get-SourceLines([string]$path) {
+  if (-not $lineCache.ContainsKey($path)) { $lineCache[$path] = [System.IO.File]::ReadAllLines($path) }
+  return ,$lineCache[$path]
+}
+# 返回 @{ distance = 最近距离（-1 表示标签里没有可校验的标识符）; name = 命中的符号 }
+function Measure-Label([string]$relAnchor, [int]$n, [string]$label) {
+  $full = Resolve-Path3 $relAnchor
+  if (-not $full) { return $null }
+  $lines = Get-SourceLines $full
+  if ($n -lt 1 -or $n -gt $lines.Count) { return $null }
+  $idents = @()
+  foreach ($im in $identRx.Matches($label)) {
+    $w = $im.Value
+    if ($w.Length -lt 4) { continue }
+    if ($w -notmatch '_' -and $w -notmatch '::' -and $w -cnotmatch '[A-Z]') { continue }
+    $idents += $w
+  }
+  $idents = @($idents | Sort-Object -Unique)
+  if ($idents.Count -eq 0) { return @{ distance = -1; name = '' } }
+  $best = -1
+  $bestName = ''
+  foreach ($w in $idents) {
+    # 只比对最后一段（`RpiSession::compact` -> `compact`）
+    $tail = ($w -split '::')[-1]
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if (-not $lines[$i].Contains($tail)) { continue }
+      $d = [Math]::Abs(($i + 1) - $n)
+      if ($best -lt 0 -or $d -lt $best) { $best = $d; $bestName = $w }
+    }
+  }
+  return @{ distance = $best; name = $bestName }
+}
+
+$labelStrict = 0
+$labelLoose = 0
+$labelSkipped = 0
+$labelMiss = 0
+$looseList = New-Object System.Collections.Generic.List[string]
+
+function Test-AnchorLabel([string]$rel, [int]$n, [string]$label, [string]$where) {
+  if (-not $label) { return }
+  $r = Measure-Label $rel $n $label
+  if ($null -eq $r) { return }
+  if ($r.distance -lt 0) { $script:labelSkipped++; return }
+  if ($r.distance -le $STRICT_LINES) { $script:labelStrict++; return }
+  if ($r.distance -le $LOOSE_LINES) {
+    $script:labelLoose++
+    $script:looseList.Add(("{0} :{1}  ``{2}`` 在 {3} 行外" -f $rel, $n, $r.name, $r.distance))
+    return
+  }
+  $script:labelMiss++
+  $script:bad.Add("LABEL MISS -> $rel :$n 标签里的符号最近也在 $($r.distance) 行外（``$($r.name)``，上限 $LOOSE_LINES）；`n    该锚点很可能指到了无关代码 [$where]")
+}
+
+$labelRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):(\d+)(?:-\d+)?(?:\d+)?`\s*[（(]([^）)]{0,160})[）)]'
+$bareLabelRx = [regex]'`:(\d+(?:/\d+)*)(?:-\d+)?`\s*[（(]([^）)]{0,160})[）)]'
+$fileOnLineRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):'
+
+foreach ($doc in $docs) {
+  $docPath = Join-Path $root $doc
+  foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
+    # 1) 完整锚点：`path:N`（label）
+    foreach ($m in $labelRx.Matches($line)) {
+      Test-AnchorLabel $m.Groups[1].Value.Trim() ([int]$m.Groups[2].Value) $m.Groups[3].Value $doc
+    }
+    # 2) 裸行号：`:N`（label）——文件取同一行内紧挨在它前面的完整锚点。
+    #    这一类以前完全没做符号校验，F06 的 `:19273` 指到 `.pointer()` 就是这么漏的。
+    if ($line -notmatch '`:\d') { continue }
+    $currentFile = $null
+    foreach ($m in $fileOnLineRx.Matches($line)) {
+      if ($m.Index -lt $line.Length) { $currentFile = $m.Groups[1].Value.Trim() }
+    }
+    # 逐个裸锚点：文件归属按「它前面最近的完整锚点」重算，不能整行共用一个。
+    foreach ($m in $bareLabelRx.Matches($line)) {
+      $before = $line.Substring(0, $m.Index)
+      $lastFile = $null
+      foreach ($fm in $fileOnLineRx.Matches($before)) { $lastFile = $fm.Groups[1].Value.Trim() }
+      if (-not $lastFile) { continue }
+      foreach ($n in ($m.Groups[1].Value -split '/' | Where-Object { $_ -ne '' })) {
+        Test-AnchorLabel $lastFile ([int]$n) $m.Groups[2].Value $doc
+      }
+    }
+  }
+}
+Write-Output "label-nearby: strict(<=$STRICT_LINES lines)=$labelStrict  loose(<=$LOOSE_LINES)=$labelLoose  miss=$labelMiss  skipped(no identifier)=$labelSkipped"
+if ($VerbosePreference -ne 'SilentlyContinue' -or $env:MODE_PARITY_SHOW_LOOSE -eq '1') {
+  foreach ($l in $looseList) { Write-Output "  [loose] $l" }
+}
 # --- 锚点指纹锁：没有写符号名的锚点也要防漂移 -------------------------------
 # 记录每个 `file:N` 当时指向那一行的内容摘要；下次跑若内容变了，说明代码移动过，
 # 该锚点极可能已指错地方（前端重排 main.rs 行号时就是这样把一批锚点指到 `}` 上的）。
