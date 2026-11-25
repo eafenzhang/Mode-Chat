@@ -91,21 +91,21 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| F01 | 历史会话切换（resume） | `ds-bot/src/host/parts.js` | ✅ | `src/main.rs:19787-19824`、`src/rpi_engine.rs:1306`（`history_entries`） | 无 |
+| F01 | 历史会话切换（resume） | `ds-bot/src/host/parts.js` | ✅ | `src/main.rs:19787-19824`、`src/rpi_engine.rs:1350`（`history_entries`） | 无 |
 | F02 | 新会话 | 同上 | ✅ | `src/main.rs:19131` | 无 |
-| F03 | 回合中插话（steer，不打断） | `ds-bot/src/host/steer.js` | ✅ | `src/composer_input.rs:16`（SendSecondary）、`src/rpi_engine.rs:1029-1046` | 无 |
+| F03 | 回合中插话（steer，不打断） | `ds-bot/src/host/steer.js` | ✅ | `src/composer_input.rs:16`（SendSecondary）、`src/rpi_engine.rs:1073-1090` | 无 |
 | F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | 🟡 | `src/main.rs:4450-4671`（队列逻辑）、`src/main.rs:866`（`queued` 字段）、`:4666-4676`；上限 5 条 | 逻辑有，但无排队条 UI（DS 有独立 dock），用户看不到排了几条 〔降级 v0.6〕 |
 | F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `src/main.rs:7307-7402`、`:7336`（事件不进主 chat） | 无 |
-| F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | ✅ | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`src/rpi_engine.rs:1104`（`harness.events().watch` 监听，rev `29d8686` 的 `CompactionProgressEvent` 未实现 `HarnessEventOf`）、`:1115`（`SessionEvent::Compaction`）、`:1142`（`RpiSession::compact()` 手动压缩）；UI `src/main.rs:4654`（`chat.compacting`）、`:19273/19556`（`compaction_status_row`，`id="chat-compaction-status"`）、`:7349`（命令面板「立即压缩」） | checkpoint/handoff 语义未做（明确降级 v0.6），当前是「压缩 + 进度可见 + 可手动触发」 |
-| F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1326-1365`、`src/main.rs:7063`（`on_find_shortcut`）/`:7095`（`search_sessions` 汇总）/`:18338`（`find_dialog_overlay`） | 无 |
-| F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1466` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
+| F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | ✅ | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`src/rpi_engine.rs:1148`（`harness.events().watch` 监听，rev `29d8686` 的 `CompactionProgressEvent` 未实现 `HarnessEventOf`）、`:1159`（`SessionEvent::Compaction`）、`:1186`（`RpiSession::compact()` 手动压缩）；UI `src/main.rs:4654`（`chat.compacting`）、`:19273/19556`（`compaction_status_row`，`id="chat-compaction-status"`）、`:7349`（命令面板「立即压缩」） | checkpoint/handoff 语义未做（明确降级 v0.6），当前是「压缩 + 进度可见 + 可手动触发」 |
+| F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1510-1549`、`src/main.rs:7063`（`on_find_shortcut`）/`:7095`（`search_sessions` 汇总）/`:18338`（`find_dialog_overlay`） | 无 |
+| F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1510` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:19596`（chat_window） | 无 |
 | F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | ✅ | `src/main.rs:23015`（kit_markdown_el） | 无 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:748`（MsgKind::Reasoning）、`:3167`（工具折叠组） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
-| F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:1683`（ask_user_question）、UI `src/main.rs:5318` | 工具名不叫 ask_user，语义等价 |
+| F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:1771`（ask_user_question）、UI `src/main.rs:5318` | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
 | F14 | ACP 表单提问（elicitation） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/main.rs:6023`（`elicitation_cards`）/`:6036`（`elicitation_card_el`）/`:6376`（`submit_elicitation`）、`src/backend.rs:1259` | 无 |
-| F15 | 图片附件（发送 + 历史回源） | `ds-bot/src/host/images.js` | ✅ | `src/rpi_engine.rs:1621`（images_from_attachments）、`src/main.rs:18488` | 无 |
+| F15 | 图片附件（发送 + 历史回源） | `ds-bot/src/host/images.js` | ✅ | `src/rpi_engine.rs:1709`（images_from_attachments）、`src/main.rs:18488` | 无 |
 | F16 | 语音转写 | `ds-bot/src/client/voice.js`、`speech.js` | ❌ | `src/main.rs:19970`（只调系统 Win+H）、`:14983` 自认“未接入” | 无 ASR 〔降级 v0.6〕 |
 
 ## G. 浏览器（6 项）
@@ -134,11 +134,11 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| I01 | 内嵌引擎（自带工具/模型） | `README.zh.md:88` | ✅ | `src/rpi_engine.rs:977`（`RpiSession::open`，引擎入口；`:332` 是内置工具集） | 无 |
+| I01 | 内嵌引擎（自带工具/模型） | `README.zh.md:88` | ✅ | `src/rpi_engine.rs:1021`（`RpiSession::open`，引擎入口；`:332` 是内置工具集） | 无 |
 | I02 | 外置 ACP 引擎（spawn/续聊/表单） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/acp.rs:122/167/384`（session/load） | 无 |
 | I03 | 引擎选择 UI + 探测 | `ds-bot/src/client/local-agents-page.js` | ✅ | `src/main.rs:13550`（`settings_page_local`）、`src/data.rs:366` | 无 |
 | I04 | Claude Code / Codex CLI / Cursor / Gemini / OpenCode 接入 | `ds-bot/src/host/local-agents/engines.js:5`（KINDS=acp/codex/claude）、`:16-27`（10 个引擎） | ❌ | `src/data.rs:337-344` 明确“只支持这四个，不再探测”；`src/acp.rs:122` 只有 ACP 一种驱动，无 driver 抽象 | 需新增 codex/claude 两种驱动协议 〔降级 v0.6〕 |
-| I05 | 引擎能力差异提示（哪些能力 ACP 不支持） | `ds-bot/src/client/agent-cards.js` | 🟡 | `src/i18n.rs:256`（附件）、`:321`（插话） | 零散提示，无统一能力表 〔降级 v0.6〕 |
+| I05 | 引擎能力差异提示（哪些能力 ACP 不支持） | `ds-bot/src/client/agent-cards.js` | 🟡 | `src/i18n.rs:323`（“当前引擎不支持附件发送”）、`:478`（“回合进行中”） | 零散提示，无统一能力表 〔降级 v0.6〕 |
 
 ## J. IM 通道（9 项）
 
@@ -180,9 +180,9 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1478-1567`、`src/main.rs:14722-14747` | 无 |
-| M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:16048`（`usage-range-{1,7,30,90}` chip）、`src/rpi_engine.rs:1661`（`usage_grouped(days)` 的 `by_day`） | 无 |
-| M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `src/main.rs:16071`（`usage-group-{none,bot,model}` chip）、`src/rpi_engine.rs:1661`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1835`（老会话按 header `cwd` 反查名册兜底） | 无 |
+| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1666-1755`、`src/main.rs:14722-14747` | 无 |
+| M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:16048`（`usage-range-{1,7,30,90}` chip）、`src/rpi_engine.rs:1705`（`usage_grouped(days)` 的 `by_day`） | 无 |
+| M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `src/main.rs:16071`（`usage-group-{none,bot,model}` chip）、`src/rpi_engine.rs:1705`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1835`（老会话按 header `cwd` 反查名册兜底） | 无 |
 | M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16048` 四档（1/7/30/90 天）、`src/main.rs:3258`（`usage_range`） | 四档够用；无日历选日、无 12 个月（明确降级，v0.6 再加） 〔降级 v0.6〕 |
 
 ## N. 定时任务（5 项）

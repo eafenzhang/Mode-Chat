@@ -788,6 +788,39 @@ fn tool_detail(content: &[rpi_agent::TextContentOrImage]) -> String {
     }
 }
 
+/// 判断这一轮是否以失败收场；失败时返回给用户看的错误文案。
+///
+/// pi-agent 在 provider 报错时**不会**抛错，而是把 `stop_reason` 置成 `Error`、
+/// 错误文本放进 `error_message`，然后照常发 `TurnEnd` + `AgentEnd`
+/// （`crates/rpi-agent/src/agent_loop.rs:305`）。所以失败与成功在事件流里长得一样，
+/// 唯一区别就在消息本身。`Aborted` 是用户点「停止」，不算失败，返回 `None`。
+fn agent_end_failure(messages: &[rpi_agent::AgentMessage]) -> Option<String> {
+    for message in messages.iter().rev() {
+        let rpi_agent::AgentMessage::Assistant(assistant) = message else {
+            continue;
+        };
+        match assistant.stop_reason {
+            rpi_ai::StopReason::Error => {
+                let detail = assistant
+                    .error_message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or("模型请求失败，未返回具体原因");
+                return Some(format!("{}（可用「重试」再发一次）", detail));
+            }
+            // Aborted = 用户主动停止；Pending/Deferred 是中间态，都不该报错。
+            rpi_ai::StopReason::Aborted
+            | rpi_ai::StopReason::Pending
+            | rpi_ai::StopReason::Deferred => return None,
+            rpi_ai::StopReason::Stop
+            | rpi_ai::StopReason::Length
+            | rpi_ai::StopReason::ToolUse => continue,
+        }
+    }
+    None
+}
+
 /// 把 pi-rust 的 AgentEvent 直接映射成 UI 事件。
 struct UiEmitter {
     events: UnboundedSender<BackendEvent>,
@@ -930,9 +963,20 @@ impl AgentEmitter for UiEmitter {
                         reasoning_tokens,
                     });
                 }
-                self.send(SessionEvent::Done {
-                    member: self.member.clone(),
-                });
+                // 失败判定：pi-agent 在 provider 报错时照样发 AgentEnd
+                // （`agent_loop.rs:305` 对 `stop_reason == Error | Aborted` 直接 TurnEnd +
+                // AgentEnd 后返回）。这里若无条件发 Done，UI 会当成正常结束——
+                // 用户看到的就是「气泡上屏后 AI 再也不说话」，日志里却有 402/429/401。
+                // Aborted 是用户自己点停止，不算错误，仍走 Done。
+                match agent_end_failure(&messages) {
+                    Some(message) => self.send(SessionEvent::Error {
+                        member: self.member.clone(),
+                        message,
+                    }),
+                    None => self.send(SessionEvent::Done {
+                        member: self.member.clone(),
+                    }),
+                }
                 crate::backend::v4_selftest_done();
             }
             _ => {}
@@ -2247,5 +2291,74 @@ mod tests {
         assert!(gate.resolve("call-1", "allow_always"));
         assert_eq!(gate.allowlist(), vec!["browser_open".to_string()]);
         assert!(answered.try_recv().expect("answer sent"));
+    }
+
+    /// 造一条 assistant 消息，只关心 `stop_reason` / `error_message`。
+    /// 用 JSON 反序列化构造，避免逐个字段改上游结构体时测试跟着塌。
+    fn assistant(stop_reason: rpi_ai::StopReason, error: Option<&str>) -> rpi_agent::AgentMessage {
+        let mut value = serde_json::json!({
+            "role": "assistant",
+            "content": [],
+            "api": "test",
+            "provider": "test",
+            "model": "test-model",
+            "usage": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0,
+                "cost": { "input": 0.0, "output": 0.0, "cacheRead": 0.0, "cacheWrite": 0.0, "total": 0.0 }
+            },
+            // StopReason 的 serde 名是 lowercase（`tooluse`），与 `as_str()` 的
+            // `toolUse` 不同，必须走序列化取值，别手写字符串。
+            "stopReason": serde_json::to_value(stop_reason).expect("stop reason"),
+            "timestamp": 0
+        });
+        if let Some(text) = error {
+            value["errorMessage"] = serde_json::Value::String(text.to_string());
+        }
+        let message: rpi_ai::AssistantMessage =
+            serde_json::from_value(value).expect("assistant message fixture");
+        rpi_agent::AgentMessage::Assistant(Box::new(message))
+    }
+
+    #[test]
+    fn stop_reason_error_becomes_session_error() {
+        // provider 报错（这里用真实的 402 文本）必须转成错误事件，
+        // 否则 UI 会当成正常结束，用户只看到「AI 不回话」。
+        let messages = vec![assistant(
+            rpi_ai::StopReason::Error,
+            Some("http error 402: Insufficient Balance"),
+        )];
+        let failure = agent_end_failure(&messages).expect("must be treated as failure");
+        assert!(failure.contains("402"), "错误原文要带给用户：{failure}");
+        assert!(failure.contains("Insufficient Balance"), "{failure}");
+    }
+
+    #[test]
+    fn stop_reason_error_without_message_still_reports() {
+        let messages = vec![assistant(rpi_ai::StopReason::Error, None)];
+        let failure = agent_end_failure(&messages).expect("must be treated as failure");
+        assert!(!failure.is_empty());
+    }
+
+    #[test]
+    fn normal_and_user_aborted_turns_are_not_failures() {
+        // 正常结束、截断、等工具结果都不算失败
+        for reason in [
+            rpi_ai::StopReason::Stop,
+            rpi_ai::StopReason::Length,
+            rpi_ai::StopReason::ToolUse,
+        ] {
+            assert!(
+                agent_end_failure(&[assistant(reason, None)]).is_none(),
+                "{reason:?} 不该报错"
+            );
+        }
+        // 用户点「停止」不是错误
+        assert!(agent_end_failure(&[assistant(rpi_ai::StopReason::Aborted, None)]).is_none());
+        // 空消息（纯工具回合）也不报错
+        assert!(agent_end_failure(&[]).is_none());
     }
 }
