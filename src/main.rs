@@ -7565,7 +7565,7 @@ impl PilotApp {
             }
             PaletteCmd::NewChannel => self.open_new_group_dialog(cx),
             PaletteCmd::NewSession => {
-                // 与 Ctrl+N 同一条路径：复用快捷键处理逻辑。
+                // 行为与 Ctrl+N 等价，但是独立实现（守卫 + history + save）：去重记 v0.6。
                 if let Some(bot) = self.selected_bot().cloned() {
                     let key = bot_key(&bot.id);
                     if !self.chats.get(&key).is_some_and(|chat| chat.streaming) {
