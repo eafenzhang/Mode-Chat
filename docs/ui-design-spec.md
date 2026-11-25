@@ -244,7 +244,7 @@ Lucide 是 24 网格、stroke-width 2，图形约占 85%，与旧版相当。
 | --- | --- | --- | --- |
 | 1 | `.cursor_pointer()` | `src/ui_kit.rs` | **0**（已全部改用 `ui_kit::Clickable::pointer()`） |
 | 2 | `.rounded(px(<数字字面量>))` | `src/ui_kit.rs`、`src/theme.rs` | **0**（令牌参数与 `size * 0.24` 等比头像不算违规） |
-| 3 | `text_size(px(N))` | `N` 必须是 `T_LABEL/T_BODY/T_TITLE/T_PAGE/T_METRIC` 的值 | **0**（残留 10/12.5/14/17 全并入令牌） |
+| 3 | `text_size(px(<数字字面量>))` | `N` 必须是 `T_LABEL/T_BODY/T_TITLE/T_PAGE/T_METRIC` 的值（11/12/13/15/22） | **0**（残留 10/12.5/14/17 全并入令牌） |
 | 4 | `rgb(...)` | 主题与图标着色白名单文件 | **0**（5 处换 `theme::accent_ink()` / `wecom_theme::list_title_selected()`） |
 
 四项合计 **0 处**，`-Enforce` 已可用于 CI 阻断（2026-11-25 达成）。
@@ -260,3 +260,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
 ```
 
 收敛完成后把 release.yml 的调用改成 `-Enforce`，违规即阻断发布。
+
+### 11.1 字号 AC 的正确口径（2026-11-25 修 U-06）
+
+**旧口径是错的，不要再用**：`grep -c 'text_size(px(' src/*.rs` → 「仅 `ui_kit.rs` 令牌定义」。
+这条判据无法区分合规与违规——`text_size(px(12.))` 合规、`text_size(px(14.))` 违规，
+两者都被 `text_size(px(` 命中。实际 `src/` 全仓 330 处：225 处数字字面量 + 22 处 `px(T_*)`
++ 83 处变量，照字面永远不可能「仅 `ui_kit.rs`」，AC 永远不通过，等于没有 AC。
+
+**正确口径**：**非令牌字面量 = 0**。判定是「括号里**是否数字字面量**」× 「该数字**是否等于令牌值**」：
+
+```
+合规  text_size(px(T_LABEL))        px(T_*) 令牌
+合规  text_size(px(font_size))      变量
+合规  text_size(px(12.))            字面量，但 12 是 T_BODY 的值
+违规  text_size(px(14.))            字面量，且 14 不在令牌表里
+```
+
+与 `scripts/ui-lint.ps1` 第 3 条规则完全一致（`$FontTokens = @('11.','12.','13.','15.','22.')`），
+一条命令即验：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
+# 期望：[OK  ] text_size(px(non-token))   0
+```
+
+实测基线（2026-11-25，HEAD `2aeacce`）：330 处 `text_size(px(`，其中非令牌字面量 **0**，
+`ui-lint -Enforce` 四项合计 0 违规。**不要再按 `grep -c` 的旧口径判定这条 AC。**
