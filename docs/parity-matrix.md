@@ -32,7 +32,7 @@
 | A09 | 侧栏分组（section）归组/折叠/染色 | `ds-bot/src/client/folder-menu.js`、`host/folders.js` | ✅ | `src/main.rs:13176`（`sidebar_sections_section`，分组 CRUD）、`:13218`（`section-up-*`）、`:13270`（`section-delete-*`）、`src/main.rs:701`（`sidebar_section_dot` 染色辅助） | 无 |
 | A10 | 置顶 / 隐藏 / 恢复显示 | `ds-bot/src/client/sidebar.js`（pushpin） | ✅ | `src/data.rs:40`（`pinned`）、`:79`（`hidden_bots`）、`src/data.rs:815`（`set_bot_flags`）、`src/main.rs:16456`（「隐藏」菜单项）、`:13438`（「已隐藏」区） | 无 |
 | A11 | Bot 实时状态（正在做什么） | `ds-bot/src/client/member-status.js`、`host/feed.js` | 🟡 | `src/backend.rs:191`（`SessionEvent::Delta` 带 `member`，成员状态事件）、`src/main.rs:2797`（`push_member_delta`） | 只有“正在输出”，没有“正在做什么/在哪一步” 〔降级 v0.6〕 |
-| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | 🟡 | `src/data.rs:37`（`is_main` / `is_chief` 字段在）；微信壳 `src/main.rs:23000`（`fn wechat_nav`，删 classic 后的唯一侧栏） | v0.6 删 classic 后，`main_bot_card` 随 `sidebar` 一并删除；微信壳侧栏内 `is_chief`/`is_main`/`chief` **0 命中**，侧栏行 `wechat_list_row`（`:19010`）只画头像/名字/时间/未读点，**无「谁是主 Bot」的视觉位**。〔降级 v0.7：补主卡位〕 |
+| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | 🟡 | `src/data.rs:37`（`is_main` / `is_chief` 字段在）；微信壳 `src/main.rs:22995`（`fn wechat_nav`，唯一侧栏） | v0.6 删 classic 后，`main_bot_card` 随 `sidebar` 一并删除；微信壳侧栏内 `is_chief`/`is_main`/`chief` **0 命中**，侧栏行 `wechat_list_row`（`:19003`）只画头像/名字/时间/未读点，**无「谁是主 Bot」的视觉位**。〔降级 v0.7：补主卡位〕 |
 | A13 | Bot 详情页用量/待办 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:23929`（`ui::section(i18n::t("待办"))`，微信壳详情栏；classic 的 `bot_details` 已随 v0.6 D-CUT 删除）、`:14329`（`im-group-activation-{label}`，用量） | 无 |
 
 ## B. Main bot 与权限（5 项）
@@ -98,16 +98,16 @@
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
 | F01 | 历史会话切换（resume） | `ds-bot/src/host/parts.js` | ✅ | `src/main.rs:21198`（历史会话列表，`HISTORY_ROWS`）、`:24146`（`panel-history-{target}` 行）、`src/rpi_engine.rs:1376`（`history_entries`） | 无 |
-| F02 | 新会话 | 同上 | ✅ | **默认壳三条**：Ctrl+N `:6847`、标题栏「+」`wechat-new-session` `:27686`、命令面板「新会话」`PaletteCmd::NewSession` `:7435`（派发 `:7567`）；走共用函数 `new_session_for_selected`（`:6854`）的是**三条**：Ctrl+N `:6847`、标题栏「+」`:27695`、classic 右栏 `:20553`；命令面板那条（`:7567`）是**行为等价但独立**的实现（自带 streaming 守卫、`push_history`、`sessions.save()`，未调共用函数），去重记 v0.6。classic 右栏 `detail-new-session` `:20539` 只在 `classic_shell` 的 `right_panel` 内，默认壳 `chat_info_panel` 无此按钮。v0.5.0 时默认壳 `chat_info_panel` 内 0 命中、等于无入口，v0.5.1 由 Q-05 补齐 | 无（v0.5.0「默认壳无入口」已消除） |
+| F02 | 新会话 | 同上 | ✅ | **三条入口**：Ctrl+N `src/main.rs:6813`（`on_new_session_shortcut`）、标题栏「+」`.id("wechat-new-session")` `:24445`（点击 `:24454` 调共用函数）、命令面板「新会话」`PaletteCmd::NewSession` `:7407`（派发 `:7539`）。共用实现是 `new_session_for_selected`（`:6827`）：Ctrl+N 与标题栏「+」都走它；命令面板那条（`:7539`）是**行为等价但独立**的实现（自带 streaming 守卫、`push_history`、`sessions.save()`，未调共用函数），去重记 v0.6 | 无 |
 | F03 | 回合中插话（steer，不打断） | `ds-bot/src/host/steer.js` | ✅ | `src/composer_input.rs:16`（SendSecondary）、`src/rpi_engine.rs:1244-1267` | 无 |
 | F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | 🟡 | `src/main.rs:5293`（`queue_current`）/`:5339`（`flush_queue`）、`:864`（`queued: Vec<QueuedSend>`）、`:5300`（`MAX_QUEUED = 5`）；上限 5 条 | 逻辑有，但无排队条 UI（DS 有独立 dock），用户看不到排了几条 〔降级 v0.6〕 |
 | F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `src/main.rs:5204`（`strip_prefix("/side")` 命令入口）、`:7806`（`fn open_side`）、`:7904`（`fn apply_side_event`，旁路事件不进主 chat） | 无 |
-| F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`src/rpi_engine.rs:1170`（`harness.events().watch` 监听）、`:1181`（`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs:4649`（`chat.compacting`）、`:24689`（`chat.compacting` 读点）、`:19510`（`WecomRow::Compacting` 行分支）、行定义 `:21579`（`id="chat-compaction-status"` `:21581`）、`:1028`（`PaletteCmd` 定义）→ `:7592`（`PaletteCmd::Compact` 派发）、默认壳入口 `:25442`（`composer-plus`） | checkpoint/handoff 语义未做（明确降级 v0.6）。v0.5.0 曾只有 classic 外壳接上这两处（默认壳 0 命中，实测 93 帧无一帧出现状态行），v0.5.1 已由 Q-01/Q-02 补齐默认壳 `:19510` + `:25447` | 〔降级 v0.6：checkpoint/handoff 语义〕 |
+| F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`src/rpi_engine.rs:1170`（`harness.events().watch` 监听）、`:1181`（`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs:4646`（`chat.compacting` 写入）、`:24698`（`chat.compacting` 读点）、`:19510`（`WecomRow::Compacting` 行分支）、行定义 `:21579`（`fn compaction_status_row`，`id="chat-compaction-status"` 在 `:21581`）、`:1030`（`PaletteCmd::Compact` 定义）→ `:7592`（派发）、入口 `:25451`（`.id("composer-plus")`） | checkpoint/handoff 语义未做（明确降级 v0.6） | 〔降级 v0.6：checkpoint/handoff 语义〕 |
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7066`（`on_find_shortcut`）/`:7098`（`search_sessions` 调用）/`:17828`（`find_dialog_overlay`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1536` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:243`（`const TRANSCRIPT_WINDOW = 120`）、`:19253`（`transcript_limit.saturating_add`，累计翻页） | 无 |
-| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:21699`（`kit_markdown_el`，`.selectable(true)` `:21701`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:24490`）。**Q-04 的动作条**：`wechat_message_actions`（`:19949`）在 `wechat_row_el`（`:19218`）内两个调用点 —— 用户气泡 `:19315`（第 4 个实参 `true` = 挂右上）、助手气泡 `:19379`（第 4 个实参 `false` = 挂左上）；含「复制」`:19987`（`cx.write_to_clipboard`，按钮 id `wecom-copy-{index}` 在 `:19977`）与「复制代码」`:20009`（`cx.write_to_clipboard`，仅当 `:19995` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | **「引用」仍缺**：`wechat_row_el` 内 `quote`/`引用` 0 命中 —— 引用要写回 composer 的引用条，而 `wechat_composer` 没有引用 UI，属交互层改动。**本版不新建引用交互** 〔降级 v0.7：引用条〕 |
-| F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:753`（`MsgKind::Reasoning`，枚举在 `:751`）、`:3608`（`WecomRow::ToolGroup` 折叠组；渲染 `:18869`/`:19516`） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
+| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:21699`（`kit_markdown_el`，`.selectable(true)` `:21701`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:24499`）。**Q-04 的动作条**：`wechat_message_actions`（`:19949`）在 `wechat_row_el`（`:19218`）内两个调用点 —— 用户气泡 `:19315`（第 4 个实参 `true` = 挂右上）、助手气泡 `:19379`（第 4 个实参 `false` = 挂左上）；含「复制」`:19987`（`cx.write_to_clipboard`，按钮 id `wecom-copy-{index}` 在 `:19977`）与「复制代码」`:20009`（`cx.write_to_clipboard`，仅当 `:19995` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | **「引用」仍缺**：`wechat_row_el` 内 `quote`/`引用` 0 命中 —— 引用要写回 composer 的引用条，而 `wechat_composer` 没有引用 UI，属交互层改动。**本版不新建引用交互** 〔降级 v0.7：引用条〕 |
+| F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:753`（`MsgKind::Reasoning`，枚举在 `:751`）、`:3609`（`WecomRow::ToolGroup` 折叠组变体；渲染分支 `:18862`/`:19504`） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
 | F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2117`（`ask_user_question` 工具名）、UI `src/main.rs:5796`（`question_cards`）/`:5809`（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
 | F14 | ACP 表单提问（elicitation） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/main.rs:6015`（`elicitation_cards`）/`:6028`（`elicitation_card_el`）/`:6368`（`submit_elicitation`）、`src/backend.rs:144`（`ElicitationCard`） | 无 |
@@ -264,7 +264,7 @@
 | C 群聊 | 15 | 11/2/2 | 阶段证据/通过/打回（C08）、群外发言（C13）已补；缺 notice、引用整段对话（降级 v0.6） |
 | D 隐私 bot | 5 | 5/0/0 | 隔离闭环：会话/搜索/群 + 文件路径守卫（D05）+ 删除后归档（D04）全通 |
 | E 记忆 | 13 | 11/1/1 | Bot 记忆进提示（E03）、三工具（E05）、面板（E09）、拒写凭据（E13）全通；私聊自动回顾降级 v0.6 |
-| F 会话与输入 | 16 | 9/5/2 | F02 新会话入口已补默认壳（v0.5.1 Q-05：Ctrl+N `:6847`、标题栏「+」`:27686`、命令面板 `:7567`）、F06 压缩状态行（Q-01/Q-02，`:22261`）、F10 消息复制（Q-04，`:22968`/`:22990`）均已在默认壳接通；注意 `:7567` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；另缺 show_view、语音、FTS5（降级 v0.6） |
+| F 会话与输入 | 16 | 9/5/2 | F02 新会话入口三条（v0.5.1 Q-05：Ctrl+N `:6813`、标题栏「+」`:24445`、命令面板 `:7539`）、F06 压缩状态行（Q-01/Q-02，`fn compaction_status_row` `:21579`、行分支 `:19510`）、F10 消息复制（Q-04，`wechat_message_actions` `:19949`、复制 `:19987`）均在微信壳接通；注意 `:7539` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；另缺 show_view、语音、FTS5（降级 v0.6） |
 | G 浏览器 | 6 | 2/1/3 | 每 Bot 独立 profile 已补（G02）；缺内嵌面板、Cookie 导入、插件（降级 v0.6） |
 | H 电脑操控 | 6 | 2/0/4 | 工具齐，分级/租约/接管/永久禁止全未做（降级 v0.6） |
 | I 本地 Agent | 5 | 3/1/1 | ACP 齐，codex/claude 原生驱动缺（降级 v0.6） |
@@ -288,7 +288,7 @@ A08、B05、C08、C13、D04、D05、E03、E05、E09、E13、F06、G02、J08、M0
 
 | 项 | v0.5.1 | v0.6.0 | 依据 |
 | --- | --- | --- | --- |
-| A12 主卡位 | ✅ | 🟡 | `main_bot_card`（已随 classic 删除，原 `sidebar` 唯一调用）。微信壳区间 `25799-29000` 内 `is_chief`/`is_main`/`chief` **0 命中**，`wechat_list_row`（`:21754`）只画头像/名字/时间/未读点，**没有主 Bot 视觉位**。判定为真实功能损失，不是锚点问题 〔降级 v0.7：补主卡位〕 |
+| A12 主卡位 | ✅ | 🟡 | `main_bot_card`（已随 classic 删除，原 `sidebar` 唯一调用）。微信壳区间内 `is_chief`/`is_main` 只出现在表单装载（`build_bot_form` `:11054`/`:11071`）与默认选中（`:11222`）里，**没有任何一处渲染成侧栏视觉位**；`wechat_list_row`（`:19003`）只画头像/名字/时间/未读点，**没有主 Bot 视觉位**。判定为真实功能损失，不是锚点问题 〔降级 v0.7：补主卡位〕 |
 
 净变化：✅ −1、🟡 +1，合计仍 136。**这一项是「删掉的那套壳里唯一没有等价物、也不在本版补」的能力**；其余 classic 独有能力（欢迎区、运行状态面板）已在 v0.6 搬进/接回微信壳，见 `docs/prd-0.6.md` §2.2、§5 的 O-1 / O-2。
 
@@ -296,9 +296,9 @@ A08、B05、C08、C13、D04、D05、E03、E05、E09、E13、F06、G02、J08、M0
 
 | 项 | v0.5.0 | v0.5.1 | 依据 |
 | --- | --- | --- | --- |
-| F06 压缩 / checkpoint | ✅ | 🟡 | 默认壳压缩状态行已补（Q-01/Q-02），但 checkpoint/handoff 语义仍未做，v0.5.0 记全 ✅ 是过宽；证据见 F06 行 |
-| F10 Markdown | ✅ | 🟡 | 默认壳已补「复制 / 复制代码」（Q-04），但引用条仍缺（`wechat_composer` 无引用 UI），v0.5.0 记全 ✅ 是过宽；证据见 F10 行 |
-| F02 新会话 | ✅ | ✅ | **状态不变**。v0.5.0 只引 1 处（`:19144`）且「差距」列写「无」，即当时判宽了（默认壳其实没有入口）；v0.5.1 由 Q-05 真实补齐三条入口，证据从 1 处扩到 3 处，✅ 靠真实修复撑住 |
+| F06 压缩 / checkpoint | ✅ | 🟡 | 微信壳压缩状态行已补（Q-01/Q-02），但 checkpoint/handoff 语义仍未做，v0.5.0 记全 ✅ 是过宽；证据见 F06 行 |
+| F10 Markdown | ✅ | 🟡 | 微信壳已补「复制 / 复制代码」（Q-04），但引用条仍缺（`wechat_composer` 无引用 UI），v0.5.0 记全 ✅ 是过宽；证据见 F10 行 |
+| F02 新会话 | ✅ | ✅ | **状态不变**。v0.5.0 只引 1 处（`:19144`）且「差距」列写「无」，即当时判宽了（微信壳其实没有入口）；v0.5.1 由 Q-05 真实补齐三条入口，证据从 1 处扩到 3 处，✅ 靠真实修复撑住 |
 
 三项净变化：✅ −2、🟡 +2，合计仍 136，增减只来自 F06 与 F10。**这不是功能回退**：三项在默认外壳下的实际能力都比 v0.5.0 强，降级原因是复验改用「默认外壳为主判据」后，把 v0.5.0 记宽了的项按真实完成度重算。
 
