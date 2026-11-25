@@ -147,6 +147,36 @@ foreach ($doc in $docs) {
 }
 Write-Output "anchors checked: $checked  symbol-checked: $nearChecked  skipped-external: $script:skippedExternal"
 
+# --- 反引号没配对的锚点：语法坏了，等于这个锚点完全没被校验 -------------------
+# 实测撞到 3 处（`表单 :2479``、`、:16702``、`、:7348``）：前半截该包住行号的反引号丢了，
+# 只留了结尾那一个。这种写法两条正则都匹配不到——
+#   完整锚点正则要求「`path:N`」整段被反引号包住；
+#   裸行号正则要求 `:N` 前面紧跟反引号。
+# 于是这几处**既不在位置校验里，也不在指纹锁里**，把行号改成 99999 都照样 PARITY=0。
+# 判据：`:N` 前面出现的反引号个数为偶数 -> 它落在反引号对之外 -> 语法坏了。
+# 只在本行已有合法反引号锚点时才报，避免把说明文字里的冒号数字当成锚点。
+$ideRx = [regex]':(\d+(?:/\d+)*)'
+$fileRefRx = [regex]'`[A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml):\d'
+$malformed = 0
+foreach ($doc in $docs) {
+  $docPath = Join-Path $root $doc
+  if (-not (Test-Path $docPath)) { continue }
+  $ln = 0
+  foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
+    $ln++
+    if ($line.Trim() -eq '```' -or -not $fileRefRx.IsMatch($line)) { continue }
+    foreach ($m in $ideRx.Matches($line)) {
+      $pre = 0
+      $upto = $line.Substring(0, $m.Index)
+      foreach ($c in $upto.ToCharArray()) { if ($c -eq [char]0x60) { $pre++ } }
+      if ($pre % 2 -eq 1) { continue }  # 在反引号对内，正常
+      $malformed++
+      $bad.Add("MALFORMED ANCHOR -> $doc :$ln  锚点 ``$($m.Value)`` 没被反引号包住（反引号少了一半），位置校验和指纹锁都看不到它；补上开头的反引号即可")
+    }
+  }
+}
+if ($malformed -gt 0) { Write-Output "malformed anchors (outside backticks, unchecked): $malformed" }
+
 # --- 裸行号锚点：` :760/767` 这种省略文件名的写法 ---------------------------
 # 表格里常写「`src/goals.js:19`（…）、`:760/767`（…）」，后半截只有行号。
 # 回填规则：取**同一行内、紧挨在它前面**最近的那个完整锚点的文件名。
