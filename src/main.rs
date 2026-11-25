@@ -24551,7 +24551,7 @@ impl PilotApp {
                     .child(skeleton_rows())
                     .into_any_element();
             }
-            return div().flex_1().min_h(px(0.)).into_any_element();
+            return self.wechat_welcome(bot.as_ref(), cx);
         }
         let start = chat.messages.len().saturating_sub(chat.transcript_limit);
         let chat_key = key.clone().unwrap_or_default();
@@ -24863,6 +24863,119 @@ impl PilotApp {
             container = container.child(nav);
         }
         container.into_any_element()
+    }
+
+    /// 空会话欢迎区（O-1）：头像 + 欢迎语 + 三条建议 chip。
+    ///
+    /// 交互照 classic `transcript` 的欢迎区做（点 chip 把文案填进输入框并聚焦），
+    /// 但令牌全部换成 `wechat_theme` 的，chip 的 id 前缀用 `wechat-welcome-`。
+    /// 群聊不显示：微信壳没有「当前 Bot」这层语义。
+    fn wechat_welcome(
+        &mut self,
+        bot: Option<&Bot>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(bot) = bot else {
+            return div().flex_1().min_h(px(0.)).into_any_element();
+        };
+        let input = self.input.clone();
+        let suggestions = [
+            i18n::t("先做一次发布前走查"),
+            i18n::t("把这次需求拆成可执行任务"),
+            i18n::t("总结一下最近的进展"),
+        ];
+        let mut chips = div().flex().flex_wrap().items_center().gap(px(ui_kit::S2));
+        for (index, text) in suggestions.into_iter().enumerate() {
+            let seed = text.to_string();
+            let filled = seed.clone();
+            chips = chips.child(
+                div()
+                    .id(SharedString::from(format!("wechat-welcome-suggestion-{index}")))
+                    .h(px(28.))
+                    .rounded(px(theme::RADIUS_TAG))
+                    .border_1()
+                    .border_color(wechat_theme::composer_border())
+                    .px(px(ui_kit::S3))
+                    .flex()
+                    .items_center()
+                    .pointer()
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_BODY))
+                    .line_height(px(ui_kit::T_BODY_LH))
+                    .text_color(wechat_theme::chat_subtitle())
+                    .hover(|style| {
+                        style
+                            .bg(wechat_theme::nav_item_hover_bg())
+                            .text_color(wechat_theme::chat_title())
+                    })
+                    .on_click(cx.listener({
+                        let input = input.clone();
+                        move |_this, _event, window, cx| {
+                            input.update(cx, |input, cx| input.set_content(filled.clone(), cx));
+                            let handle = input.read(cx).focus_handle(cx);
+                            handle.focus(window, cx);
+                            cx.notify();
+                        }
+                    }))
+                    .child(SharedString::from(seed)),
+            );
+        }
+
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(ui_kit::S4))
+            .px(px(ui_kit::S6))
+            .child(Self::wechat_avatar(&bot.id, &bot.name, 56.))
+            .child(
+                div()
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_PAGE))
+                    .line_height(px(ui_kit::T_PAGE_LH))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(wechat_theme::chat_title())
+                    .child(SharedString::from(bot.name.clone())),
+            )
+            .children((!bot.role.trim().is_empty()).then(|| {
+                div()
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_LABEL))
+                    .line_height(px(ui_kit::T_LABEL_LH))
+                    .text_color(wechat_theme::chat_subtitle())
+                    .child(SharedString::from(bot.role.clone()))
+            }))
+            .child(
+                div()
+                    .max_w(px(460.))
+                    .mt(px(ui_kit::S1))
+                    .rounded(px(theme::RADIUS_CHIP))
+                    .bg(wechat_theme::bubble_in())
+                    .px(px(14.))
+                    .py(px(10.))
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_TITLE))
+                    .line_height(px(ui_kit::T_TITLE_LH + 6.))
+                    .text_color(wechat_theme::bubble_text())
+                    .child(SharedString::from(tri!(
+                        "你好，我是{}。直接把活儿派给我，或去群聊里和大家一起推进。",
+                        "Hi, I am {}. Give me work directly, or head to a group chat and we will push it together.",
+                        bot.name
+                    ))),
+            )
+            .child(
+                div()
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_LABEL))
+                    .line_height(px(ui_kit::T_LABEL_LH))
+                    .text_color(wechat_theme::chat_subtitle())
+                    .child(i18n::t("今天想先推进哪件事？")),
+            )
+            .child(chips)
+            .into_any_element()
     }
 
     /// 转录底部的「工作中 N 秒」行（streaming 时显示，1s ticker 刷新）。
