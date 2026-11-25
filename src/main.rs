@@ -3339,7 +3339,7 @@ struct PilotApp {
     /// 会话内查找（独立于 Ctrl+F 的全局搜索）。
     chat_find: Option<ChatFindState>,
     /// 当前 transcript 的消息下标 → 行下标（查找跳转用）。
-    wecom_message_rows: HashMap<usize, usize>,
+    wechat_message_rows: HashMap<usize, usize>,
     pending_find_scroll: bool,
     /// 搜索结果键盘高亮项（Tab/Shift+Tab 移动、Enter 跳转）。
     find_selected: usize,
@@ -3358,7 +3358,7 @@ struct PilotApp {
     /// 企微四栏皮肤（2026-11-15 试验）；`BOT_PILOT_CLASSIC_UI=1` 回退经典三栏。
     wecom_mode: bool,
     /// 企微左导航当前筛选。
-    wecom_nav: WecomNav,
+    wechat_nav: WecomNav,
     /// 免打扰的会话键（本地 UI 偏好，不写名册）。
     muted: HashSet<String>,
     /// 窗口是否置顶（标题栏图钉）。
@@ -3366,14 +3366,14 @@ struct PilotApp {
     /// 固定到左导轨的设置页下标（`SETTINGS_PAGES`，按添加顺序）。
     pinned_settings: Vec<usize>,
     /// 微信 transcript 的虚拟列表状态（gpui-kit `MessageScroller`）。
-    wecom_scroller: Entity<gpui::component::message_scroller::MessageScrollerState>,
+    wechat_scroller: Entity<gpui::component::message_scroller::MessageScrollerState>,
     /// 上次写入 scroller 的行数/会话键；变化时 reset，避免每帧重建。
-    wecom_row_count: usize,
-    wecom_rows_fingerprint: u64,
+    wechat_row_count: usize,
+    wechat_rows_fingerprint: u64,
     /// 已展开的思考过程/工具详情（键见 WecomRow）。
     reasoning_expanded: std::collections::HashSet<String>,
     /// 回合跳转游标（turn_rows 下标；切会话时落到最后一回合）。
-    wecom_turn_cursor: usize,
+    wechat_turn_cursor: usize,
     /// 是否展示思考过程 / 后台是否弹托盘通知（prefs.json）。
     show_thinking: bool,
     background_notifications: bool,
@@ -3417,11 +3417,11 @@ struct PilotApp {
     tool_expanded: std::collections::HashSet<String>,
     /// 工具分组的展开态（键 = 组内首个 call_id）。
     tool_group_expanded: std::collections::HashSet<String>,
-    wecom_last_row_fingerprint: u64,
-    wecom_scroller_chat: Option<String>,
+    wechat_last_row_fingerprint: u64,
+    wechat_scroller_chat: Option<String>,
     /// 会话列表虚拟列表（gpui-kit ListState）。
-    wecom_list_state: gpui::ListState,
-    wecom_list_fingerprint: u64,
+    wechat_list_state: gpui::ListState,
+    wechat_list_fingerprint: u64,
     /// 窗口尺寸/最大化变化观察者（native 窗控后靠它刷新图标与几何）。
     bounds_observer: Option<gpui::Subscription>,
     /// 更新探测结果（None = 还没查过）。
@@ -3590,7 +3590,7 @@ enum WecomListRow {
     Entry(WecomEntry),
 }
 
-fn wecom_entry_key(entry: &WecomEntry) -> String {
+fn wechat_entry_key(entry: &WecomEntry) -> String {
     if entry.is_group {
         group_key(&entry.id)
     } else {
@@ -3726,7 +3726,7 @@ impl PilotApp {
         .detach();
 
         let (muted, topmost, pinned_settings, right_panel_open) = load_ui_prefs();
-        let wecom_scroller = cx.new(|cx| {
+        let wechat_scroller = cx.new(|cx| {
             gpui::component::message_scroller::MessageScrollerState::new(0, cx)
         });
         let mut app = Self {
@@ -3818,7 +3818,7 @@ impl PilotApp {
             autostart_enabled: autostart::is_enabled(),
             find_dialog: None,
             chat_find: None,
-            wecom_message_rows: HashMap::new(),
+            wechat_message_rows: HashMap::new(),
             pending_find_scroll: false,
             find_selected: 0,
             find_seq: 0,
@@ -3828,15 +3828,15 @@ impl PilotApp {
             focus_bootstrapped: false,
             first_frame_logged: false,
             wecom_mode: std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1"),
-            wecom_nav: WecomNav::All,
+            wechat_nav: WecomNav::All,
             muted,
             topmost,
             pinned_settings,
-            wecom_scroller,
-            wecom_row_count: 0,
-            wecom_rows_fingerprint: 0,
+            wechat_scroller,
+            wechat_row_count: 0,
+            wechat_rows_fingerprint: 0,
             reasoning_expanded: std::collections::HashSet::new(),
-            wecom_turn_cursor: 0,
+            wechat_turn_cursor: 0,
             show_thinking: load_ui_bool("show_thinking", true),
             background_notifications: load_ui_bool("notify_background", true),
             enter_to_send,
@@ -3864,14 +3864,14 @@ impl PilotApp {
             sidebar_sections: load_sidebar_sections(),
             tool_expanded: std::collections::HashSet::new(),
             tool_group_expanded: std::collections::HashSet::new(),
-            wecom_last_row_fingerprint: 0,
-            wecom_scroller_chat: None,
-            wecom_list_state: gpui::ListState::new(
+            wechat_last_row_fingerprint: 0,
+            wechat_scroller_chat: None,
+            wechat_list_state: gpui::ListState::new(
                 0,
                 gpui::ListAlignment::Top,
                 px(400.),
             ),
-            wecom_list_fingerprint: 0,
+            wechat_list_fingerprint: 0,
             bounds_observer: None,
             update_check: None,
             update_checking: false,
@@ -12471,7 +12471,7 @@ impl PilotApp {
             cx,
         );
         configure_kit_theme(cx);
-        self.wecom_scroller
+        self.wechat_scroller
             .update(cx, |state, cx| state.remeasure(cx));
         cx.notify();
     }
@@ -12600,7 +12600,7 @@ impl PilotApp {
                 if let Ok(size) = value.parse::<u32>() {
                     self.chat_font_size = size;
                     save_ui_value("chat_font_size", serde_json::json!(size));
-                    self.wecom_scroller
+                    self.wechat_scroller
                         .update(cx, |state, cx| state.remeasure(cx));
                 }
             }
@@ -12616,7 +12616,7 @@ impl PilotApp {
             SettingsSelectKind::MessageLayout => {
                 self.message_layout = value.to_string();
                 save_ui_value("message_layout", serde_json::json!(value));
-                self.wecom_scroller
+                self.wechat_scroller
                     .update(cx, |state, cx| state.remeasure(cx));
             }
         }
@@ -21581,7 +21581,7 @@ fn tool_message_fingerprint(message: &Message) -> u64 {
         .wrapping_add(message.tool_images.len() as u64)
 }
 
-fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
+fn wechat_row_fingerprint(row: &WecomRow) -> u64 {
     match row {
         WecomRow::LoadEarlier { hidden, .. } => (*hidden as u64).wrapping_add(1),
         WecomRow::Date(label) => label.len() as u64 + 10,
@@ -21647,7 +21647,7 @@ fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
 }
 
 /// 行内容指纹：行数不变时流式文本会增长，用它触发 `remeasure`。
-fn wecom_list_rows_fingerprint(rows: &[WecomListRow]) -> u64 {
+fn wechat_list_rows_fingerprint(rows: &[WecomListRow]) -> u64 {
     let mut hash = rows.len() as u64;
     for row in rows {
         let mut mix = |value: usize| {
@@ -21684,9 +21684,9 @@ fn wecom_list_rows_fingerprint(rows: &[WecomListRow]) -> u64 {
     hash
 }
 
-fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> gpui::AnyElement {
+fn wechat_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> gpui::AnyElement {
     match row {
-        WecomListRow::Entry(entry) => wecom_list_row(entry, weak),
+        WecomListRow::Entry(entry) => wechat_list_row(entry, weak),
         WecomListRow::Section {
             id,
             name,
@@ -21751,7 +21751,7 @@ fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> g
     }
 }
 
-fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui::AnyElement {
+fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui::AnyElement {
     let now = time::now_ms();
     let time_label = if entry.at == 0 {
         String::new()
@@ -21782,11 +21782,11 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
         wechat_theme::list_time()
     };
     let avatar = if entry.is_group && !entry.member_ids.is_empty() {
-        PilotApp::wecom_group_avatar(&entry.member_ids, 40.).into_any_element()
+        PilotApp::wechat_group_avatar(&entry.member_ids, 40.).into_any_element()
     } else if entry.is_group {
-        PilotApp::wecom_channel_avatar(&entry.id, 40.).into_any_element()
+        PilotApp::wechat_channel_avatar(&entry.id, 40.).into_any_element()
     } else {
-        PilotApp::wecom_avatar(&entry.id, &entry.name, 40.).into_any_element()
+        PilotApp::wechat_avatar(&entry.id, &entry.name, 40.).into_any_element()
     };
     let row_id = SharedString::from(format!(
         "wechat-row-{}-{}",
@@ -21897,7 +21897,7 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
         .into_any_element()
 }
 
-fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
+fn wechat_rows_fingerprint(rows: &[WecomRow]) -> u64 {
     let mut hash = rows.len() as u64;
     let mut mix = |value: usize| {
         hash = hash
@@ -21966,7 +21966,7 @@ fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
 
 /// 渲染 `MessageScroller` 的一行（纯函数；不依赖 `Context<PilotApp>`）。
 #[allow(clippy::too_many_arguments)]
-fn wecom_row_el(
+fn wechat_row_el(
     row: &WecomRow,
     index: usize,
     is_group: bool,
@@ -22063,7 +22063,7 @@ fn wecom_row_el(
                     )),
             )
             // 用户气泡贴右，动作条挂右上（与 classic 的 top -18 / right 0 一致）
-            .child(wecom_message_actions(
+            .child(wechat_message_actions(
                 index,
                 text,
                 weak,
@@ -22127,7 +22127,7 @@ fn wecom_row_el(
                 })
                 .child(cell)
                 // 助手气泡贴左，动作条挂左上
-                .child(wecom_message_actions(
+                .child(wechat_message_actions(
                     index,
                     text,
                     weak,
@@ -22237,7 +22237,7 @@ fn wecom_row_el(
                     .flex()
                     .items_start()
                     .gap(px(8.))
-                    .child(PilotApp::wecom_avatar(
+                    .child(PilotApp::wechat_avatar(
                         member.as_deref().unwrap_or(""),
                         member.as_deref().unwrap_or(""),
                         36.,
@@ -22250,14 +22250,14 @@ fn wecom_row_el(
             }
         }
         WecomRow::Tool { message, expanded } => {
-            wecom_tool_card(message, *expanded, weak).into_any_element()
+            wechat_tool_card(message, *expanded, weak).into_any_element()
         }
         WecomRow::ToolGroup {
             key,
             family,
             messages,
             expanded,
-        } => wecom_tool_group_card(key, *family, messages, *expanded, weak).into_any_element(),
+        } => wechat_tool_group_card(key, *family, messages, *expanded, weak).into_any_element(),
         WecomRow::Compacting => compaction_status_row().into_any_element(),
     }
 }
@@ -22921,13 +22921,13 @@ fn copy_button(index: usize, text: String, cx: &mut Context<PilotApp>) -> gpui::
 
 /// Q-04：默认壳（微信风）的消息悬停动作条。
 ///
-/// classic 的 `message_actions` 要构建期 `&mut Context<PilotApp>`，而 `wecom_row_el`
+/// classic 的 `message_actions` 要构建期 `&mut Context<PilotApp>`，而 `wechat_row_el`
 /// 是虚拟列表的纯函数，只拿到 `&mut App`；这里照 `history_attachment_view` 的
 /// 已验证写法，用 `weak.update` 在点击回调里取 Context。
 ///
 /// 只做「复制 / 复制代码」：默认壳的 composer 还没有引用条 UI，挂上「引用」
 /// 会让用户点了看不到任何反馈，属于新增 UI，归 v0.6。
-fn wecom_message_actions(
+fn wechat_message_actions(
     index: usize,
     text: &str,
     weak: &gpui::WeakEntity<PilotApp>,
@@ -25346,7 +25346,7 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
 }
 
 /// edit / write 工具卡：标题是文件路径，右侧是 +N/-M，展开为内联 diff。
-fn wecom_edit_card(
+fn wechat_edit_card(
     message: &Message,
     expanded: bool,
     weak: &gpui::WeakEntity<PilotApp>,
@@ -25452,7 +25452,7 @@ fn wecom_edit_card(
 }
 
 /// bash / powershell 工具卡：标题是命令（或描述），展开为 `$ 命令` + 输出 + 退出码。
-fn wecom_exec_card(
+fn wechat_exec_card(
     message: &Message,
     expanded: bool,
     weak: &gpui::WeakEntity<PilotApp>,
@@ -25653,7 +25653,7 @@ fn tool_group_summary(family: tool_render::ToolFamily, count: usize, unique_file
 }
 
 /// 连续同类工具调用折叠卡（execute/edit/search/read/cua 组）。
-fn wecom_tool_group_card(
+fn wechat_tool_group_card(
     key: &str,
     family: tool_render::ToolFamily,
     messages: &[(Message, bool)],
@@ -25737,21 +25737,21 @@ fn wecom_tool_group_card(
             if child.tool_state == "done" {
                 child.tool_state.clear();
             }
-            children = children.child(wecom_tool_card(&child, *child_expanded, weak));
+            children = children.child(wechat_tool_card(&child, *child_expanded, weak));
         }
         inner = inner.child(children);
     }
     div().w_full().flex().justify_start().child(inner).into_any_element()
 }
 
-fn wecom_tool_card(
+fn wechat_tool_card(
     message: &Message,
     expanded: bool,
     weak: &gpui::WeakEntity<PilotApp>,
 ) -> gpui::AnyElement {
     match tool_render::family(&message.tool_name) {
-        tool_render::ToolFamily::Edit => wecom_edit_card(message, expanded, weak),
-        tool_render::ToolFamily::Execute => wecom_exec_card(message, expanded, weak),
+        tool_render::ToolFamily::Edit => wechat_edit_card(message, expanded, weak),
+        tool_render::ToolFamily::Execute => wechat_exec_card(message, expanded, weak),
         _ => {
             let has_detail = !message.tool_detail.trim().is_empty()
                 || !message.tool_details.trim().is_empty();
@@ -25966,18 +25966,18 @@ impl PilotApp {
             .min_h(px(0.))
             .w_full()
             .bg(wechat_theme::window_bg())
-            .child(self.wecom_titlebar(window, cx))
+            .child(self.wechat_titlebar(window, cx))
             .child({
                 let mut body = div()
                     .flex()
                     .flex_1()
                     .min_h(px(0.))
                     .w_full()
-                    .child(self.wecom_nav(cx));
+                    .child(self.wechat_nav(cx));
                 if self.settings_open {
                     body = body
-                        .child(self.wecom_list(window, cx))
-                        .child(self.wecom_settings_view(window, cx));
+                        .child(self.wechat_list(window, cx))
+                        .child(self.wechat_settings_view(window, cx));
                     // 详情面板是横向第三列，必须挂在 body 上，而不是设置视图内部
                     // （设置视图是 flex_col，挂进去会被竖着堆到最下面）。
                     if self.settings_detail.is_some() {
@@ -25985,8 +25985,8 @@ impl PilotApp {
                     }
                 } else {
                     body = body
-                        .child(self.wecom_list(window, cx))
-                        .child(self.wecom_chat(window, cx));
+                        .child(self.wechat_list(window, cx))
+                        .child(self.wechat_chat(window, cx));
                     // DS bot 的布局：会话右侧常驻详情栏（模型 / 运行状态 / 文件改动）
                     if self.right_panel_open {
                         body = body.child(self.chat_info_panel(window, cx));
@@ -25997,7 +25997,7 @@ impl PilotApp {
             .into_any_element()
     }
 
-    fn wecom_titlebar(
+    fn wechat_titlebar(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
@@ -26059,13 +26059,13 @@ impl PilotApp {
                 div()
                     .flex()
                     .items_center()
-                    .child(self.wecom_window_button(
+                    .child(self.wechat_window_button(
                         "wechat-win-min",
                         icons::Icon::Minus,
                         false,
                         |_window| window_style::minimize(),
                     ))
-                    .child(self.wecom_window_button(
+                    .child(self.wechat_window_button(
                         "wechat-win-max",
                         maximize_icon,
                         false,
@@ -26076,7 +26076,7 @@ impl PilotApp {
                             window_style::toggle_maximize();
                         },
                     ))
-                    .child(self.wecom_window_button(
+                    .child(self.wechat_window_button(
                         "wechat-win-close",
                         icons::Icon::X,
                         true,
@@ -26087,7 +26087,7 @@ impl PilotApp {
             )
     }
 
-    fn wecom_window_button(
+    fn wechat_window_button(
         &self,
         id: &'static str,
         glyph: icons::Icon,
@@ -26123,7 +26123,7 @@ impl PilotApp {
     }
 
     /// 企业微信的彩色首字方块头像（10px 圆角）。
-    fn wecom_avatar(id: &str, name: &str, size: f32) -> gpui::AnyElement {
+    fn wechat_avatar(id: &str, name: &str, size: f32) -> gpui::AnyElement {
         if let Some(appearance) = bot_icon::get(id) {
             return avatar::bot_icon_tile(&appearance.icon, &appearance.color, size, 6.);
         }
@@ -26147,7 +26147,7 @@ impl PilotApp {
     }
 
     /// 微信群头像：灰白底 + 最多 9 个成员头像，按人数自适应布局。
-    fn wecom_group_avatar(ids: &[String], size: f32) -> impl IntoElement {
+    fn wechat_group_avatar(ids: &[String], size: f32) -> impl IntoElement {
         let members: Vec<&String> = ids.iter().take(9).collect();
         let count = members.len();
         let pad = 1.5;
@@ -26232,7 +26232,7 @@ impl PilotApp {
         grid
     }
 
-    fn wecom_channel_avatar(id: &str, size: f32) -> impl IntoElement {
+    fn wechat_channel_avatar(id: &str, size: f32) -> impl IntoElement {
         div()
             .size(px(size))
             .flex_shrink_0()
@@ -26248,8 +26248,8 @@ impl PilotApp {
             ))
     }
 
-    fn wecom_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let current = self.wecom_nav;
+    fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.wechat_nav;
         let total_unread: usize = self
             .chats
             .values()
@@ -26313,9 +26313,9 @@ impl PilotApp {
                     .bg(gpui::rgba(0x00000000))
                     .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.wecom_nav = filter;
+                        this.wechat_nav = filter;
                         this.settings_open = false;
-                        this.ensure_wecom_selection(cx);
+                        this.ensure_wechat_selection(cx);
                         cx.notify();
                     }))
                     .child(menu_icons::menu_icon_with_weight(
@@ -26423,8 +26423,8 @@ impl PilotApp {
         )
     }
 
-    fn ensure_wecom_selection(&mut self, cx: &mut Context<Self>) {
-        match self.wecom_nav {
+    fn ensure_wechat_selection(&mut self, cx: &mut Context<Self>) {
+        match self.wechat_nav {
             WecomNav::Channels => {
                 if self.selected_group().is_none()
                     && let Some(index) = self.roster.groups.iter().position(|_| true)
@@ -26443,7 +26443,7 @@ impl PilotApp {
         }
     }
 
-    fn wecom_entries(&self, cx: &App) -> Vec<WecomEntry> {
+    fn wechat_entries(&self, cx: &App) -> Vec<WecomEntry> {
         let query = self.search_input.read(cx).content().trim().to_lowercase();
         let mut entries = Vec::new();
         let mut push = |is_group: bool,
@@ -26494,7 +26494,7 @@ impl PilotApp {
                 status: chat_runtime_status(self.chats.get(&key)),
             });
         };
-        if self.wecom_nav != WecomNav::Channels {
+        if self.wechat_nav != WecomNav::Channels {
             for (index, bot) in self.roster.bots.iter().enumerate() {
                 let chat = self.chats.get(&bot_key(&bot.id));
                 let at = chat
@@ -26518,7 +26518,7 @@ impl PilotApp {
                 );
             }
         }
-        if self.wecom_nav != WecomNav::Bots {
+        if self.wechat_nav != WecomNav::Bots {
             for (index, group) in self.roster.groups.iter().enumerate() {
                 let chat = self.chats.get(&group_key(&group.id));
                 let at = chat
@@ -26554,8 +26554,8 @@ impl PilotApp {
     }
 
     /// 侧栏分组后的列表行：未分组条目在前，之后是各分组标题 + 成员（折叠时只留标题）。
-    fn wecom_list_rows(&self, cx: &App) -> Vec<WecomListRow> {
-        let entries = self.wecom_entries(cx);
+    fn wechat_list_rows(&self, cx: &App) -> Vec<WecomListRow> {
+        let entries = self.wechat_entries(cx);
         if self.sidebar_sections.sections.is_empty() {
             return entries.into_iter().map(WecomListRow::Entry).collect();
         }
@@ -26568,7 +26568,7 @@ impl PilotApp {
         let mut ungrouped = Vec::new();
         let mut grouped: HashMap<String, Vec<WecomEntry>> = HashMap::new();
         for entry in entries {
-            let key = wecom_entry_key(&entry);
+            let key = wechat_entry_key(&entry);
             match self.sidebar_sections.membership.get(&key) {
                 Some(section_id) if section_ids.contains(section_id) => {
                     grouped.entry(section_id.clone()).or_default().push(entry);
@@ -26593,7 +26593,7 @@ impl PilotApp {
         rows
     }
 
-    fn wecom_list(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn wechat_list(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 设置页菜单与会话列表同宽（246），切页时左列不跳变。
         let list = div()
             .w(px(wechat_theme::LIST_WIDTH))
@@ -26745,17 +26745,17 @@ impl PilotApp {
                     .child(rows),
             );
         }
-        let rows = self.wecom_list_rows(cx);
+        let rows = self.wechat_list_rows(cx);
         let count = rows.len();
-        let fingerprint = wecom_list_rows_fingerprint(&rows);
-        if self.wecom_list_state.item_count() != count {
-            self.wecom_list_state.reset(count);
-            self.wecom_list_fingerprint = fingerprint;
-        } else if self.wecom_list_fingerprint != fingerprint {
+        let fingerprint = wechat_list_rows_fingerprint(&rows);
+        if self.wechat_list_state.item_count() != count {
+            self.wechat_list_state.reset(count);
+            self.wechat_list_fingerprint = fingerprint;
+        } else if self.wechat_list_fingerprint != fingerprint {
             if count > 0 {
-                self.wecom_list_state.remeasure_items(0..count);
+                self.wechat_list_state.remeasure_items(0..count);
             }
-            self.wecom_list_fingerprint = fingerprint;
+            self.wechat_list_fingerprint = fingerprint;
         }
         let list_body: gpui::AnyElement = if rows.is_empty() {
             div()
@@ -26770,8 +26770,8 @@ impl PilotApp {
             let rows = std::sync::Arc::new(rows);
             let weak = cx.weak_entity();
             gpui::list(
-                self.wecom_list_state.clone(),
-                move |index, _window, _cx| wecom_list_row_el(&rows[index], &weak),
+                self.wechat_list_state.clone(),
+                move |index, _window, _cx| wechat_list_row_el(&rows[index], &weak),
             )
             .size_full()
             .into_any_element()
@@ -26842,7 +26842,7 @@ impl PilotApp {
         )
     }
 
-    fn wecom_settings_view(
+    fn wechat_settings_view(
         &mut self,
         window: &Window,
         cx: &mut Context<Self>,
@@ -27592,7 +27592,7 @@ impl PilotApp {
         cx.notify();
     }
 
-    fn wecom_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn wechat_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = if let Some(bot) = self.selected_bot() {
             bot.name.clone()
         } else if let Some(group) = self.selected_group() {
@@ -27726,18 +27726,18 @@ impl PilotApp {
                     ),
             )
             .children(self.chat_find_bar(cx))
-            .child(self.wecom_transcript(window, cx))
-            .children(self.wecom_working_row(cx))
+            .child(self.wechat_transcript(window, cx))
+            .children(self.wechat_working_row(cx))
             .children(self.question_cards(cx))
             .children(self.elicitation_cards(cx))
             .children(self.approval_cards(cx))
             .children(self.turn_footer(cx))
             .children(self.group_task_bar(cx))
             .children(self.queue_panel(cx))
-            .child(self.wecom_composer(window, cx))
+            .child(self.wechat_composer(window, cx))
     }
 
-    fn wecom_transcript(
+    fn wechat_transcript(
         &mut self,
         _window: &Window,
         cx: &mut Context<Self>,
@@ -27941,61 +27941,61 @@ impl PilotApp {
             // （滚上去才看得到），这里挂行尾——用户视线所在的位置。
             rows.push(WecomRow::Compacting);
         }
-        self.wecom_message_rows = message_rows;
+        self.wechat_message_rows = message_rows;
         let count = rows.len();
-        let fingerprint = wecom_rows_fingerprint(&rows);
-        let last_row_fingerprint = rows.last().map(wecom_row_fingerprint).unwrap_or(0);
-        let old_count = self.wecom_row_count;
-        let chat_changed = self.wecom_scroller_chat.as_deref() != Some(chat_key.as_str());
+        let fingerprint = wechat_rows_fingerprint(&rows);
+        let last_row_fingerprint = rows.last().map(wechat_row_fingerprint).unwrap_or(0);
+        let old_count = self.wechat_row_count;
+        let chat_changed = self.wechat_scroller_chat.as_deref() != Some(chat_key.as_str());
         if chat_changed {
-            self.wecom_scroller.update(cx, |state, cx| {
+            self.wechat_scroller.update(cx, |state, cx| {
                 state.reset(count, cx);
                 state.remeasure(cx);
                 state.scroll_to_end(cx);
             });
-            self.wecom_row_count = count;
-            self.wecom_rows_fingerprint = fingerprint;
-            self.wecom_last_row_fingerprint = last_row_fingerprint;
-            self.wecom_scroller_chat = Some(chat_key);
+            self.wechat_row_count = count;
+            self.wechat_rows_fingerprint = fingerprint;
+            self.wechat_last_row_fingerprint = last_row_fingerprint;
+            self.wechat_scroller_chat = Some(chat_key);
             if !turn_rows.is_empty() {
-                self.wecom_turn_cursor = turn_rows.len() - 1;
+                self.wechat_turn_cursor = turn_rows.len() - 1;
             }
         } else if count != old_count {
-            if count > old_count && last_row_fingerprint == self.wecom_last_row_fingerprint {
+            if count > old_count && last_row_fingerprint == self.wechat_last_row_fingerprint {
                 // 只是向上补了历史（加载更早）：prepend 保持滚动锚点。
                 let added = count - old_count;
-                self.wecom_scroller
+                self.wechat_scroller
                     .update(cx, |state, cx| state.prepend(added, cx));
             } else if count > old_count {
                 // 新消息：append 会为新增行建测量项；reset 在本组件里会复用旧行元素，
                 // 导致新助手行显示上一条内容。
                 let added = count - old_count;
-                self.wecom_scroller.update(cx, |state, cx| {
+                self.wechat_scroller.update(cx, |state, cx| {
                     state.append(added, cx);
                     state.scroll_to_end(cx);
                 });
             } else {
-                self.wecom_scroller.update(cx, |state, cx| {
+                self.wechat_scroller.update(cx, |state, cx| {
                     state.reset(count, cx);
                     state.remeasure(cx);
                 });
             }
-            self.wecom_row_count = count;
-            self.wecom_rows_fingerprint = fingerprint;
-            self.wecom_last_row_fingerprint = last_row_fingerprint;
-        } else if self.wecom_rows_fingerprint != fingerprint {
+            self.wechat_row_count = count;
+            self.wechat_rows_fingerprint = fingerprint;
+            self.wechat_last_row_fingerprint = last_row_fingerprint;
+        } else if self.wechat_rows_fingerprint != fingerprint {
             // 行数不变但内容增长（流式回复）：通知虚拟列表重测，否则行高与内容会停在旧帧。
-            self.wecom_scroller
+            self.wechat_scroller
                 .update(cx, |state, cx| state.remeasure(cx));
-            self.wecom_rows_fingerprint = fingerprint;
-            self.wecom_last_row_fingerprint = last_row_fingerprint;
+            self.wechat_rows_fingerprint = fingerprint;
+            self.wechat_last_row_fingerprint = last_row_fingerprint;
         }
         if self.pending_find_scroll {
             self.pending_find_scroll = false;
             if let Some(hit) = find_hit_message
-                && let Some(row) = self.wecom_message_rows.get(&hit).copied()
+                && let Some(row) = self.wechat_message_rows.get(&hit).copied()
             {
-                self.wecom_scroller
+                self.wechat_scroller
                     .update(cx, |state, cx| state.scroll_to_item(row, cx));
             }
         }
@@ -28008,9 +28008,9 @@ impl PilotApp {
         let weak = cx.weak_entity();
         let scroller = gpui::component::message_scroller::MessageScroller::new(
             "wechat-transcript",
-            self.wecom_scroller.clone(),
+            self.wechat_scroller.clone(),
             move |index, _window, cx| -> gpui::AnyElement {
-                wecom_row_el(
+                wechat_row_el(
                     &render_rows[index],
                     index,
                     is_group,
@@ -28038,7 +28038,7 @@ impl PilotApp {
         if turn_rows.len() > 1 {
             let turns_prev = turn_rows.clone();
             let turns_next = turn_rows.clone();
-            let cursor = self.wecom_turn_cursor;
+            let cursor = self.wechat_turn_cursor;
             let can_prev = cursor > 0;
             let can_next = cursor + 1 < turns_prev.len();
             let mut nav = div()
@@ -28079,14 +28079,14 @@ impl PilotApp {
                         .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             if previous {
-                                if this.wecom_turn_cursor > 0 {
-                                    this.wecom_turn_cursor -= 1;
+                                if this.wechat_turn_cursor > 0 {
+                                    this.wechat_turn_cursor -= 1;
                                 }
-                            } else if this.wecom_turn_cursor + 1 < turns.len() {
-                                this.wecom_turn_cursor += 1;
+                            } else if this.wechat_turn_cursor + 1 < turns.len() {
+                                this.wechat_turn_cursor += 1;
                             }
-                            if let Some(index) = turns.get(this.wecom_turn_cursor) {
-                                this.wecom_scroller.update(cx, |state, cx| {
+                            if let Some(index) = turns.get(this.wechat_turn_cursor) {
+                                this.wechat_scroller.update(cx, |state, cx| {
                                     state.scroll_to_item(*index, cx);
                                 });
                             }
@@ -28107,7 +28107,7 @@ impl PilotApp {
     }
 
     /// 转录底部的「工作中 N 秒」行（streaming 时显示，1s ticker 刷新）。
-    fn wecom_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn wechat_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
         let (started, waiting, retry, has_output) = {
             let chat = self.chats.get(&key)?;
@@ -28596,7 +28596,7 @@ impl PilotApp {
         )
     }
 
-    fn wecom_composer(
+    fn wechat_composer(
         &mut self,
         window: &Window,
         cx: &mut Context<Self>,

@@ -104,7 +104,7 @@
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7090`（`on_find_shortcut`）/`:7122`（`search_sessions` 调用）/`:18367`（`find_dialog_overlay`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1536` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:246`（`TRANSCRIPT_WINDOW = 120`）、`:22004`（`transcript_limit.saturating_add`，累计翻页） | 无 |
-| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24842`（`kit_markdown_el`，`.selectable(true)` `:24844`）两壳正文都走它：classic `:19446`/`:19729`、wecom `:22111`。**v0.5.1 Q-04 已给默认壳补上动作条**：`wecom_message_actions`（`:22930`）在 `wecom_row_el` 内两个调用点 —— 用户气泡 `:22066`（`.child(wecom_message_actions(` 起，第 4 个实参 `true` = 挂右上）、助手气泡 `:22130`（`.child(wecom_message_actions(` 起，第 4 个实参 `false` = 挂左上），含「复制」`:22968`（`cx.write_to_clipboard`；按钮 id `wecom-copy-{index}` 在 `:22958`）与「复制代码」`:22990`（`cx.write_to_clipboard`；仅当 `:22976` 的 `fenced_code` 命中）。classic 那份仍是 `message_actions`（`:23003`），调用点 `:19480`、`:19755` | **「引用」默认壳仍缺**：`wecom_row_el`（`:21969-22263`）内 `quote`/`引用` 0 命中 —— 引用要写回 composer 的引用条，而 `wecom_composer` 没有引用 UI，属交互层改动 〔降级 v0.6：与 R6 同一根因〕 |
+| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24842`（`kit_markdown_el`，`.selectable(true)` `:24844`）两壳正文都走它：classic `:19446`/`:19729`、wecom `:22111`。**v0.5.1 Q-04 已给默认壳补上动作条**：`wechat_message_actions`（`:22930`）在 `wechat_row_el` 内两个调用点 —— 用户气泡 `:22066`（`.child(wechat_message_actions(` 起，第 4 个实参 `true` = 挂右上）、助手气泡 `:22130`（`.child(wechat_message_actions(` 起，第 4 个实参 `false` = 挂左上），含「复制」`:22968`（`cx.write_to_clipboard`；按钮 id `wecom-copy-{index}` 在 `:22958`）与「复制代码」`:22990`（`cx.write_to_clipboard`；仅当 `:22976` 的 `fenced_code` 命中）。classic 那份仍是 `message_actions`（`:23003`），调用点 `:19480`、`:19755` | **「引用」默认壳仍缺**：`wechat_row_el`（`:21969-22263`）内 `quote`/`引用` 0 命中 —— 引用要写回 composer 的引用条，而 `wechat_composer` 没有引用 UI，属交互层改动 〔降级 v0.6：与 R6 同一根因〕 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:755`（`MsgKind::Reasoning`，枚举在 `:753`）、`:3632`（`WecomRow::ToolGroup` 折叠组；渲染 `:21613`/`:22260`） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
 | F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2117`（`ask_user_question` 工具名）、UI `src/main.rs:5823`（`question_cards`）/`:5836`（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
@@ -262,7 +262,7 @@
 | C 群聊 | 15 | 11/2/2 | 阶段证据/通过/打回（C08）、群外发言（C13）已补；缺 notice、引用整段对话（降级 v0.6） |
 | D 隐私 bot | 5 | 5/0/0 | 隔离闭环：会话/搜索/群 + 文件路径守卫（D05）+ 删除后归档（D04）全通 |
 | E 记忆 | 13 | 11/1/1 | Bot 记忆进提示（E03）、三工具（E05）、面板（E09）、拒写凭据（E13）全通；私聊自动回顾降级 v0.6 |
-| F 会话与输入 | 16 | 9/5/2 | F02 新会话入口已补默认壳（v0.5.1 Q-05：Ctrl+N `:6847`、标题栏「+」`:27686`、命令面板 `:7567`）、F06 压缩状态行（Q-01/Q-02，`:22261`）、F10 消息复制（Q-04，`:22968`/`:22990`）均已在默认壳接通；注意 `:7567` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wecom_composer` 无引用 UI 保留〔降级 v0.6〕；另缺 show_view、语音、FTS5（降级 v0.6） |
+| F 会话与输入 | 16 | 9/5/2 | F02 新会话入口已补默认壳（v0.5.1 Q-05：Ctrl+N `:6847`、标题栏「+」`:27686`、命令面板 `:7567`）、F06 压缩状态行（Q-01/Q-02，`:22261`）、F10 消息复制（Q-04，`:22968`/`:22990`）均已在默认壳接通；注意 `:7567` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；另缺 show_view、语音、FTS5（降级 v0.6） |
 | G 浏览器 | 6 | 2/1/3 | 每 Bot 独立 profile 已补（G02）；缺内嵌面板、Cookie 导入、插件（降级 v0.6） |
 | H 电脑操控 | 6 | 2/0/4 | 工具齐，分级/租约/接管/永久禁止全未做（降级 v0.6） |
 | I 本地 Agent | 5 | 3/1/1 | ACP 齐，codex/claude 原生驱动缺（降级 v0.6） |
@@ -287,7 +287,7 @@ A08、B05、C08、C13、D04、D05、E03、E05、E09、E13、F06、G02、J08、M0
 | 项 | v0.5.0 | v0.5.1 | 依据 |
 | --- | --- | --- | --- |
 | F06 压缩 / checkpoint | ✅ | 🟡 | 默认壳压缩状态行已补（Q-01/Q-02），但 checkpoint/handoff 语义仍未做，v0.5.0 记全 ✅ 是过宽；证据见 F06 行 |
-| F10 Markdown | ✅ | 🟡 | 默认壳已补「复制 / 复制代码」（Q-04），但引用条仍缺（`wecom_composer` 无引用 UI），v0.5.0 记全 ✅ 是过宽；证据见 F10 行 |
+| F10 Markdown | ✅ | 🟡 | 默认壳已补「复制 / 复制代码」（Q-04），但引用条仍缺（`wechat_composer` 无引用 UI），v0.5.0 记全 ✅ 是过宽；证据见 F10 行 |
 | F02 新会话 | ✅ | ✅ | **状态不变**。v0.5.0 只引 1 处（`:19144`）且「差距」列写「无」，即当时判宽了（默认壳其实没有入口）；v0.5.1 由 Q-05 真实补齐三条入口，证据从 1 处扩到 3 处，✅ 靠真实修复撑住 |
 
 三项净变化：✅ −2、🟡 +2，合计仍 136，增减只来自 F06 与 F10。**这不是功能回退**：三项在默认外壳下的实际能力都比 v0.5.0 强，降级原因是复验改用「默认外壳为主判据」后，把 v0.5.0 记宽了的项按真实完成度重算。
