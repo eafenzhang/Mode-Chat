@@ -20548,35 +20548,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
                         .on_click(cx.listener({
                             let bot_id = bot.id.clone();
-                            let directory = bot.directory.clone();
-                            let identity = bot.identity();
-                            let model = bot.model.clone();
                             move |this, _event, _window, cx| {
-                                // 旧会话移入历史列表；新会话成为主槽位
-                                let key = bot_key(&bot_id);
-                                if let Some(chat) = this.chats.get(&key)
-                                    && let Some(old_id) = &chat.session_id
-                                {
-                                    this.sessions.push_history(&bot_id, old_id);
-                                }
-                                this.chats.remove(&key);
-                                let workspace = if directory.trim().is_empty() {
-                                    backend::fallback_workspace().to_string_lossy().into_owned()
-                                } else {
-                                    directory.clone()
-                                };
-                                let engine = this
-                                    .sessions
-                                    .engine_of(&bot_id)
-                                    .map(str::to_string);
-                                this.backend.new_session(
-                                    key,
-                                    workspace,
-                                    identity.clone(),
-                                    model.clone(),
-                                    engine,
-                                );
-                                cx.notify();
+                                // Q-05：与 Ctrl+N、标题栏「+」共用同一份实现。
+                                // 修复前这里自己复制了一遍，漏了 streaming 守卫，
+                                // 也漏了 `sessions.save()`，新会话重启后会丢。
+                                let _ = &bot_id;
+                                this.new_session_for_selected(cx);
                             }
                         }))
                         .child(
@@ -22963,7 +22940,9 @@ fn wecom_message_actions(
 ) -> gpui::AnyElement {
     let mut bar = div()
         .absolute()
-        .top(px(0.))
+        // 与 classic 的 `message_row` 一致：挂在气泡上方 18px，
+        // 避开正文（助手长段落会铺满列宽，top(0) 会压字）。
+        .top(px(-18.))
         .when(align_right, |el| el.right(px(0.)))
         .when(!align_right, |el| el.left(px(0.)))
         .opacity(0.)
@@ -22984,7 +22963,7 @@ fn wecom_message_actions(
             .font_family(wecom_theme::FONT_FAMILY)
             .text_size(px(ui_kit::T_LABEL))
             .line_height(px(ui_kit::T_LABEL_LH))
-            .text_color(wecom_theme::time_label())
+            .text_color(wecom_theme::chip_text())
             .pointer()
             .hover(|style| style.text_color(wecom_theme::chat_title()))
             .on_click(move |_event, _window, cx| {
@@ -23006,7 +22985,7 @@ fn wecom_message_actions(
                 .font_family(wecom_theme::FONT_FAMILY)
                 .text_size(px(ui_kit::T_LABEL))
                 .line_height(px(ui_kit::T_LABEL_LH))
-                .text_color(wecom_theme::time_label())
+                .text_color(wecom_theme::chip_text())
                 .pointer()
                 .hover(|style| style.text_color(wecom_theme::chat_title()))
                 .on_click(move |_event, _window, cx| {
