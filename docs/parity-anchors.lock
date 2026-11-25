@@ -113,33 +113,31 @@ src/computer_tools.rs:98|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/connectors.rs:38|pub fn missing_secrets(spec: &ConnectorSpec, configured: &[String]) -> Vec<&'sta
 src/cua_tree.rs:272|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/cua_tree.rs:320|
-src/data.rs:1073|.iter()
+src/data.rs:1081|.iter()
 src/data.rs:114|pub fn create_bot(
-src/data.rs:1406|) -> Result<(), String> {
+src/data.rs:1545|pub fn provider_templates() -> Vec<ProviderTemplate> {
 src/data.rs:160|instructions: String::new()
 src/data.rs:17|pub struct ModelSpec {
-src/data.rs:1816|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
-src/data.rs:292|let home = std::env::var("USERPROFILE")
-src/data.rs:337|const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
-src/data.rs:344|];
-src/data.rs:366|pub fn local_agents() -> Vec<LocalAgentInfo> {
+src/data.rs:1824|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
+src/data.rs:345|const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
+src/data.rs:352|];
 src/data.rs:37|pub is_main: bool
-src/data.rs:384|bots_service::memory_store::memory_context(&root, 4_000)
-src/data.rs:396|pub fn group_memory_context(group_id: &str, manual: &str) -> String {
-src/data.rs:401|let file_memory = bots_service::memory_store::memory_context(&root, 4_000);
+src/data.rs:374|pub fn local_agents() -> Vec<LocalAgentInfo> {
+src/data.rs:392|bots_service::memory_store::memory_context(&root, 4_000)
+src/data.rs:404|pub fn group_memory_context(group_id: &str, manual: &str) -> String {
+src/data.rs:409|let file_memory = bots_service::memory_store::memory_context(&root, 4_000);
 src/data.rs:41|pub model: Option<ModelSpec>
 src/data.rs:46|pub approval_level: String
-src/data.rs:522|pub fn undo_team_memory() -> Result<String, String> {
-src/data.rs:563|pub fn read_bot_memory(
+src/data.rs:530|pub fn undo_team_memory() -> Result<String, String> {
+src/data.rs:571|pub fn read_bot_memory(
 src/data.rs:58|pub struct Group {
 src/data.rs:6|//! - 否则 `{home}/.mode-bot/.mode`（产品默认）。
-src/data.rs:600|pub fn bot_memory_context(bot_id: &str, budget: usize) -> String {
-src/data.rs:605|context.trim().to_string()
+src/data.rs:608|pub fn bot_memory_context(bot_id: &str, budget: usize) -> String {
 src/data.rs:62|pub directory: Option<String>
-src/data.rs:638|pub fn update_bot(
-src/data.rs:704|if let Err(error) = crate::privacy::archive_private_bot(id, &name, &directory) {
+src/data.rs:646|pub fn update_bot(
+src/data.rs:701|pub fn delete_bot(id: &str) -> Result<(), String> {
+src/data.rs:712|if let Err(error) = crate::privacy::archive_private_bot(id, &name, &directory) {
 src/data.rs:72|}
-src/data.rs:819|.find(|record| record.id == id)
 src/data.rs:88|fn check_chief_private(is_private: bool, is_chief: bool) -> Result<(), String> {
 src/data.rs:96|fn demote_other_chiefs(file: &mut bot_team::teammate::TeammatesFile, keep_id: &s
 src/group_goal.rs:55|pub fn read(data_root: &Path, group_id: &str) -> Option<GroupGoal> {
@@ -150,7 +148,7 @@ src/group_tasks.rs:371|pub fn stop_task(data_root: &Path, group_id: &str, task_i
 src/group_tasks.rs:392|pub fn retry_task(
 src/group_tasks.rs:446|pub fn cancel_subtree(
 src/i18n.rs:21|LANG.load(Ordering::Relaxed) == 1
-src/i18n.rs:256|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
+src/i18n.rs:323|"不写入主会话" => Some("Not saved to the main chat")
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
 src/im_runtime.rs:1434|crate::backend::SessionEvent::Question(card) => {
 src/im_runtime.rs:159|pub fn mirror_targets(
@@ -257,20 +255,20 @@ src/model_limits.rs:20|pub const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 src/model_limits.rs:22|pub const FALLBACK_MAX_TOKENS: i64 = 16_384;
 src/privacy.rs:201|pub fn precheck(
 src/privacy.rs:80|pub fn archive_private_bot(id: &str, name: &str, directory: &str) -> Result<(), 
-src/rpi_engine.rs:1029|serde_json::Value::String(bot_id.clone())
-src/rpi_engine.rs:1046|.await
-src/rpi_engine.rs:1104|let mut compaction_watch = harness.events().watch(|| ());
-src/rpi_engine.rs:1306|pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
-src/rpi_engine.rs:1326|.unwrap_or("");
-src/rpi_engine.rs:1365|.and_then(|item| item.as_str())
+src/rpi_engine.rs:1021|pub async fn open(options: OpenOptions) -> Result<Self, String> {
+src/rpi_engine.rs:1073|serde_json::Value::String(bot_id.clone())
+src/rpi_engine.rs:1090|.await
+src/rpi_engine.rs:1148|let mut compaction_watch = harness.events().watch(|| ());
+src/rpi_engine.rs:1350|pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
 src/rpi_engine.rs:144|let limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
-src/rpi_engine.rs:1466|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
 src/rpi_engine.rs:147|model.max_tokens = max_tokens.max(1) as u64;
-src/rpi_engine.rs:1478|&mut hits
-src/rpi_engine.rs:1567|body.push_str(text);
-src/rpi_engine.rs:1621|#[allow(dead_code)]
-src/rpi_engine.rs:1661|pub fn usage_grouped(days: usize) -> GroupedUsage {
-src/rpi_engine.rs:1683|out.by_day = by_day
+src/rpi_engine.rs:1510|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
+src/rpi_engine.rs:1549|collect_search(&path, needle, limit, private_workspaces, out);
+src/rpi_engine.rs:1666|pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
+src/rpi_engine.rs:1705|pub fn usage_grouped(days: usize) -> GroupedUsage {
+src/rpi_engine.rs:1709|let cutoff_day = crate::time::format_day(since);
+src/rpi_engine.rs:1755|cutoff_day: &str
+src/rpi_engine.rs:1771|let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
 src/rpi_engine.rs:188|pub fn thinking_level_for(spec: &ModelSpec) -> ThinkingLevel {
 src/rpi_engine.rs:226|pub fn private_bot_id(identity: &str) -> Option<String> {
 src/rpi_engine.rs:314|fn sessions_root() -> PathBuf {
@@ -285,7 +283,6 @@ src/rpi_engine.rs:446|.ask_permission(
 src/rpi_engine.rs:455|}
 src/rpi_engine.rs:485|lowered.as_str()
 src/rpi_engine.rs:503|self.ask_permission(
-src/rpi_engine.rs:977|pub async fn open(options: OpenOptions) -> Result<Self, String> {
 src/schedule_builder.rs:19|pub enum When {
 src/schedule_builder.rs:56|pub fn to_request(when: &When, now_ms: i64, offset_secs: i32) -> Result<Schedule
 src/secrets.rs:28|pub fn path(data_root: &Path) -> PathBuf {

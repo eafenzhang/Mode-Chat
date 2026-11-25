@@ -279,15 +279,23 @@ pub fn set_plugin_switch(directory: &str, plugin: &str, enabled: bool) -> Result
     Ok(())
 }
 
-/// CLI storage 根：优先 `MODE_STORAGE_DIR`（宿主注入），否则产品默认
+/// CLI storage 根：优先 `MODE_STORAGE_DIR`（宿主注入），其次跟随本项目自己的
+/// 数据根覆盖（`BOT_PILOT_DATA_ROOT` / `MODE_DATA_BASE_DIR`），最后才是产品默认
 /// `~/.mode-bot/.mode/cli`（单独启动试点时也要能读写同一份记忆）。
+///
+/// 为什么必须跟随 `BOT_PILOT_DATA_ROOT`：验收时用 `BOT_PILOT_DATA_ROOT` 指向临时目录
+/// 做隔离，如果这里仍回落到 `~/.mode-bot`，`remember` 写下的记忆会静默落进用户的
+/// production 数据根（v0.5.0 验收时真实发生过一次）。隔离指针必须对所有写路径生效。
 fn cli_storage_dir() -> Option<String> {
-    if let Some(value) = std::env::var("MODE_STORAGE_DIR")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return Some(value);
+    if let Some(value) = env_path("MODE_STORAGE_DIR") {
+        return Some(value.to_string_lossy().into_owned());
+    }
+    // 数据根被显式覆盖时，记忆也放在覆盖后的根下，别再回落到 home。
+    if let Some(root) = env_path("BOT_PILOT_DATA_ROOT") {
+        return Some(root.join("cli").to_string_lossy().into_owned());
+    }
+    if let Some(base) = env_path("MODE_DATA_BASE_DIR") {
+        return Some(base.join(".mode").join("cli").to_string_lossy().into_owned());
     }
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
@@ -2817,5 +2825,29 @@ mod agent_list_tests {
             commands,
             vec!["mode-agent", "pi-acp", "deepseek-acp", "hermes", "zcode-acp-server"]
         );
+    }
+
+    /// 隔离指针必须对所有写路径生效：只设 `BOT_PILOT_DATA_ROOT` 时，
+    /// 记忆根不能回落到 `~/.mode-bot`（v0.5.0 验收时真的写进过 production）。
+    #[test]
+    fn cli_storage_follows_data_root_override() {
+        let root = std::env::temp_dir().join(format!("bot-pilot-clidir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("建临时目录");
+        // SAFETY: 本用例独占这两个变量（见下方收尾），其它用例不读。
+        unsafe {
+            std::env::remove_var("MODE_STORAGE_DIR");
+            std::env::set_var("BOT_PILOT_DATA_ROOT", &root);
+        }
+
+        let storage = cli_storage_dir().expect("有数据根覆盖时必须有 storage 根");
+        assert_eq!(
+            PathBuf::from(&storage),
+            root.join("cli"),
+            "storage 必须跟随 BOT_PILOT_DATA_ROOT，不能回落 home"
+        );
+
+        unsafe { std::env::remove_var("BOT_PILOT_DATA_ROOT") };
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

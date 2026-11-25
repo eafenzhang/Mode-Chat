@@ -16,11 +16,11 @@
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
 | A01 | 新建 Bot（名字/角色/工作目录） | `README.zh.md:58` | ✅ | `src/main.rs:2488`（BotFormState）、`src/data.rs:114`（create_bot） | 无 |
-| A02 | 编辑 Bot | `ds-bot/src/host/tools.js:363`（update_bot） | ✅ | `src/main.rs:10480`（save_bot_form）、`src/data.rs:638`（update_bot） | 只会改 7 个字段，改不了模型/指令 |
-| A03 | 删除 Bot（二次确认） | `ds-bot/src/host/tools.js:298`（stop_bot/删除走 UI） | ✅ | `src/data.rs:605`、`src/main.rs:15507` | 无 |
+| A02 | 编辑 Bot | `ds-bot/src/host/tools.js:363`（update_bot） | ✅ | `src/main.rs:10480`（save_bot_form）、`src/data.rs:646`（`update_bot`） | 只会改 7 个字段，改不了模型/指令 |
+| A03 | 删除 Bot（二次确认） | `ds-bot/src/host/tools.js:298`（stop_bot/删除走 UI） | ✅ | `src/data.rs:701`（`delete_bot`）、`src/main.rs:15507` | 无 |
 | A04 | Bot 形象：20 字符 + 12 色 + 自选照片/头像库 | `ds-bot/src/client/characters.js`、`avatar-library.js` | 🟡 | `src/main.rs:2522`（9 图标）、`src/main.rs:2552`（5 色）、`src/bot_icon.rs:1` | 只有 9 组图标 + 5 色，无照片上传、无头像库 〔降级 v0.6〕 |
 | A05 | Bot 指令（instructions）可编辑 | `ds-bot/src/host/roster.js`（instructions 字段） | 🟡 | 字段存在：`crates/bot-team/src/teammate.rs:36`；但 `src/data.rs:160` 新建固定写空串，UI 无编辑入口 | 能力有、入口无——用户无法写指令 〔降级 v0.6〕 |
-| A06 | 换工作目录后会话在新目录继续 | `ds-bot/README.md`（Working folders） | 🟡 | `src/data.rs:638`（update_bot）只改名册；`src/main.rs:19208`（`restore_draft`）仅在新会话时读目录 | 改目录不重建会话，旧会话仍跑旧目录 〔降级 v0.6〕 |
+| A06 | 换工作目录后会话在新目录继续 | `ds-bot/README.md`（Working folders） | 🟡 | `src/data.rs:646`（`update_bot`）只改名册；`src/main.rs:19208`（`restore_draft`）仅在新会话时读目录 | 改目录不重建会话，旧会话仍跑旧目录 〔降级 v0.6〕 |
 | A07 | Bot 详情页（模型/审批/会话/待办/目录） | `ds-bot/src/client/details-drawer.js` | ✅ | `src/main.rs:19599`（bot_details） | 无记忆行（见 A08） |
 | A08 | 详情页「记忆」行 + 管理入口 | `ds-bot/src/client/memory-panel.js`、`details-drawer.js` | ✅ | `src/main.rs:21142`（`bot-details-memory-row` 显示条数）、`src/main.rs:21157` 打开 `SettingsDetail::BotMemory`（`:23213`）、面板体 `src/main.rs:9749` | 无 |
 | A09 | 侧栏分组（section）归组/折叠/染色 | `ds-bot/src/client/folder-menu.js`、`host/folders.js` | ✅ | `src/main.rs:13688`（`sidebar_sections_section`，分组 CRUD）、`src/main.rs:703`（`sidebar_section` 染色辅助）、`src/main.rs:16149` | 无 |
@@ -33,7 +33,7 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| B01 | Main bot 全局唯一 | `README.zh.md:68` | ✅ | `src/data.rs:96`（`demote_other_chiefs`）、`:175`（晋升 Main bot 时调用）/`:674`（降级时调用） | 无 |
+| B01 | Main bot 全局唯一 | `README.zh.md:68` | ✅ | `src/data.rs:96`（`demote_other_chiefs`）、`:175`（晋升 Main bot 时调用）/`:682`（降级时调用） | 无 |
 | B02 | Main bot 通过对话管理其他 Bot | `ds-bot/src/host/tools.js:325/363`（create_bot/update_bot） | ❌ | `src/*.rs` 中 grep `"create_bot"`/`"update_bot"` = 0 命中 | 只能手工点界面，Bot 无法自己建/改 Bot 〔降级 v0.6〕 |
 | B03 | 权限预设（只读 / 工作区 / 完全访问） | `ds-bot/README.md`（Permission presets） | 🟡 | `src/data.rs:46`（approval_level）、`src/main.rs:20973`（`bot_details` 里的 ask/auto/full 三档） | 三档是“工具审批”语义，不是文件系统权限预设 〔降级 v0.6〕 |
 | B04 | 审批白名单可视化维护 | `ds-bot/src/client/approval-notices.js` | ✅ | `src/main.rs:19726`、`src/main.rs:21871`（SettingsDetail::Allowlist） | 无 |
@@ -43,8 +43,8 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| C01 | 群聊增删改（成员/目录/策略） | `README.zh.md:74` | ✅ | `src/data.rs:1816`（`create_group`）/`:1835`（`update_group`）/`:1868`（`delete_group`）、`src/main.rs:11767`（`GroupDraft` 构造）/`:18559`（`delete_group` 调用） | 无 |
-| C02 | 群聊共享工作目录生效于所有成员 | `ds-bot/README.md`（group folder） | ✅ | `src/data.rs:62`；建成员会话时群目录优先：`src/main.rs:3865-3871` | 无（改群目录后已建会话需重进，属可接受） |
+| C01 | 群聊增删改（成员/目录/策略） | `README.zh.md:74` | ✅ | `src/data.rs:1824`（`create_group`）/`:1843`（`update_group`）/`:1876`（`delete_group`）、`src/main.rs:11767`（`GroupDraft` 构造）/`:18559`（`delete_group` 调用） | 无 |
+| C02 | 群聊共享工作目录生效于所有成员 | `ds-bot/README.md`（group folder） | ✅ | `src/data.rs:62`（`directory`）；建成员会话时群目录优先：`src/main.rs:3865-3871` | 无（改群目录后已建会话需重进，属可接受） |
 | C03 | 管理员先答 / 全员轮流（responder_policy） | `ds-bot/README.md`（admin-first / all-members） | ✅ | `src/backend.rs:1417-1428` | 无 |
 | C04 | @ 点名（含 @所有人、边界规则） | `ds-bot/src/shared/mentions.js` | ✅ | `src/backend.rs:1409`（bot_team::mentions::parse_mentions）、`crates/bot-team/src/mentions.rs:110` | 无 |
 | C05 | 成员无事可说时静默（`[PASS]`） | `ds-bot/src/host/groups.js`（[PASS]） | 🟡 | `crates/bot-team/src/mentions.rs:110`（is_pass_reply）、`crates/bot-team/src/orchestration.rs:85` | 判定函数存在，群回合是否吞掉回复未接（需实测确认） 〔降级 v0.5 保持现状〕 |
@@ -57,7 +57,7 @@
 | C12 | “+ → 引用某个 Bot 的对话”作为上下文 | `ds-bot/src/client/composer.js`（Reference a chat） | ❌ | 只有消息级引用 `src/main.rs:18835`、`compose_with_quote`（`src/main.rs` 内） | 不能把另一段对话整体带入（未入 v0.5 范围） 〔降级 v0.6〕 |
 | C13 | 从群外往群里发消息（post_to_group / group_relay） | `ds-bot/src/host/tools.js:607`、`ds-bot/src/host/groups.js:1439` | ✅ | `src/bot_tools.rs:103`（post_to_group 工具）、`src/backend.rs:565`（`Command::PostGroup`）、`BackendEvent::GroupPost` 走既有 `send_group_in_turn` | `group_relay`（IM 群里的转发）未做，仅 Bot 主动发言 |
 | C14 | 群成员状态行（谁在跑、跑什么） | `ds-bot/src/client/member-status.js` | 🟡 | `src/backend.rs:441-442`、`src/main.rs:2458`（finish_member） | 只有成员标签，无状态聚合行 〔降级 v0.6〕 |
-| C15 | 群记忆注入到每个成员回合 | `ds-bot/README.md`（group memory snapshot） | ✅ | `src/data.rs:396`、`src/backend.rs:1601`（`group_memory`） | 无 |
+| C15 | 群记忆注入到每个成员回合 | `ds-bot/README.md`（group memory snapshot） | ✅ | `src/data.rs:404`、`src/backend.rs:1601`（`group_memory`） | 无 |
 
 ## D. 隐私 bot（5 项）
 
@@ -66,7 +66,7 @@
 | D01 | 会话独立落盘、不进全局搜索 | `ds-bot/src/host/privacy.js:29-32` | ✅ | `src/rpi_engine.rs:226`（`private_bot_id`）、`src/backend.rs:335-353`、`:1359`（搜索跳过 `.private`） | 无 |
 | D02 | 不能进群 | `README.zh.md:82` | ✅ | `src/main.rs:4259/4538/5459/8579/11661`（`!bot.is_private` 过滤五处）、表单 `:2469` | 无 |
 | D03 | 不能当 Main bot / Chief | `README.zh.md:82` | ✅ | `src/data.rs:88`（check_chief_private）、`:96` | 无 |
-| D04 | 删除后内容继续受保护（kept-private 登记） | `ds-bot/src/client/kept-private.js`、`ds-bot/src/host/privacy.js:31-32` | ✅ | `src/privacy.rs:80`（archive_private_bot）、`:51`（archived_private_bots）、`:98`（release_archive）、`src/data.rs:704`（删隐私 Bot 前登记）、UI `src/main.rs:12231`（读归档列表）、`:12277`（`private-archive-row-<id>` 行） | 无 |
+| D04 | 删除后内容继续受保护（kept-private 登记） | `ds-bot/src/client/kept-private.js`、`ds-bot/src/host/privacy.js:31-32` | ✅ | `src/privacy.rs:80`（archive_private_bot）、`:51`（archived_private_bots）、`:98`（release_archive）、`src/data.rs:712`（删隐私 Bot 前登记）、UI `src/main.rs:12231`（读归档列表）、`:12277`（`private-archive-row-<id>` 行） | 无 |
 | D05 | 出站共享需审批（写外部文件、给其他 Bot 发消息） | `ds-bot/src/host/privacy.js:172`（guardTeam）、`:242`（guardFiles） | ✅ | `src/privacy.rs:201`（precheck：路径归属最长前缀判定）、`src/rpi_engine.rs:437`（审批闸门先跑 precheck，`full` 档也拦） | 只覆盖 `read/write/edit/bash/powershell/mcp__*`；`computer_*`/`browser_*` 不在路径范围（见 §5 风险表 R-07） |
 
 ## E. 记忆（13 项）
@@ -75,15 +75,15 @@
 | --- | --- | --- | --- | --- | --- |
 | E01 | Markdown 记忆 + `## Index` + 主题文件 | `ds-bot/src/host/memory.js`、`memory-entries.js` | ✅ | `crates/bots-service/src/memory_store.rs:447`（splice_index_line）、`:586`（maintain_index） | 无 |
 | E02 | 团队记忆进系统提示 | `README.zh.md`（In the prompt） | ✅ | `src/rpi_engine.rs:325-357`（system_prompt_for / system_prompt_for_bot） | 无 |
-| E03 | Bot 自身记忆进系统提示 | 同上 | ✅ | `src/rpi_engine.rs:333`（`system_prompt_for_bot`，预算 `clamp(window*0.06, 2000, 24000)` 字符）、`src/data.rs:600`（`bot_memory_context`）、注入点 `src/rpi_engine.rs:351` | 无 |
+| E03 | Bot 自身记忆进系统提示 | 同上 | ✅ | `src/rpi_engine.rs:333`（`system_prompt_for_bot`，预算 `clamp(window*0.06, 2000, 24000)` 字符）、`src/data.rs:608`（`bot_memory_context`）、注入点 `src/rpi_engine.rs:351` | 无 |
 | E04 | 群记忆进成员提示 | 同上 | ✅ | `src/backend.rs:1601`（`group_memory` 注入成员回合） | 无 |
-| E05 | 记忆工具 `remember` / `forget` / `recall` | `ds-bot/src/host/memory.js:1075/1114/1151` | ✅ | `src/memory_tools.rs:58`（`tools(bot_id)` 注册三个工具）、`src/data.rs:563`（read/save/delete/undo_bot_memory） | 无 |
+| E05 | 记忆工具 `remember` / `forget` / `recall` | `ds-bot/src/host/memory.js:1075/1114/1151` | ✅ | `src/memory_tools.rs:58`（`tools(bot_id)` 注册三个工具）、`src/data.rs:571`（`read_bot_memory`）/`:581`（`save_bot_memory`）/`:595`（`delete_bot_memory`）/`:530`（`undo_bot_memory`） | 无 |
 | E06 | 群记忆自动回顾（idle 后一次模型调用） | `ds-bot/src/host/memory-review.js:1-6` | ✅ | `src/memory_review.rs:83/196/318`、`src/backend.rs:1911`（run_memory_review） | 无 |
 | E07 | 私聊记忆自动回顾 | 同上 | ❌ | `src/backend.rs:1911-1919` 只处理 `group_id` | **明确降级到 v0.6**：私聊不自动回顾（手动 `remember` 已可用，见 E05） 〔降级 v0.6〕 |
 | E08 | 记忆面板：团队 / 群 | `ds-bot/src/client/memory-panel.js` | ✅ | `src/main.rs:15277`（`settings_page_team_memory`，团队）、`:16681`（`group_memory_section`，群） | 无 |
 | E09 | 记忆面板：单个 Bot | 同上 | ✅ | `src/main.rs:9749`（`SettingsDetail::BotMemory` 列表/新增/撤销/编辑）、`src/main.rs:9792`（`MemoryScope::Bot`） | 无 |
 | E10 | 记忆整理（tidy / 合并重复 / archive） | `ds-bot/src/host/memory-tidy.js` | ✅ | `crates/bots-service/src/memory_store.rs:659`（tidy_memory）、`:640`（maybe_daily_tidy 每日一次，写入路径自动触发 `:1133/1161`） | 自动整理已在跑；缺「手动整理 + 撤销整批」的 UI 入口 |
-| E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:522` | 无 |
+| E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:530`（`undo_team_memory`） | 无 |
 | E12 | 条目移动到其他作用域 / 摘要 | `ds-bot/src/host/memory-copy.js` | 🟡 | `crates/bots-service/src/memory_store.rs:805`（move_memory，仅测试调用 `:1631`） | 能力有，UI 无入口 〔降级 v0.6〕 |
 | E13 | 记忆安全（拒绝密钥/密码） | `ds-bot/README.md`（Safety） | ✅ | `src/memory_tools.rs:396`（`looks_sensitive`：密码/令牌/密钥/长数字，`:194` 返回中文拒绝语）、`src/memory_review.rs:196`（字段校验） | 无 |
 
@@ -136,8 +136,8 @@
 | --- | --- | --- | --- | --- | --- |
 | I01 | 内嵌引擎（自带工具/模型） | `README.zh.md:88` | ✅ | `src/rpi_engine.rs:1021`（`RpiSession::open`，引擎入口；`:332` 是内置工具集） | 无 |
 | I02 | 外置 ACP 引擎（spawn/续聊/表单） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/acp.rs:122/167/384`（session/load） | 无 |
-| I03 | 引擎选择 UI + 探测 | `ds-bot/src/client/local-agents-page.js` | ✅ | `src/main.rs:13550`（`settings_page_local`）、`src/data.rs:366` | 无 |
-| I04 | Claude Code / Codex CLI / Cursor / Gemini / OpenCode 接入 | `ds-bot/src/host/local-agents/engines.js:5`（KINDS=acp/codex/claude）、`:16-27`（10 个引擎） | ❌ | `src/data.rs:337-344` 明确“只支持这四个，不再探测”；`src/acp.rs:122` 只有 ACP 一种驱动，无 driver 抽象 | 需新增 codex/claude 两种驱动协议 〔降级 v0.6〕 |
+| I03 | 引擎选择 UI + 探测 | `ds-bot/src/client/local-agents-page.js` | ✅ | `src/main.rs:13550`（`settings_page_local`）、`src/data.rs:374`（`local_agents`） | 无 |
+| I04 | Claude Code / Codex CLI / Cursor / Gemini / OpenCode 接入 | `ds-bot/src/host/local-agents/engines.js:5`（KINDS=acp/codex/claude）、`:16-27`（10 个引擎） | ❌ | `src/data.rs:345-352` 明确“只支持这四个，不再探测”；`src/acp.rs:122` 只有 ACP 一种驱动，无 driver 抽象 | 需新增 codex/claude 两种驱动协议 〔降级 v0.6〕 |
 | I05 | 引擎能力差异提示（哪些能力 ACP 不支持） | `ds-bot/src/client/agent-cards.js` | 🟡 | `src/i18n.rs:323`（“当前引擎不支持附件发送”）、`:478`（“回合进行中”） | 零散提示，无统一能力表 〔降级 v0.6〕 |
 
 ## J. IM 通道（9 项）
@@ -210,9 +210,9 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| P01 | 服务商模板 + 密钥 + baseUrl | `ds-bot/src/client/providers-page.js` | ✅ | `src/data.rs:819/1406`、`src/main.rs:11944`、`src/main.rs:23262-23362`（`SettingsDetail` 全套详情面板） | 无 |
+| P01 | 服务商模板 + 密钥 + baseUrl | `ds-bot/src/client/providers-page.js` | ✅ | `src/data.rs:1545`（`provider_templates`）/`:1414`（`save_provider`）、`src/main.rs:11944`、`src/main.rs:23262-23362`（`SettingsDetail` 全套详情面板） | 无 |
 | P02 | 服务商“测试连接” | `ds-bot/src/client/providers-page.js` | ✅ | `src/main.rs:11944` 区块（commit `d7ca085`） | 无 |
-| P03 | 添加 / 删除模型 | `ds-bot/src/client/model-menu.js` | ✅ | `src/data.rs:1073`、`src/main.rs:23327`（AddModel） | 无 |
+| P03 | 添加 / 删除模型 | `ds-bot/src/client/model-menu.js` | ✅ | `src/data.rs:1081`、`src/main.rs:23327`（AddModel） | 无 |
 | P04 | 按模型配置上下文窗口（check line 由窗口算） | `ds-bot/README.md`（contextWindow） | ✅ | `src/model_limits.rs:20/22`（`FALLBACK_CONTEXT_WINDOW`/`FALLBACK_MAX_TOKENS`）、`:190`（read）、`:211`（resolve，用户值 > 模板 > 兜底）、`:236`（write）、`src/rpi_engine.rs:144-147`（引用常量，不再写死）、UI `src/main.rs:9505` | 无 |
 | P05 | 每 Bot 模型 + 思考强度 | `README.zh.md:58` | ✅ | `src/data.rs:17/41`、`src/rpi_engine.rs:188`（`thinking_level_for`） | 无 |
 
@@ -231,7 +231,7 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| R01 | 数据根兼容旧版（`~/.mode-bot/.mode`） | `README.zh.md:128` | ✅ | `src/data.rs:6/292`、`MODE_BOT_DATA_ROOT` 隔离 | 无 |
+| R01 | 数据根兼容旧版（`~/.mode-bot/.mode`） | `README.zh.md:128` | ✅ | `src/data.rs:6`（数据根说明）/`:289`（`cli_storage_dir`）、`MODE_BOT_DATA_ROOT` 隔离 | 无 |
 | R02 | 会话落盘格式 + 迁移 | `ds-bot/src/host/parts.js` | 🟡 | `src/rpi_engine.rs:314`（`sessions_root`）、`examples` 内迁移工具 | 自有 JSONL 格式，跨版本迁移靠脚本 〔降级 v0.6〕 |
 | R03 | 应用内检查更新 + 自替换 | `ds-bot/src/host/update.js` | ✅ | `src/update.rs:69/209/322`（SHA-256 + 替换/回滚） | 未接签名（minisign） |
 | R04 | CI：test + clippy + NSIS + Release | `ds-bot` CI | ✅ | `.github/workflows/release.yml:54-104` | 无 |
