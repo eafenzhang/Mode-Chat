@@ -227,7 +227,7 @@
 | Q01 | 设置页结构（通用/模型/Bot/群/连接器/能力/浏览器/定时/用量/密钥/关于…） | `ds-bot/README.md`（Settings pages） | ✅ | `src/main.rs:23359`（`SETTINGS_PAGES`，17 页，`:23359-23377`） | 无 |
 | Q02 | 设计令牌落地（4px 间距、四级字号、圆角令牌） | `docs/ui-design-spec.md`（本项目自有规范） | ✅ | `src/ui_kit.rs:25`（`S1` 起，令牌 `:25-45`）、`:128`（`Clickable::pointer`）；`scripts/ui-lint.ps1 -Enforce` 实测 **0 违规**（`cursor_pointer` 0 / 裸 `rounded(px())` 0 / 非令牌字号 0 / `rgb(` 0） | 无 |
 | Q03 | 弹窗 → 右侧详情栏 | `ds-bot/src/client/details-drawer.js` | ✅ | `src/main.rs:23383`（`enum SettingsDetail`）、`docs/ui-design-spec.md:§8` | 剩余 6 个破坏性确认框，符合规范 |
-| Q04 | 深浅双主题 + 皮肤 | `ds-bot/src/client/themes.js` | ✅ | `src/theme.rs:133/143`、`src/wecom_theme.rs` | 无 |
+| Q04 | 深浅双主题 + 皮肤 | `ds-bot/src/client/themes.js` | ✅ | `src/theme.rs:133/143`、`src/wechat_theme.rs` | 无 |
 | Q05 | 多语言（DS：中/英/日/韩/德/法/西/繁） | `ds-bot/src/client/locales/*.js` | 🟡 | `src/i18n.rs:9`（`LANG`）/`:21`（`is_en`）；zh/en 共 809 条词条 | 只有两语 〔降级 v0.6〕 |
 | Q06 | 托盘 / 开机自启 / 单实例 / 窗口记忆 | `app/`（桌面壳） | ✅ | `src/tray.rs`、`src/autostart.rs`、`src/instance.rs:16`、`src/window_state.rs` | 无 |
 

@@ -151,7 +151,7 @@ v0.5.0 的目标不是“再抄一个 DS Bot”，而是**把已承诺的能力�
 - **AC1**：`.cursor_pointer()` 只允许出现在 `src/ui_kit.rs`（`Clickable::pointer()` 是唯一入口）。以 `ui-lint -Enforce` 第 1 条为准；实测 `ui_kit.rs` 9 处、`ui_kit.rs` 外 **0** 处。
 - **AC2**：**数字字面量** `rounded(px(<N>))` 只允许出现在 `src/ui_kit.rs`、`src/theme.rs`；参数是令牌（`theme::RADIUS_*`）或算式（`size * 0.24` 头像等比）不算违规。`grep -c '\.rounded(px('` 会数出全部 188 处（大多是合规的令牌/算式），不能作判据；以 `ui-lint -Enforce` 第 2 条为准，实测字面量在允许文件外 **0** 处。
 - **AC3**：**非令牌字号字面量 = 0**（判定口径见 `docs/ui-design-spec.md` §11.1）。`grep -c 'text_size(px('` 只数出 332 处、不区分合规与违规，不能作判据；用 `scripts/ui-lint.ps1 -Enforce` 第 3 条规则，实测非令牌字面量 0。
-- **AC4**：`rgb(...)` 只允许出现在主题与图标着色白名单（`theme.rs`/`wecom_theme.rs`/`agent_icons.rs`/`avatar.rs`/`bot_icon.rs`/`brand_icons.rs`）；`grep -c 'rgb('` 会数出全部 22 处（都是白名单里的定义与图标着色），不能作判据；以 `ui-lint -Enforce` 第 4 条为准，实测白名单外 **0** 处。
+- **AC4**：`rgb(...)` 只允许出现在主题与图标着色白名单（`theme.rs`/`wechat_theme.rs`/`agent_icons.rs`/`avatar.rs`/`bot_icon.rs`/`brand_icons.rs`）；`grep -c 'rgb('` 会数出全部 22 处（都是白名单里的定义与图标着色），不能作判据；以 `ui-lint -Enforce` 第 4 条为准，实测白名单外 **0** 处。
 - **AC5**：`scripts/ui-lint.ps1` 可一条命令跑完上述四条，CI 里跑，非绿即失败。
 
 ### P0-7 有入口没功能收口

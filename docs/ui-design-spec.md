@@ -59,7 +59,7 @@
 
 ## 5. 颜色
 
-只用 `theme::` 与 `wecom_theme::` 的语义令牌，禁止硬编码 `rgb()`。
+只用 `theme::` 与 `wechat_theme::` 的语义令牌，禁止硬编码 `rgb()`。
 
 | 分组 | 令牌 |
 | --- | --- |
@@ -70,7 +70,7 @@
 | 语义 | `success` / `danger` / `warning` / `chief` |
 | 阴影 | `shadow_1` … `shadow_4` |
 
-双主题（Bot 深色 / 企业微信）通过 `wecom_theme::active()` 分支，**每个组件自己处理**，
+双主题（Bot 深色 / 企业微信）通过 `wechat_theme::active()` 分支，**每个组件自己处理**，
 调用方不判断皮肤。
 
 ## 6. 控件清单
@@ -245,7 +245,7 @@ Lucide 是 24 网格、stroke-width 2，图形约占 85%，与旧版相当。
 | 1 | `.cursor_pointer()` | `src/ui_kit.rs` | **0**（已全部改用 `ui_kit::Clickable::pointer()`） |
 | 2 | `.rounded(px(<数字字面量>))` | `src/ui_kit.rs`、`src/theme.rs` | **0**（令牌参数与 `size * 0.24` 等比头像不算违规） |
 | 3 | `text_size(px(<数字字面量>))` | `N` 必须是 `T_LABEL/T_BODY/T_TITLE/T_PAGE/T_METRIC` 的值（11/12/13/15/22） | **0**（残留 10/12.5/14/17 全并入令牌） |
-| 4 | `rgb(...)` | 主题与图标着色白名单文件 | **0**（5 处换 `theme::accent_ink()` / `wecom_theme::list_title_selected()`） |
+| 4 | `rgb(...)` | 主题与图标着色白名单文件 | **0**（5 处换 `theme::accent_ink()` / `wechat_theme::list_title_selected()`） |
 
 四项合计 **0 处**，`-Enforce` 已可用于 CI 阻断（2026-11-25 达成）。
 

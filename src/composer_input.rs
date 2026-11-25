@@ -11,7 +11,7 @@ use gpui::{
     Subscription, Window, div, px,
 };
 
-use crate::{theme, ui_kit, wecom_theme};
+use crate::{theme, ui_kit, wechat_theme};
 
 gpui::actions!(composer, [Send, SendSecondary]);
 
@@ -157,7 +157,7 @@ impl Render for ComposerInput {
         if let Some(text) = self.pending.take() {
             state.update(cx, |state, cx| state.set_value(text, window, cx));
         }
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         div()
             .size_full()
             .on_mouse_down(
@@ -181,7 +181,7 @@ impl Render for ComposerInput {
                     .py(px(0.))
                     .h_full()
                     .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
+                        wechat_theme::FONT_FAMILY
                     } else {
                         theme::FONT_FAMILY
                     })

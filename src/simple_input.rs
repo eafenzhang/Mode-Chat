@@ -11,7 +11,7 @@ use gpui::{
     Subscription, Window, div, px,
 };
 
-use crate::{theme, wecom_theme};
+use crate::{theme, wechat_theme};
 
 pub struct SimpleInput {
     state: Option<Entity<InputState>>,
@@ -112,7 +112,7 @@ impl Render for SimpleInput {
         if let Some(text) = self.pending.take() {
             state.update(cx, |state, cx| state.set_value(text, window, cx));
         }
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         div()
             .size_full()
             // gpui-kit Input 在 appearance(false) 下不一定接管点击焦点，这里兜底。
@@ -136,7 +136,7 @@ impl Render for SimpleInput {
                 .py(px(0.))
                 .h_full()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })

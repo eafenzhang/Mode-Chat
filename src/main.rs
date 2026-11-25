@@ -62,7 +62,7 @@ mod team_tools;
 mod update;
 // 企微皮肤 token 是完整词表（chip/accent 等留给后续页面），允许保留未用项。
 #[allow(dead_code)]
-mod wecom_theme;
+mod wechat_theme;
 mod window_state;
 mod window_style;
 mod secrets;
@@ -707,7 +707,7 @@ fn sidebar_section_dot(color: Option<&str>) -> Rgba {
         Some("green") => rgba(0x10b981ff),
         Some("violet") => rgba(0x8b5cf6ff),
         Some("rose") => rgba(0xec2f6bff),
-        _ => wecom_theme::list_preview(),
+        _ => wechat_theme::list_preview(),
     }
 }
 
@@ -2892,8 +2892,8 @@ impl Render for BotFormState {
         {
             let transparent = gpui::rgba(0x00000000);
             // 选中描边跟随主题色：微信壳用强调色，经典壳用 accent。
-            let accent = if wecom_theme::active() {
-                wecom_theme::send_enabled()
+            let accent = if wechat_theme::active() {
+                wechat_theme::send_enabled()
             } else {
                 theme::accent()
             };
@@ -3950,7 +3950,7 @@ impl PilotApp {
         if bar.tasks.is_empty() {
             return None;
         }
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let active = bar.tasks.iter().filter(|task| task.state.is_open()).count();
         let total = bar.tasks.len();
         let expanded = bar.expanded;
@@ -3958,11 +3958,11 @@ impl PilotApp {
         let open_id = group_id.clone();
         let (border, bg, title_color, secondary, hover) = if wechat {
             (
-                wecom_theme::composer_border(),
-                wecom_theme::composer_bg(),
-                wecom_theme::chat_title(),
-                wecom_theme::list_preview(),
-                wecom_theme::nav_item_hover_bg(),
+                wechat_theme::composer_border(),
+                wechat_theme::composer_bg(),
+                wechat_theme::chat_title(),
+                wechat_theme::list_preview(),
+                wechat_theme::nav_item_hover_bg(),
             )
         } else {
             (
@@ -3998,7 +3998,7 @@ impl PilotApp {
             .child(
                 div()
                     .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
+                        wechat_theme::FONT_FAMILY
                     } else {
                         theme::FONT_FAMILY
                     })
@@ -4071,7 +4071,7 @@ impl PilotApp {
                                 .w(px(64.))
                                 .truncate()
                                 .font_family(if wechat {
-                                    wecom_theme::FONT_FAMILY
+                                    wechat_theme::FONT_FAMILY
                                 } else {
                                     theme::FONT_FAMILY
                                 })
@@ -4085,7 +4085,7 @@ impl PilotApp {
                                 .min_w(px(0.))
                                 .truncate()
                                 .font_family(if wechat {
-                                    wecom_theme::FONT_FAMILY
+                                    wechat_theme::FONT_FAMILY
                                 } else {
                                     theme::FONT_FAMILY
                                 })
@@ -4100,7 +4100,7 @@ impl PilotApp {
                             div()
                                 .flex_shrink_0()
                                 .font_family(if wechat {
-                                    wecom_theme::FONT_FAMILY
+                                    wechat_theme::FONT_FAMILY
                                 } else {
                                     theme::FONT_FAMILY
                                 })
@@ -4132,13 +4132,13 @@ impl PilotApp {
                     .child(
                         div()
                             .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
+                                wechat_theme::FONT_FAMILY
                             } else {
                                 theme::FONT_FAMILY
                             })
                             .text_size(px(11.))
                             .text_color(if wechat {
-                                wecom_theme::send_enabled()
+                                wechat_theme::send_enabled()
                             } else {
                                 theme::accent_text()
                             })
@@ -5985,7 +5985,7 @@ impl PilotApp {
                         .h(px(32.))
                         .px(px(12.))
                         .rounded(px(theme::RADIUS_FIELD))
-                        .bg(wecom_theme::send_enabled())
+                        .bg(wechat_theme::send_enabled())
                         .flex()
                         .items_center()
                         .pointer()
@@ -6005,10 +6005,10 @@ impl PilotApp {
                         }))
                         .child(
                             div()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(12.))
                                 .line_height(px(16.))
-                                .text_color(wecom_theme::nav_text_active())
+                                .text_color(wechat_theme::nav_text_active())
                                 .child(i18n::t("提交")),
                         ),
                 )
@@ -6029,10 +6029,10 @@ impl PilotApp {
             }))
             .child(
                 div()
-                    .font_family(wecom_theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(12.))
                     .line_height(px(16.))
-                    .text_color(wecom_theme::time_label())
+                    .text_color(wechat_theme::time_label())
                     .child(i18n::t("其他（自行输入）")),
             )
             .into_any_element()
@@ -9012,7 +9012,7 @@ impl PilotApp {
                         .rounded(px(theme::RADIUS_FIELD))
                         .overflow_hidden()
                         .border_1()
-                        .border_color(wecom_theme::composer_border())
+                        .border_color(wechat_theme::composer_border())
                         .child(
                             img(path)
                                 .max_w(px(920.))
@@ -9022,9 +9022,9 @@ impl PilotApp {
                 )
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
-                        .text_color(wecom_theme::list_preview())
+                        .text_color(wechat_theme::list_preview())
                         .child(i18n::t("点击任意处或按 Esc 关闭")),
                 )
                 .into_any_element(),
@@ -9041,7 +9041,7 @@ impl PilotApp {
             return None;
         }
         // 设置页左列与会话列表同宽，切页时不跳变。
-        let nav_width = wecom_theme::LIST_WIDTH;
+        let nav_width = wechat_theme::LIST_WIDTH;
         let viewport = window.viewport_size();
         let viewport_width = f32::from(viewport.width);
         let viewport_height = f32::from(viewport.height);
@@ -10719,7 +10719,7 @@ impl PilotApp {
                                     .flex_1()
                                     .min_w(px(0.))
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(11.))
                                     .line_height(px(15.))
                                     .text_color(if active {
@@ -11030,9 +11030,9 @@ impl PilotApp {
                                     .gap(px(ui::S1))
                                     .child(
                                         div()
-                                            .font_family(wecom_theme::FONT_FAMILY)
+                                            .font_family(wechat_theme::FONT_FAMILY)
                                             .text_size(px(11.))
-                                            .text_color(wecom_theme::list_preview())
+                                            .text_color(wechat_theme::list_preview())
                                             .child(SharedString::from(format!(
                                                 "{} {}",
                                                 time::day_label(at),
@@ -11049,9 +11049,9 @@ impl PilotApp {
                                 div()
                                     .w_full()
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
-                                    .text_color(wecom_theme::time_label())
+                                    .text_color(wechat_theme::time_label())
                                     .child(SharedString::from(detail)),
                             )
                             .into_any_element(),
@@ -12327,7 +12327,7 @@ impl PilotApp {
 
     /// DS 的三张主题卡：浅色 / 深色 / 跟随系统。
         fn theme_picker_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let mut cards = div().flex().gap(px(8.)).w_full();
         // 三张紧凑 tile：图标 + 名称一行、说明一行。原来是 76px 居中大卡，
         // 只放一个 18px 图标和两个字，上下全是空白。
@@ -12347,23 +12347,23 @@ impl PilotApp {
                     .border_1()
                     .border_color(if active {
                         if wechat {
-                            wecom_theme::send_enabled()
+                            wechat_theme::send_enabled()
                         } else {
                             theme::accent()
                         }
                     } else if wechat {
-                        wecom_theme::panel_divider()
+                        wechat_theme::panel_divider()
                     } else {
                         theme::edge()
                     })
                     .bg(if active {
                         if wechat {
-                            wecom_theme::chip_bg()
+                            wechat_theme::chip_bg()
                         } else {
                             theme::accent_soft()
                         }
                     } else if wechat {
-                        wecom_theme::panel_bg()
+                        wechat_theme::panel_bg()
                     } else {
                         theme::card()
                     })
@@ -12382,12 +12382,12 @@ impl PilotApp {
                         16.,
                         if active {
                             if wechat {
-                                wecom_theme::send_enabled()
+                                wechat_theme::send_enabled()
                             } else {
                                 theme::accent()
                             }
                         } else if wechat {
-                            wecom_theme::panel_text()
+                            wechat_theme::panel_text()
                         } else {
                             theme::ink_secondary()
                         },
@@ -12403,7 +12403,7 @@ impl PilotApp {
                                 div()
                                     .truncate()
                                     .font_family(if wechat {
-                                        wecom_theme::FONT_FAMILY
+                                        wechat_theme::FONT_FAMILY
                                     } else {
                                         theme::FONT_FAMILY
                                     })
@@ -12411,12 +12411,12 @@ impl PilotApp {
                                     .line_height(px(17.))
                                     .text_color(if active {
                                         if wechat {
-                                            wecom_theme::chat_title()
+                                            wechat_theme::chat_title()
                                         } else {
                                             theme::ink()
                                         }
                                     } else if wechat {
-                                        wecom_theme::panel_text()
+                                        wechat_theme::panel_text()
                                     } else {
                                         theme::ink_secondary()
                                     })
@@ -12426,14 +12426,14 @@ impl PilotApp {
                                 div()
                                     .truncate()
                                     .font_family(if wechat {
-                                        wecom_theme::FONT_FAMILY
+                                        wechat_theme::FONT_FAMILY
                                     } else {
                                         theme::FONT_FAMILY
                                     })
                                     .text_size(px(11.))
                                     .line_height(px(15.))
                                     .text_color(if wechat {
-                                        wecom_theme::list_preview()
+                                        wechat_theme::list_preview()
                                     } else {
                                         theme::ink_tertiary()
                                     })
@@ -12460,7 +12460,7 @@ impl PilotApp {
         save_ui_value("theme", serde_json::json!(pref));
         let light = theme_light_for(pref);
         theme::set_light_runtime(light);
-        wecom_theme::set_light(light);
+        wechat_theme::set_light(light);
         gpui::component::Theme::change(
             if light {
                 gpui::component::ThemeMode::Light
@@ -12484,7 +12484,7 @@ impl PilotApp {
         kind: SettingsSelectKind,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         div()
             .id(id)
             .h(px(30.))
@@ -12493,12 +12493,12 @@ impl PilotApp {
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
             .border_color(if wechat {
-                wecom_theme::panel_divider()
+                wechat_theme::panel_divider()
             } else {
                 theme::edge()
             })
             .bg(if wechat {
-                wecom_theme::chip_bg()
+                wechat_theme::chip_bg()
             } else {
                 theme::card()
             })
@@ -12520,14 +12520,14 @@ impl PilotApp {
             .child(
                 div()
                     .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
+                        wechat_theme::FONT_FAMILY
                     } else {
                         theme::FONT_FAMILY
                     })
                     .text_size(px(13.))
                     .line_height(px(18.))
                     .text_color(if wechat {
-                        wecom_theme::chat_title()
+                        wechat_theme::chat_title()
                     } else {
                         theme::ink()
                     })
@@ -12537,7 +12537,7 @@ impl PilotApp {
                 icons::Icon::ChevronDown,
                 14.,
                 if wechat {
-                    wecom_theme::panel_text()
+                    wechat_theme::panel_text()
                 } else {
                     theme::ink_secondary()
                 },
@@ -12642,7 +12642,7 @@ impl PilotApp {
     }
 
     fn accent_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         // 微信默认绿、经典默认蓝；首项即“默认色”，点它等于跟随主题默认。
         let default_hex = if wechat { "#07c160" } else { "#4d6bfe" };
         let palette: &[&str] = if wechat {
@@ -12736,19 +12736,19 @@ impl PilotApp {
         let dropdown = self.settings_dropdown?;
         let position = dropdown.position;
         let kind = dropdown.kind;
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let (options, current) = self.settings_select_options(kind);
         let mut menu = div()
             .w(px(160.))
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
             .border_color(if wechat {
-                wecom_theme::panel_divider()
+                wechat_theme::panel_divider()
             } else {
                 theme::edge()
             })
             .bg(if wechat {
-                wecom_theme::panel_card_bg()
+                wechat_theme::panel_card_bg()
             } else {
                 theme::menu()
             })
@@ -12785,7 +12785,7 @@ impl PilotApp {
                         13.,
                         if active {
                             if wechat {
-                                wecom_theme::send_enabled()
+                                wechat_theme::send_enabled()
                             } else {
                                 theme::accent()
                             }
@@ -12796,14 +12796,14 @@ impl PilotApp {
                     .child(
                         div()
                             .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
+                                wechat_theme::FONT_FAMILY
                             } else {
                                 theme::FONT_FAMILY
                             })
                             .text_size(px(12.))
                             .line_height(px(18.))
                             .text_color(if wechat {
-                                wecom_theme::chat_title()
+                                wechat_theme::chat_title()
                             } else {
                                 theme::ink()
                             })
@@ -12840,19 +12840,19 @@ impl PilotApp {
         let bot = self.selected_bot()?;
         let bot_id = bot.id.clone();
         let current = bot.approval_level.clone();
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let accent = if wechat {
-            wecom_theme::send_enabled()
+            wechat_theme::send_enabled()
         } else {
             theme::accent()
         };
         let title_color = if wechat {
-            wecom_theme::chat_title()
+            wechat_theme::chat_title()
         } else {
             theme::ink()
         };
         let note_color = if wechat {
-            wecom_theme::list_preview()
+            wechat_theme::list_preview()
         } else {
             theme::ink_secondary()
         };
@@ -12861,12 +12861,12 @@ impl PilotApp {
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
             .border_color(if wechat {
-                wecom_theme::composer_border()
+                wechat_theme::composer_border()
             } else {
                 theme::edge()
             })
             .bg(if wechat {
-                wecom_theme::panel_card_bg()
+                wechat_theme::panel_card_bg()
             } else {
                 theme::card()
             })
@@ -12883,7 +12883,7 @@ impl PilotApp {
                     .px(px(8.))
                     .py(px(4.))
                     .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
+                        wechat_theme::FONT_FAMILY
                     } else {
                         theme::FONT_FAMILY
                     })
@@ -12910,7 +12910,7 @@ impl PilotApp {
                     .pointer()
                     .hover(|style| {
                         style.bg(if wechat {
-                            wecom_theme::nav_item_hover_bg()
+                            wechat_theme::nav_item_hover_bg()
                         } else {
                             theme::hover()
                         })
@@ -12967,7 +12967,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(if wechat {
-                                        wecom_theme::FONT_FAMILY
+                                        wechat_theme::FONT_FAMILY
                                     } else {
                                         theme::FONT_FAMILY
                                     })
@@ -12979,7 +12979,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(if wechat {
-                                        wecom_theme::FONT_FAMILY
+                                        wechat_theme::FONT_FAMILY
                                     } else {
                                         theme::FONT_FAMILY
                                     })
@@ -13852,7 +13852,7 @@ impl PilotApp {
             .flex_shrink_0()
             .items_center()
             .border_b_1()
-            .border_color(wecom_theme::divider());
+            .border_color(wechat_theme::divider());
         for (index, label) in TABS.iter().enumerate() {
             let is_active = index == active;
             tab_row = tab_row.child(
@@ -13866,14 +13866,14 @@ impl PilotApp {
                     // 选中项画 2px 下划线，和容器的 1px 分隔线重叠对齐。
                     .border_b_2()
                     .border_color(if is_active {
-                        wecom_theme::send_enabled()
+                        wechat_theme::send_enabled()
                     } else {
                         gpui::rgba(0x00000000)
                     })
                     .mb(px(-1.))
                     .pointer()
                     .when(!is_active, |el| {
-                        el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        el.hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                     })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.bot_team_tab = index;
@@ -13881,7 +13881,7 @@ impl PilotApp {
                     }))
                     .child(
                         div()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(20.))
                             .font_weight(if is_active {
@@ -13890,9 +13890,9 @@ impl PilotApp {
                                 gpui::FontWeight::NORMAL
                             })
                             .text_color(if is_active {
-                                wecom_theme::chat_title()
+                                wechat_theme::chat_title()
                             } else {
-                                wecom_theme::list_preview()
+                                wechat_theme::list_preview()
                             })
                             .child(i18n::t(label)),
                     ),
@@ -14272,9 +14272,9 @@ impl PilotApp {
         } else {
             i18n::t("创建后进入企业微信扫码流程，确认后自动写入 Bot ID 与 Secret。")
         };
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let submit_text = if wechat {
-            wecom_theme::bubble_out_text()
+            wechat_theme::bubble_out_text()
         } else {
             theme::accent_ink()
         };
@@ -14385,7 +14385,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(if wechat {
-                                        wecom_theme::FONT_FAMILY
+                                        wechat_theme::FONT_FAMILY
                                     } else {
                                         theme::FONT_FAMILY
                                     })
@@ -14441,7 +14441,7 @@ impl PilotApp {
         provider: bots_service::BotProvider,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         div()
             .id(id)
             .flex_1()
@@ -14450,12 +14450,12 @@ impl PilotApp {
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
             .border_color(if wechat {
-                wecom_theme::panel_divider()
+                wechat_theme::panel_divider()
             } else {
                 theme::edge()
             })
             .bg(if wechat {
-                wecom_theme::panel_card_bg()
+                wechat_theme::panel_card_bg()
             } else {
                 theme::card()
             })
@@ -14466,7 +14466,7 @@ impl PilotApp {
             .pointer()
             .hover(|style| {
                 style.bg(if wechat {
-                    wecom_theme::nav_item_hover_bg()
+                    wechat_theme::nav_item_hover_bg()
                 } else {
                     theme::hover()
                 })
@@ -14506,7 +14506,7 @@ impl PilotApp {
                     .child(
                         div()
                             .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
+                                wechat_theme::FONT_FAMILY
                             } else {
                                 theme::FONT_FAMILY
                             })
@@ -14514,7 +14514,7 @@ impl PilotApp {
                             .line_height(px(18.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(if wechat {
-                                wecom_theme::chat_title()
+                                wechat_theme::chat_title()
                             } else {
                                 theme::ink()
                             })
@@ -14523,14 +14523,14 @@ impl PilotApp {
                     .child(
                         div()
                             .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
+                                wechat_theme::FONT_FAMILY
                             } else {
                                 theme::FONT_FAMILY
                             })
                             .text_size(px(11.))
                             .line_height(px(16.))
                             .text_color(if wechat {
-                                wecom_theme::list_preview()
+                                wechat_theme::list_preview()
                             } else {
                                 theme::ink_secondary()
                             })
@@ -14552,7 +14552,7 @@ impl PilotApp {
         reason: &'static str,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         div()
             .id(id)
             .flex_1()
@@ -14561,12 +14561,12 @@ impl PilotApp {
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
             .border_color(if wechat {
-                wecom_theme::panel_divider()
+                wechat_theme::panel_divider()
             } else {
                 theme::edge()
             })
             .bg(if wechat {
-                wecom_theme::panel_card_bg()
+                wechat_theme::panel_card_bg()
             } else {
                 theme::card()
             })
@@ -14586,7 +14586,7 @@ impl PilotApp {
                     .size(px(36.))
                     .rounded_full()
                     .bg(if wechat {
-                        wecom_theme::panel_divider()
+                        wechat_theme::panel_divider()
                     } else {
                         theme::inset()
                     })
@@ -14610,7 +14610,7 @@ impl PilotApp {
                             .child(
                                 div()
                                     .font_family(if wechat {
-                                        wecom_theme::FONT_FAMILY
+                                        wechat_theme::FONT_FAMILY
                                     } else {
                                         theme::FONT_FAMILY
                                     })
@@ -14625,7 +14625,7 @@ impl PilotApp {
                     .child(
                         div()
                             .font_family(if wechat {
-                                wecom_theme::FONT_FAMILY
+                                wechat_theme::FONT_FAMILY
                             } else {
                                 theme::FONT_FAMILY
                             })
@@ -15419,19 +15419,19 @@ impl PilotApp {
         let filtered: Vec<&connectors_service::ConnectorSpec> =
             connectors_service::CATALOG.iter().filter(matches).collect();
         // 搜索框：DS 的「搜索连接器」。
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         body = body.child(
             div()
                 .h(px(36.))
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
                 .border_color(if wechat {
-                    wecom_theme::panel_divider()
+                    wechat_theme::panel_divider()
                 } else {
                     theme::edge()
                 })
                 .bg(if wechat {
-                    wecom_theme::chip_bg()
+                    wechat_theme::chip_bg()
                 } else {
                     theme::card()
                 })
@@ -15443,7 +15443,7 @@ impl PilotApp {
                     icons::Icon::Search,
                     14.,
                     if wechat {
-                        wecom_theme::time_label()
+                        wechat_theme::time_label()
                     } else {
                         theme::ink_tertiary()
                     },
@@ -15588,7 +15588,7 @@ impl PilotApp {
                             .text_size(px(11.))
                             .line_height(px(16.))
                             .text_color(if wechat {
-                                wecom_theme::time_label()
+                                wechat_theme::time_label()
                             } else {
                                 theme::ink_tertiary()
                             })
@@ -17635,20 +17635,20 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .child(
                     div()
                         .flex_shrink_0()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(i18n::t(label)),
                 )
                 .child(
                     div()
                         .min_w(px(0.))
                         .truncate()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(wecom_theme::chat_title())
+                        .text_color(wechat_theme::chat_title())
                         .child(value),
                 )
         };
@@ -17673,8 +17673,8 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .w(px(300.))
                         .rounded(px(theme::RADIUS_FIELD))
                         .border_1()
-                        .border_color(wecom_theme::composer_border())
-                        .bg(wecom_theme::panel_card_bg())
+                        .border_color(wechat_theme::composer_border())
+                        .bg(wechat_theme::panel_card_bg())
                         .p(px(16.))
                         .flex()
                         .flex_col()
@@ -17703,24 +17703,24 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         .gap(px(2.))
                                         .child(
                                             div()
-                                                .font_family(wecom_theme::FONT_FAMILY)
+                                                .font_family(wechat_theme::FONT_FAMILY)
                                                 .text_size(px(ui_kit::T_PAGE))
                                                 .line_height(px(24.))
                                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(wecom_theme::chat_title())
+                                                .text_color(wechat_theme::chat_title())
                                                 .child(i18n::t("我")),
                                         )
                                         .child(
                                             div()
-                                                .font_family(wecom_theme::FONT_FAMILY)
+                                                .font_family(wechat_theme::FONT_FAMILY)
                                                 .text_size(px(12.))
                                                 .line_height(px(18.))
-                                                .text_color(wecom_theme::panel_text())
+                                                .text_color(wechat_theme::panel_text())
                                                 .child(i18n::t("本机 · Mode Bot")),
                                         ),
                                 ),
                         )
-                        .child(div().h(px(1.)).w_full().bg(wecom_theme::panel_divider()))
+                        .child(div().h(px(1.)).w_full().bg(wechat_theme::panel_divider()))
                         .child(
                             div()
                                 .flex()
@@ -17733,7 +17733,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                 ))
                                 .child(info_row(i18n::t("数据根"), data_root)),
                         )
-                        .child(div().h(px(1.)).w_full().bg(wecom_theme::panel_divider()))
+                        .child(div().h(px(1.)).w_full().bg(wechat_theme::panel_divider()))
                         .child(
                             div()
                                 .flex()
@@ -17770,7 +17770,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         if !self.new_menu_open {
             return None;
         }
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let item = |id: &'static str, icon: icons::Icon, label: &'static str| {
             div()
                 .id(id)
@@ -17782,20 +17782,20 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                 .gap(px(8.))
                 .pointer()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(13.))
                 .line_height(px(18.))
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink()
                 })
                 .hover(move |style| {
                     style.bg(if wechat {
-                        wecom_theme::list_hover()
+                        wechat_theme::list_hover()
                     } else {
                         theme::hover()
                     })
@@ -17804,7 +17804,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     icon,
                     15.,
                     if wechat {
-                        wecom_theme::panel_text()
+                        wechat_theme::panel_text()
                     } else {
                         theme::ink_secondary()
                     },
@@ -17833,12 +17833,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .rounded(px(theme::RADIUS_FIELD))
                         .border_1()
                         .border_color(if wechat {
-                            wecom_theme::composer_border()
+                            wechat_theme::composer_border()
                         } else {
                             theme::edge()
                         })
                         .bg(if wechat {
-                            wecom_theme::panel_card_bg()
+                            wechat_theme::panel_card_bg()
                         } else {
                             theme::menu()
                         })
@@ -17928,7 +17928,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             icons::Icon::Refresh,
             FooterMenuAction::CheckUpdates,
         ));
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let items: Vec<gpui::AnyElement> = entries
             .into_iter()
             .map(|(label, icon, action)| {
@@ -17943,20 +17943,20 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .gap(px(6.))
                     .pointer()
                     .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
+                        wechat_theme::FONT_FAMILY
                     } else {
                         theme::FONT_FAMILY
                     })
                     .text_size(px(13.))
                     .line_height(px(18.))
                     .text_color(if wechat {
-                        wecom_theme::chat_title()
+                        wechat_theme::chat_title()
                     } else {
                         theme::ink()
                     })
                     .hover(move |style| {
                         style.bg(if wechat {
-                            wecom_theme::list_hover()
+                            wechat_theme::list_hover()
                         } else {
                             theme::hover()
                         })
@@ -17980,7 +17980,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         icon,
                         15.,
                         if wechat {
-                            wecom_theme::panel_text()
+                            wechat_theme::panel_text()
                         } else {
                             theme::ink_secondary()
                         },
@@ -18013,12 +18013,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .rounded(px(if wechat { 8. } else { theme::RADIUS_MENU }))
                         .border_1()
                         .border_color(if wechat {
-                            wecom_theme::composer_border()
+                            wechat_theme::composer_border()
                         } else {
                             theme::edge()
                         })
                         .bg(if wechat {
-                            wecom_theme::panel_card_bg()
+                            wechat_theme::panel_card_bg()
                         } else {
                             theme::menu()
                         })
@@ -18046,7 +18046,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             return None;
         }
         let selected = self.menu_selected.min(entries.len().saturating_sub(1));
-        let wechat = wecom_theme::active();
+        let wechat = wechat_theme::active();
         let items: Vec<gpui::AnyElement> = entries
             .iter()
             .enumerate()
@@ -18064,14 +18064,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     .gap(px(6.))
                     .pointer()
                     .font_family(if wechat {
-                        wecom_theme::FONT_FAMILY
+                        wechat_theme::FONT_FAMILY
                     } else {
                         theme::FONT_FAMILY
                     })
                     .text_size(px(13.))
                     .bg(if index == selected {
                         if wechat {
-                            wecom_theme::list_hover()
+                            wechat_theme::list_hover()
                         } else {
                             theme::hover()
                         }
@@ -18082,26 +18082,26 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         theme::danger()
                     } else if index == selected {
                         if wechat {
-                            wecom_theme::chat_title()
+                            wechat_theme::chat_title()
                         } else {
                             theme::ink()
                         }
                     } else if wechat {
-                        wecom_theme::panel_text()
+                        wechat_theme::panel_text()
                     } else {
                         theme::ink_secondary()
                     })
                     .hover(move |style| {
                         style
                             .bg(if wechat {
-                                wecom_theme::list_hover()
+                                wechat_theme::list_hover()
                             } else {
                                 theme::hover()
                             })
                             .text_color(if danger {
                                 theme::danger()
                             } else if wechat {
-                                wecom_theme::chat_title()
+                                wechat_theme::chat_title()
                             } else {
                                 theme::ink()
                             })
@@ -18120,7 +18120,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         if danger {
                             theme::danger()
                         } else if wechat {
-                            wecom_theme::panel_text()
+                            wechat_theme::panel_text()
                         } else {
                             theme::ink_secondary()
                         },
@@ -18179,12 +18179,12 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .rounded(px(if wechat { 8. } else { theme::RADIUS_MENU }))
                         .border_1()
                         .border_color(if wechat {
-                            wecom_theme::composer_border()
+                            wechat_theme::composer_border()
                         } else {
                             theme::edge()
                         })
                         .bg(if wechat {
-                            wecom_theme::panel_card_bg()
+                            wechat_theme::panel_card_bg()
                         } else {
                             theme::menu()
                         })
@@ -21706,7 +21706,7 @@ fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> g
                 .items_center()
                 .gap(px(6.))
                 .pointer()
-                .hover(|style| style.bg(wecom_theme::list_hover()))
+                .hover(|style| style.bg(wechat_theme::list_hover()))
                 .on_click(move |_event, _window, cx| {
                     let id = toggle_id.clone();
                     let _ = weak.update(cx, |this, cx| {
@@ -21725,16 +21725,16 @@ fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> g
                         .flex_1()
                         .min_w(px(0.))
                         .truncate()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
-                        .text_color(wecom_theme::list_title())
+                        .text_color(wechat_theme::list_title())
                         .child(SharedString::from(name.clone())),
                 )
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(ui_kit::T_LABEL))
-                        .text_color(wecom_theme::list_preview())
+                        .text_color(wechat_theme::list_preview())
                         .child(SharedString::from(count.to_string())),
                 )
                 .child(icons::icon(
@@ -21744,7 +21744,7 @@ fn wecom_list_row_el(row: &WecomListRow, weak: &gpui::WeakEntity<PilotApp>) -> g
                         icons::Icon::ChevronLeft
                     },
                     12.,
-                    wecom_theme::list_preview(),
+                    wechat_theme::list_preview(),
                 ))
                 .into_any_element()
         }
@@ -21767,19 +21767,19 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
     };
     let active = entry.active;
     let title_color = if active {
-        wecom_theme::list_title_selected()
+        wechat_theme::list_title_selected()
     } else {
-        wecom_theme::list_title()
+        wechat_theme::list_title()
     };
     let preview_color = if active {
-        wecom_theme::list_preview_selected()
+        wechat_theme::list_preview_selected()
     } else {
-        wecom_theme::list_preview()
+        wechat_theme::list_preview()
     };
     let time_color = if active {
-        wecom_theme::list_time_selected()
+        wechat_theme::list_time_selected()
     } else {
-        wecom_theme::list_time()
+        wechat_theme::list_time()
     };
     let avatar = if entry.is_group && !entry.member_ids.is_empty() {
         PilotApp::wecom_group_avatar(&entry.member_ids, 40.).into_any_element()
@@ -21797,16 +21797,16 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
     let weak = weak.clone();
     div()
         .id(row_id)
-        .h(px(wecom_theme::LIST_ROW_HEIGHT))
+        .h(px(wechat_theme::LIST_ROW_HEIGHT))
         .w_full()
         .px(px(12.))
         .flex()
         .items_center()
         .gap(px(10.))
         .pointer()
-        .when(active, |el| el.bg(wecom_theme::selected_gradient()))
+        .when(active, |el| el.bg(wechat_theme::selected_gradient()))
         .when(!active, |el| {
-            el.hover(|style| style.bg(wecom_theme::list_hover()))
+            el.hover(|style| style.bg(wechat_theme::list_hover()))
         })
         .on_click(move |_event, _window, cx| {
             let _ = weak.update(cx, |this, cx| {
@@ -21828,12 +21828,12 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
                         .right(px(-2.))
                         .size(px(8.))
                         .rounded_full()
-                        .bg(wecom_theme::nav_badge_bg())
+                        .bg(wechat_theme::nav_badge_bg())
                         .border_2()
                         .border_color(if active {
-                            wecom_theme::send_enabled()
+                            wechat_theme::send_enabled()
                         } else {
-                            wecom_theme::list_hover()
+                            wechat_theme::list_hover()
                         })
                 })),
         )
@@ -21857,7 +21857,7 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
                                 .flex_1()
                                 .min_w(px(0.))
                                 .truncate()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(ui_kit::T_TITLE))
                                 .line_height(px(20.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
@@ -21868,7 +21868,7 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
                 .child(
                     div()
                         .truncate()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(16.))
                         .text_color(preview_color)
@@ -21884,7 +21884,7 @@ fn wecom_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpui
                 .gap(px(3.))
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
                         .line_height(px(14.))
                         .text_color(time_color)
@@ -21991,11 +21991,11 @@ fn wecom_row_el(
                 .justify_center()
                 .py(px(4.))
                 .pointer()
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(11.))
                 .line_height(px(16.))
-                .text_color(wecom_theme::time_label())
-                .hover(|style| style.text_color(wecom_theme::chat_title()))
+                .text_color(wechat_theme::time_label())
+                .hover(|style| style.text_color(wechat_theme::chat_title()))
                 .on_click(move |_event, _window, cx| {
                     let key = key.clone();
                     let _ = weak.update(cx, |this, cx| {
@@ -22014,10 +22014,10 @@ fn wecom_row_el(
             .flex()
             .justify_center()
             .py(px(2.))
-            .font_family(wecom_theme::FONT_FAMILY)
+            .font_family(wechat_theme::FONT_FAMILY)
             .text_size(px(12.))
             .line_height(px(16.))
-            .text_color(wecom_theme::time_label())
+            .text_color(wechat_theme::time_label())
             .child(SharedString::from(label.clone()))
             .into_any_element(),
         WecomRow::User {
@@ -22042,17 +22042,17 @@ fn wecom_row_el(
                     .bg(if flat {
                         gpui::rgba(0x00000000)
                     } else {
-                        wecom_theme::bubble_out()
+                        wechat_theme::bubble_out()
                     })
                     .px(px(if flat { 2. } else { 10. }))
                     .py(px(if flat { 2. } else { 6. }))
-                    .font_family(wecom_theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(font_size))
                     .line_height(px(font_size + 8.))
                     .text_color(if flat {
-                        wecom_theme::bubble_text()
+                        wechat_theme::bubble_text()
                     } else {
-                        wecom_theme::bubble_out_text()
+                        wechat_theme::bubble_out_text()
                     })
                     .child(user_text_with_mentions(text, mention_names))
                     .children(history_attachment_view(
@@ -22087,10 +22087,10 @@ fn wecom_row_el(
             if is_group {
                 cell = cell.child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(16.))
-                        .text_color(wecom_theme::sender_label())
+                        .text_color(wechat_theme::sender_label())
                         .child(SharedString::from(author.clone())),
                 );
             }
@@ -22100,14 +22100,14 @@ fn wecom_row_el(
                 .bg(if flat {
                     gpui::rgba(0x00000000)
                 } else {
-                    wecom_theme::bubble_in()
+                    wechat_theme::bubble_in()
                 })
                 .px(px(if flat { 0. } else { 10. }))
                 .py(px(if flat { 0. } else { 6. }))
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(font_size))
                 .line_height(px(font_size + 8.))
-                .text_color(wecom_theme::bubble_text())
+                .text_color(wechat_theme::bubble_text())
                 .child(kit_markdown_el(
                     format!("wechat-md-{index}"),
                     text,
@@ -22171,23 +22171,23 @@ fn wecom_row_el(
                 .child(icons::icon(
                     icons::Icon::Brain,
                     14.,
-                    wecom_theme::icon(),
+                    wechat_theme::icon(),
                 ));
             if is_group && let Some(name) = member {
                 header = header.child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
-                        .text_color(wecom_theme::sender_label())
+                        .text_color(wechat_theme::sender_label())
                         .child(SharedString::from(name.clone())),
                 );
             }
             header = header.child(
                 div()
-                    .font_family(wecom_theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(12.))
                     .line_height(px(18.))
-                    .text_color(wecom_theme::chat_title())
+                    .text_color(wechat_theme::chat_title())
                     .child(if streaming {
                         i18n::t("思考中…").to_string()
                     } else {
@@ -22202,9 +22202,9 @@ fn wecom_row_el(
                 };
                 header = header.child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(SharedString::from(text)),
                 );
             }
@@ -22221,13 +22221,13 @@ fn wecom_row_el(
                         .w_full()
                         .max_w(px(560.))
                         .rounded(px(theme::RADIUS_CHIP))
-                        .bg(wecom_theme::panel_card_bg())
+                        .bg(wechat_theme::panel_card_bg())
                         .px(px(10.))
                         .py(px(6.))
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(wecom_theme::list_preview())
+                        .text_color(wechat_theme::list_preview())
                         .child(SharedString::from(text.clone())),
                 );
             }
@@ -22422,7 +22422,7 @@ fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
 
 /// 对话框里的单行/多行字段（标签 + 输入框外壳）。`id` 必须窗口内唯一。
 fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInput>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .flex()
         .flex_col()
@@ -22430,7 +22430,7 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
@@ -22438,7 +22438,7 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
                 .line_height(px(18.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
-                    wecom_theme::list_preview()
+                    wechat_theme::list_preview()
                 } else {
                     theme::ink_secondary()
                 })
@@ -22452,26 +22452,26 @@ fn dialog_field(id: &'static str, label: &'static str, input: &Entity<SimpleInpu
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
                 .border_color(if wechat {
-                    wecom_theme::panel_divider()
+                    wechat_theme::panel_divider()
                 } else {
                     theme::edge()
                 })
                 .bg(if wechat {
-                    wecom_theme::chat_bg()
+                    wechat_theme::chat_bg()
                 } else {
                     theme::card()
                 })
                 .px(px(10.))
                 .py(px(6.))
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(13.))
                 .line_height(px(18.))
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink()
                 })
@@ -22509,7 +22509,7 @@ fn overlay_center(card: impl IntoElement + gpui::Styled + 'static) -> gpui::AnyE
 
 /// 开关（微信：36×20 胶囊 + 16px 圆滑块；打开时微信绿）。
 fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div> {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .id(id)
         .w(px(36.))
@@ -22517,12 +22517,12 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
         .rounded_full()
         .bg(if on {
             if wechat {
-                wecom_theme::send_enabled()
+                wechat_theme::send_enabled()
             } else {
                 theme::accent()
             }
         } else if wechat {
-            wecom_theme::panel_divider()
+            wechat_theme::panel_divider()
         } else {
             theme::hover()
         })
@@ -22541,7 +22541,7 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
 
 /// 图标按钮（微信皮肤：28 方角、透明底、悬停叠色）。
 fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stateful<gpui::Div> {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .id(id)
         .size(px(28.))
@@ -22552,7 +22552,7 @@ fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stat
         .pointer()
         .hover(|style| {
             style.bg(if wechat {
-                wecom_theme::nav_item_hover_bg()
+                wechat_theme::nav_item_hover_bg()
             } else {
                 theme::hover()
             })
@@ -22561,7 +22561,7 @@ fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stat
             glyph,
             15.,
             if wechat {
-                wecom_theme::icon()
+                wechat_theme::icon()
             } else {
                 theme::ink_secondary()
             },
@@ -22573,7 +22573,7 @@ fn icon_button(id: impl Into<gpui::ElementId>, glyph: icons::Icon) -> gpui::Stat
 /// 对话框右上角关闭钮：统一走根部的 Esc 关闭链（最上层浮层优先）。
 /// 弹窗头部的「Esc 关闭」（可点击；与所有对话框一致的关闭入口）。
 fn dialog_close_hint(id: &'static str) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .id(id)
         .h(px(24.))
@@ -22584,20 +22584,20 @@ fn dialog_close_hint(id: &'static str) -> impl IntoElement {
         .pointer()
         .hover(|style| {
             style.bg(if wechat {
-                wecom_theme::nav_item_hover_bg()
+                wechat_theme::nav_item_hover_bg()
             } else {
                 theme::hover()
             })
         })
         .font_family(if wechat {
-            wecom_theme::FONT_FAMILY
+            wechat_theme::FONT_FAMILY
         } else {
             theme::FONT_FAMILY
         })
         .text_size(px(11.))
         .line_height(px(16.))
         .text_color(if wechat {
-            wecom_theme::time_label()
+            wechat_theme::time_label()
         } else {
             theme::ink_tertiary()
         })
@@ -22608,19 +22608,19 @@ fn dialog_close_hint(id: &'static str) -> impl IntoElement {
 }
 
 fn dialog_card(width: f32) -> gpui::Div {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .relative()
         .w(px(width))
         .rounded(px(theme::RADIUS_MENU))
         .border_1()
         .border_color(if wechat {
-            wecom_theme::panel_divider()
+            wechat_theme::panel_divider()
         } else {
             theme::edge()
         })
         .bg(if wechat {
-            wecom_theme::panel_card_bg()
+            wechat_theme::panel_card_bg()
         } else {
             theme::app()
         })
@@ -22723,8 +22723,8 @@ fn user_text_with_mentions(text: &str, names: &[String]) -> gpui::AnyElement {
                     start..end,
                     HighlightStyle {
                         background_color: Some(Hsla::from(ui_accent_soft())),
-                        color: Some(Hsla::from(if wecom_theme::active() {
-                            wecom_theme::bubble_out_text()
+                        color: Some(Hsla::from(if wechat_theme::active() {
+                            wechat_theme::bubble_out_text()
                         } else {
                             theme::bubble_user_ink()
                         })),
@@ -22949,19 +22949,19 @@ fn wecom_message_actions(
         .px(px(6.))
         .py(px(2.))
         .rounded(px(theme::RADIUS_TAG))
-        .bg(wecom_theme::chip_bg());
+        .bg(wechat_theme::chip_bg());
 
     let copy_text = text.to_string();
     let weak_copy = weak.clone();
     bar = bar.child(
         div()
             .id(SharedString::from(format!("wecom-copy-{index}")))
-            .font_family(wecom_theme::FONT_FAMILY)
+            .font_family(wechat_theme::FONT_FAMILY)
             .text_size(px(ui_kit::T_LABEL))
             .line_height(px(ui_kit::T_LABEL_LH))
-            .text_color(wecom_theme::chip_text())
+            .text_color(wechat_theme::chip_text())
             .pointer()
-            .hover(|style| style.text_color(wecom_theme::chat_title()))
+            .hover(|style| style.text_color(wechat_theme::chat_title()))
             .on_click(move |_event, _window, cx| {
                 let text = copy_text.clone();
                 let _ = weak_copy.update(cx, |this, cx| {
@@ -22978,12 +22978,12 @@ fn wecom_message_actions(
         bar = bar.child(
             div()
                 .id(SharedString::from(format!("wecom-copy-code-{index}")))
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(ui_kit::T_LABEL))
                 .line_height(px(ui_kit::T_LABEL_LH))
-                .text_color(wecom_theme::chip_text())
+                .text_color(wechat_theme::chip_text())
                 .pointer()
-                .hover(|style| style.text_color(wecom_theme::chat_title()))
+                .hover(|style| style.text_color(wechat_theme::chat_title()))
                 .on_click(move |_event, _window, cx| {
                     let code = code.clone();
                     let _ = weak_code.update(cx, |this, cx| {
@@ -23126,7 +23126,7 @@ fn history_attachment_view(
                     .rounded(px(theme::RADIUS_CHIP))
                     .overflow_hidden()
                     .border_1()
-                    .border_color(wecom_theme::composer_border())
+                    .border_color(wechat_theme::composer_border())
                     .pointer()
                     .hover(|style| style.bg(theme::hover()))
                     .on_click(move |_event, _window, cx| {
@@ -23153,7 +23153,7 @@ fn history_attachment_view(
                 .id(SharedString::from(format!("history-img-load-{}", ref_key)))
                 .h(px(24.))
                 .rounded(px(theme::RADIUS_TAG))
-                .bg(wecom_theme::chip_bg())
+                .bg(wechat_theme::chip_bg())
                 .px(px(6.))
                 .flex()
                 .items_center()
@@ -23166,21 +23166,21 @@ fn history_attachment_view(
                         let _ = weak.update(cx, |this, cx| this.load_history_image(&meta, cx));
                     })
                 })
-                .child(icons::icon(icons::Icon::Paperclip, 11., wecom_theme::icon()))
+                .child(icons::icon(icons::Icon::Paperclip, 11., wechat_theme::icon()))
                 .child(
                     div()
                         .max_w(px(160.))
                         .truncate()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(ui_kit::T_LABEL))
-                        .text_color(wecom_theme::chip_text())
+                        .text_color(wechat_theme::chip_text())
                         .child(SharedString::from(meta.file_name.clone())),
                 )
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(ui_kit::T_LABEL))
-                        .text_color(wecom_theme::list_preview())
+                        .text_color(wechat_theme::list_preview())
                         .child(if loading { i18n::t("加载中…") } else { i18n::t("加载") }),
                 ),
         );
@@ -23194,14 +23194,14 @@ fn history_attachment_view(
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .child(icons::icon(icons::Icon::Paperclip, 11., wecom_theme::icon()))
+                .child(icons::icon(icons::Icon::Paperclip, 11., wechat_theme::icon()))
                 .child(
                     div()
                         .max_w(px(220.))
                         .truncate()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(ui_kit::T_LABEL))
-                        .text_color(wecom_theme::chip_text())
+                        .text_color(wechat_theme::chip_text())
                         .child(SharedString::from(name.clone())),
                 ),
         );
@@ -23857,7 +23857,7 @@ fn settings_section_action(
     title: impl Into<SharedString>,
     action: impl IntoElement,
 ) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .w_full()
         .pt(px(10.))
@@ -23868,7 +23868,7 @@ fn settings_section_action(
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
@@ -23876,7 +23876,7 @@ fn settings_section_action(
                 .line_height(px(18.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink()
                 })
@@ -23890,13 +23890,13 @@ fn settings_action_button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .id(id)
         .h(px(28.))
         .rounded(px(theme::RADIUS_PILL))
         .bg(if wechat {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::hover()
         })
@@ -23909,7 +23909,7 @@ fn settings_action_button(
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
@@ -23917,7 +23917,7 @@ fn settings_action_button(
                 .line_height(px(18.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink()
                 })
@@ -23952,8 +23952,8 @@ fn connector_link(
 
 /// 当前皮肤的强调色（微信绿 / 经典强调色）。
 fn ui_accent() -> Rgba {
-    if wecom_theme::active() {
-        wecom_theme::send_enabled()
+    if wechat_theme::active() {
+        wechat_theme::send_enabled()
     } else {
         theme::accent()
     }
@@ -23961,8 +23961,8 @@ fn ui_accent() -> Rgba {
 
 /// 当前皮肤的强调色淡底。
 fn ui_accent_soft() -> Rgba {
-    if wecom_theme::active() {
-        let accent = wecom_theme::send_enabled();
+    if wechat_theme::active() {
+        let accent = wechat_theme::send_enabled();
         Rgba {
             r: accent.r,
             g: accent.g,
@@ -23985,13 +23985,13 @@ fn connector_icon(id: &str, category: &str) -> gpui::AnyElement {
         "design" => icons::Icon::Sparkles,
         _ => icons::Icon::Plug,
     };
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     let container = div()
         .size(px(26.))
         .flex_shrink_0()
         .rounded(px(theme::RADIUS_FIELD))
         .bg(if wechat {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::hover()
         })
@@ -24019,7 +24019,7 @@ fn connector_icon(id: &str, category: &str) -> gpui::AnyElement {
             glyph,
             14.,
             if wechat {
-                wecom_theme::icon_strong()
+                wechat_theme::icon_strong()
             } else {
                 theme::ink_secondary()
             },
@@ -24033,7 +24033,7 @@ fn connector_chip(
     label: impl Into<gpui::SharedString>,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .id(id)
         .h(px(28.))
@@ -24041,25 +24041,25 @@ fn connector_chip(
         .border_1()
         .border_color(if active {
             if wechat {
-                wecom_theme::send_enabled()
+                wechat_theme::send_enabled()
             } else {
                 theme::accent()
             }
         } else {
             if wechat {
-                wecom_theme::panel_divider()
+                wechat_theme::panel_divider()
             } else {
                 theme::edge()
             }
         })
         .bg(if active {
             if wechat {
-                wecom_theme::chip_bg()
+                wechat_theme::chip_bg()
             } else {
                 theme::accent_soft()
             }
         } else if wechat {
-            wecom_theme::panel_bg()
+            wechat_theme::panel_bg()
         } else {
             theme::card()
         })
@@ -24073,12 +24073,12 @@ fn connector_chip(
         .line_height(px(18.))
         .text_color(if active {
             if wechat {
-                wecom_theme::send_enabled()
+                wechat_theme::send_enabled()
             } else {
                 theme::accent()
             }
         } else if wechat {
-            wecom_theme::panel_text()
+            wechat_theme::panel_text()
         } else {
             theme::ink_secondary()
         })
@@ -24114,8 +24114,8 @@ fn settings_tool_scope_section(
         detail,
         bot_detail,
     } = text;
-    let row_hover = if wecom_theme::active() {
-        wecom_theme::list_hover()
+    let row_hover = if wechat_theme::active() {
+        wechat_theme::list_hover()
     } else {
         theme::hover()
     };
@@ -24193,7 +24193,7 @@ fn im_choice_button(
     label: impl Into<gpui::SharedString>,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     let label: gpui::SharedString = label.into();
     div()
         .id(id)
@@ -24209,7 +24209,7 @@ fn im_choice_button(
         .bg(if active {
             ui_accent_soft()
         } else if wechat {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::hover()
         })
@@ -24220,7 +24220,7 @@ fn im_choice_button(
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
@@ -24228,12 +24228,12 @@ fn im_choice_button(
                 .line_height(px(18.))
                 .text_color(if active {
                     if wechat {
-                        wecom_theme::send_enabled()
+                        wechat_theme::send_enabled()
                     } else {
                         theme::accent_text()
                     }
                 } else if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink_secondary()
                 })
@@ -24243,7 +24243,7 @@ fn im_choice_button(
 
 /// IM 表单字段：标签 + 单行输入框。
 fn im_field(label: impl Into<gpui::SharedString>, input: Entity<SimpleInput>) -> gpui::AnyElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     let label: gpui::SharedString = label.into();
     div()
         .p(px(12.))
@@ -24253,14 +24253,14 @@ fn im_field(label: impl Into<gpui::SharedString>, input: Entity<SimpleInput>) ->
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(12.))
                 .line_height(px(18.))
                 .text_color(if wechat {
-                    wecom_theme::list_preview()
+                    wechat_theme::list_preview()
                 } else {
                     theme::ink_secondary()
                 })
@@ -24272,12 +24272,12 @@ fn im_field(label: impl Into<gpui::SharedString>, input: Entity<SimpleInput>) ->
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
                 .border_color(if wechat {
-                    wecom_theme::composer_border()
+                    wechat_theme::composer_border()
                 } else {
                     theme::edge()
                 })
                 .bg(if wechat {
-                    wecom_theme::composer_bg()
+                    wechat_theme::composer_bg()
                 } else {
                     theme::bg()
                 })
@@ -24293,13 +24293,13 @@ fn settings_button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .id(id)
         .h(px(30.))
         .rounded(px(theme::RADIUS_PILL))
         .bg(if wechat {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::hover()
         })
@@ -24311,7 +24311,7 @@ fn settings_button(
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
@@ -24319,7 +24319,7 @@ fn settings_button(
                 .line_height(px(18.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink()
                 })
@@ -24329,18 +24329,18 @@ fn settings_button(
 
 /// 值块（路径/长文本）：可选小标签 + 可换行的值。
 fn value_box(value: String, label: Option<&'static str>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .w_full()
         .rounded(px(if wechat { 8. } else { theme::RADIUS_FIELD }))
         .border_1()
         .border_color(if wechat {
-            wecom_theme::panel_divider()
+            wechat_theme::panel_divider()
         } else {
             theme::edge()
         })
         .bg(if wechat {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::card()
         })
@@ -24352,13 +24352,13 @@ fn value_box(value: String, label: Option<&'static str>) -> impl IntoElement {
         .children(label.map(|label| {
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(11.))
                 .text_color(if wechat {
-                    wecom_theme::time_label()
+                    wechat_theme::time_label()
                 } else {
                     theme::ink_tertiary()
                 })
@@ -24367,14 +24367,14 @@ fn value_box(value: String, label: Option<&'static str>) -> impl IntoElement {
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(if wechat { 13. } else { 12. }))
                 .line_height(px(if wechat { 20. } else { 16. }))
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink_secondary()
                 })
@@ -24431,7 +24431,7 @@ fn settings_row_inner(
     title: String,
     detail: Option<String>,
 ) -> gpui::Div {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     // 三栏布局：标签固定 130 / 说明吃掉中间 / 控件贴右缘。
     // 原来是「标题 + 说明」竖堆在左、控件在右，说明只能占很窄一截，
     // 而且每行高度被说明撑高一倍。
@@ -24455,14 +24455,14 @@ fn settings_row_inner(
             .flex_shrink_0()
             .truncate()
             .font_family(if wechat {
-                wecom_theme::FONT_FAMILY
+                wechat_theme::FONT_FAMILY
             } else {
                 theme::FONT_FAMILY
             })
             .text_size(px(13.))
             .line_height(px(18.))
             .text_color(if wechat {
-                wecom_theme::chat_title()
+                wechat_theme::chat_title()
             } else {
                 theme::ink()
             })
@@ -24475,14 +24475,14 @@ fn settings_row_inner(
             .min_w(px(0.))
             .truncate()
             .font_family(if wechat {
-                wecom_theme::FONT_FAMILY
+                wechat_theme::FONT_FAMILY
             } else {
                 theme::FONT_FAMILY
             })
             .text_size(px(12.))
             .line_height(px(16.))
             .text_color(if wechat {
-                wecom_theme::list_preview()
+                wechat_theme::list_preview()
             } else {
                 theme::ink_secondary()
             })
@@ -24493,19 +24493,19 @@ fn settings_row_inner(
 }
 
 fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     let count = rows.len();
     let mut card = div()
         .w_full()
         .rounded(px(theme::RADIUS_FIELD))
         .border_1()
         .border_color(if wechat {
-            wecom_theme::composer_border()
+            wechat_theme::composer_border()
         } else {
             theme::edge()
         })
         .bg(if wechat {
-            wecom_theme::panel_bg()
+            wechat_theme::panel_bg()
         } else {
             theme::card()
         })
@@ -24518,7 +24518,7 @@ fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
             cell = cell
                 .border_b(px(0.5))
                 .border_color(if wechat {
-                    wecom_theme::divider()
+                    wechat_theme::divider()
                 } else {
                     theme::edge()
                 });
@@ -24529,7 +24529,7 @@ fn settings_group(rows: Vec<gpui::AnyElement>) -> impl IntoElement {
 }
 
 fn kv_row(value: String, note: &'static str) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .min_h(px(42.))
         .w_full()
@@ -24542,14 +24542,14 @@ fn kv_row(value: String, note: &'static str) -> impl IntoElement {
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(13.))
                 .line_height(px(18.))
                 .text_color(if wechat {
-                    wecom_theme::chat_title()
+                    wechat_theme::chat_title()
                 } else {
                     theme::ink()
                 })
@@ -24559,14 +24559,14 @@ fn kv_row(value: String, note: &'static str) -> impl IntoElement {
         .child(
             div()
                 .font_family(if wechat {
-                    wecom_theme::FONT_FAMILY
+                    wechat_theme::FONT_FAMILY
                 } else {
                     theme::FONT_FAMILY
                 })
                 .text_size(px(12.))
                 .line_height(px(16.))
                 .text_color(if wechat {
-                    wecom_theme::time_label()
+                    wechat_theme::time_label()
                 } else {
                     theme::ink_tertiary()
                 })
@@ -24575,18 +24575,18 @@ fn kv_row(value: String, note: &'static str) -> impl IntoElement {
 }
 
 fn hint_row(text: impl Into<SharedString>) -> impl IntoElement {
-    let wechat = wecom_theme::active();
+    let wechat = wechat_theme::active();
     div()
         .px(px(8.))
         .py(px(6.))
         .font_family(if wechat {
-            wecom_theme::FONT_FAMILY
+            wechat_theme::FONT_FAMILY
         } else {
             theme::FONT_FAMILY
         })
         .text_size(px(11.))
         .text_color(if wechat {
-            wecom_theme::list_preview()
+            wechat_theme::list_preview()
         } else {
             theme::ink_tertiary()
         })
@@ -24843,14 +24843,14 @@ fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
     gpui::component::text::TextView::markdown(id, text.to_string())
         .selectable(true)
         .font_family(if wechat {
-            wecom_theme::FONT_FAMILY
+            wechat_theme::FONT_FAMILY
         } else {
             theme::FONT_FAMILY
         })
         .text_size(px(font_size))
         .line_height(px(font_size + if wechat { 8. } else { 10. }))
         .text_color(if wechat {
-            wecom_theme::bubble_text()
+            wechat_theme::bubble_text()
         } else {
             theme::ink()
         })
@@ -24945,7 +24945,7 @@ fn typing_bubble() -> gpui::AnyElement {
             div()
                 .size(px(5.))
                 .rounded_full()
-                .bg(wecom_theme::time_label())
+                .bg(wechat_theme::time_label())
                 .with_animation(
                     SharedString::from(format!("typing-dot-{index}")),
                     gpui::Animation::new(Duration::from_millis(1100)).repeat(),
@@ -24967,8 +24967,8 @@ fn typing_bubble() -> gpui::AnyElement {
             div()
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
-                .border_color(wecom_theme::composer_border())
-                .bg(wecom_theme::panel_card_bg())
+                .border_color(wechat_theme::composer_border())
+                .bg(wechat_theme::panel_card_bg())
                 .px(px(10.))
                 .py(px(8.))
                 .child(dots),
@@ -25045,10 +25045,10 @@ fn tool_row_base(
 ) -> gpui::Div {
     let state_label = tool_state_label(state);
     let (status_color, icon_color) = match state {
-        "running" => (wecom_theme::send_enabled(), wecom_theme::send_enabled()),
-        "error" => (wecom_theme::nav_badge_bg(), wecom_theme::nav_badge_bg()),
-        "done" => (wecom_theme::chat_title(), wecom_theme::chip_text()),
-        _ => (wecom_theme::time_label(), wecom_theme::chip_text()),
+        "running" => (wechat_theme::send_enabled(), wechat_theme::send_enabled()),
+        "error" => (wechat_theme::nav_badge_bg(), wechat_theme::nav_badge_bg()),
+        "done" => (wechat_theme::chat_title(), wechat_theme::chip_text()),
+        _ => (wechat_theme::time_label(), wechat_theme::chip_text()),
     };
     // 工具行保持单行紧凑：1px 垂直留白 + 16px 行高，连续调用不撑高 transcript。
     let mut row = div()
@@ -25062,7 +25062,7 @@ fn tool_row_base(
         .children((!state_label.is_empty()).then(|| {
             div()
                 .flex_shrink_0()
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(12.))
                 .line_height(px(16.))
                 .text_color(status_color)
@@ -25073,10 +25073,10 @@ fn tool_row_base(
                 .flex_1()
                 .min_w(px(0.))
                 .truncate()
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(12.))
                 .line_height(px(16.))
-                .text_color(wecom_theme::list_preview())
+                .text_color(wechat_theme::list_preview())
                 .child(SharedString::from(primary.to_string())),
         );
     if let Some((added, removed)) = counts
@@ -25092,7 +25092,7 @@ fn tool_row_base(
                 icons::Icon::ChevronRight
             },
             12.,
-            wecom_theme::icon(),
+            wechat_theme::icon(),
         )
     }))
 }
@@ -25112,13 +25112,13 @@ fn tool_copy_button(
         .flex()
         .items_center()
         .pointer()
-        .font_family(wecom_theme::FONT_FAMILY)
+        .font_family(wechat_theme::FONT_FAMILY)
         .text_size(px(ui_kit::T_LABEL))
-        .text_color(wecom_theme::time_label())
+        .text_color(wechat_theme::time_label())
         .hover(|style| {
             style
-                .bg(wecom_theme::nav_item_hover_bg())
-                .text_color(wecom_theme::chat_title())
+                .bg(wechat_theme::nav_item_hover_bg())
+                .text_color(wechat_theme::chat_title())
         })
         .on_click(move |_event, _window, cx| {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
@@ -25151,7 +25151,7 @@ fn tool_images_row(
                 .h(px(96.))
                 .rounded(px(theme::RADIUS_CHIP))
                 .border_1()
-                .border_color(wecom_theme::composer_border())
+                .border_color(wechat_theme::composer_border())
                 .overflow_hidden()
                 .pointer()
                 .hover(|style| style.bg(theme::hover()))
@@ -25168,9 +25168,9 @@ fn tool_images_row(
     if paths.len() > 4 {
         row = row.child(
             div()
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(ui_kit::T_LABEL))
-                .text_color(wecom_theme::time_label())
+                .text_color(wechat_theme::time_label())
                 .child(SharedString::from(format!("+{}", paths.len() - 4))),
         );
     }
@@ -25264,8 +25264,8 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
         .w_full()
         .rounded(px(theme::RADIUS_FIELD))
         .border_1()
-        .border_color(wecom_theme::composer_border())
-        .bg(wecom_theme::panel_card_bg())
+        .border_color(wechat_theme::composer_border())
+        .bg(wechat_theme::panel_card_bg())
         .py(px(4.))
         .flex()
         .flex_col()
@@ -25279,7 +25279,7 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
                     .line_height(px(15.))
-                    .text_color(wecom_theme::list_preview())
+                    .text_color(wechat_theme::list_preview())
                     .child(SharedString::from(output.to_string())),
             );
         }
@@ -25289,7 +25289,7 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
         let (marker, color) = match line.kind {
             tool_render::DiffKind::Added => ("+", theme::success()),
             tool_render::DiffKind::Removed => ("-", theme::danger()),
-            tool_render::DiffKind::Context => (" ", wecom_theme::list_preview()),
+            tool_render::DiffKind::Context => (" ", wechat_theme::list_preview()),
         };
         let text = if line.text.is_empty() {
             " ".to_string()
@@ -25311,7 +25311,7 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
                         .w(px(22.))
                         .flex_shrink_0()
                         .text_right()
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(SharedString::from(
                             line.number.clone().unwrap_or_default(),
                         )),
@@ -25331,10 +25331,10 @@ fn edit_diff_panel(info: &tool_render::EditInfo, output: &str) -> gpui::AnyEleme
             div()
                 .px(px(6.))
                 .pt(px(1.))
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(11.))
                 .line_height(px(15.))
-                .text_color(wecom_theme::time_label())
+                .text_color(wechat_theme::time_label())
                 .child(SharedString::from(if i18n::is_en() {
                     format!("… {} more lines", info.lines.len() - MAX_LINES)
                 } else {
@@ -25404,14 +25404,14 @@ fn wecom_edit_card(
                     .w_full()
                     .rounded(px(theme::RADIUS_FIELD))
                     .border_1()
-                    .border_color(wecom_theme::composer_border())
-                    .bg(wecom_theme::panel_card_bg())
+                    .border_color(wechat_theme::composer_border())
+                    .bg(wechat_theme::panel_card_bg())
                     .px(px(10.))
                     .py(px(8.))
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
                     .line_height(px(15.))
-                    .text_color(wecom_theme::list_preview())
+                    .text_color(wechat_theme::list_preview())
                     .child(SharedString::from(capped_text(&message.tool_detail, 40)))
                     .into_any_element()
             });
@@ -25505,8 +25505,8 @@ fn wecom_exec_card(
             .w_full()
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
-            .border_color(wecom_theme::composer_border())
-            .bg(wecom_theme::panel_card_bg())
+            .border_color(wechat_theme::composer_border())
+            .bg(wechat_theme::panel_card_bg())
             .px(px(10.))
             .py(px(8.))
             .flex()
@@ -25525,14 +25525,14 @@ fn wecom_exec_card(
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_color(wecom_theme::time_label())
+                            .text_color(wechat_theme::time_label())
                             .child("$"),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .text_color(wecom_theme::chat_title())
+                            .text_color(wechat_theme::chat_title())
                             .child(SharedString::from(command.clone())),
                     ),
             );
@@ -25544,10 +25544,10 @@ fn wecom_exec_card(
             if message.tool_state == "running" {
                 panel = panel.child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
                         .line_height(px(15.))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(i18n::t("等待输出…")),
                 );
             }
@@ -25558,7 +25558,7 @@ fn wecom_exec_card(
                     .font_family(theme::FONT_MONO)
                     .text_size(px(11.))
                     .line_height(px(15.))
-                    .text_color(wecom_theme::list_preview())
+                    .text_color(wechat_theme::list_preview())
                     .child(SharedString::from(capped_text(output, MAX_OUTPUT_LINES))),
             );
         }
@@ -25577,7 +25577,7 @@ fn wecom_exec_card(
                     .text_color(if failed {
                         theme::danger()
                     } else {
-                        wecom_theme::time_label()
+                        wechat_theme::time_label()
                     })
                     .child(SharedString::from(label)),
             );
@@ -25825,14 +25825,14 @@ fn wecom_tool_card(
                                     .w_full()
                                     .rounded(px(theme::RADIUS_FIELD))
                                     .border_1()
-                                    .border_color(wecom_theme::composer_border())
-                                    .bg(wecom_theme::panel_card_bg())
+                                    .border_color(wechat_theme::composer_border())
+                                    .bg(wechat_theme::panel_card_bg())
                                     .px(px(10.))
                                     .py(px(8.))
                                     .font_family(theme::FONT_MONO)
                                     .text_size(px(11.))
                                     .line_height(px(15.))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(capped_text(&detail, 40))),
                             )
                             .children(tool_images_row(
@@ -25965,7 +25965,7 @@ impl PilotApp {
             .flex_1()
             .min_h(px(0.))
             .w_full()
-            .bg(wecom_theme::window_bg())
+            .bg(wechat_theme::window_bg())
             .child(self.wecom_titlebar(window, cx))
             .child({
                 let mut body = div()
@@ -26009,13 +26009,13 @@ impl PilotApp {
         };
         let topmost = self.topmost;
         div()
-            .h(px(wecom_theme::TITLEBAR_HEIGHT))
+            .h(px(wechat_theme::TITLEBAR_HEIGHT))
             .flex_shrink_0()
             .w_full()
             .flex()
             .items_center()
-            .bg(wecom_theme::titlebar_bg())
-            .text_color(wecom_theme::nav_text())
+            .bg(wechat_theme::titlebar_bg())
+            .text_color(wechat_theme::nav_text())
             .child(
                 div()
                     .window_control_area(WindowControlArea::Drag)
@@ -26032,10 +26032,10 @@ impl PilotApp {
                     .justify_center()
                     .pointer()
                     .when(topmost, |el| {
-                        el.bg(wecom_theme::nav_item_selected_bg())
+                        el.bg(wechat_theme::nav_item_selected_bg())
                     })
                     .when(!topmost, |el| {
-                        el.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        el.hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                     })
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.topmost = !this.topmost;
@@ -26052,7 +26052,7 @@ impl PilotApp {
                     .child(icons::icon_light(
                         icons::Icon::Pushpin,
                         menu_icons::TITLEBAR_SIZE,
-                        if topmost { wecom_theme::nav_text_active() } else { wecom_theme::icon() },
+                        if topmost { wechat_theme::nav_text_active() } else { wechat_theme::icon() },
                     )),
             )
             .child(
@@ -26103,9 +26103,9 @@ impl PilotApp {
             .justify_center()
             .pointer();
         let base = if danger {
-            base.hover(|style| style.bg(wecom_theme::nav_badge_bg()))
+            base.hover(|style| style.bg(wechat_theme::nav_badge_bg()))
         } else {
-            base.hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+            base.hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
         };
         // 最小化/最大化的直线更密，改用 light 字重，和关闭图标观感一致。
         let light = matches!(
@@ -26113,10 +26113,10 @@ impl PilotApp {
             icons::Icon::Minus | icons::Icon::WindowMaximize | icons::Icon::WindowRestore
         );
         let icon = if light {
-            icons::icon_light(glyph, menu_icons::TITLEBAR_SIZE, wecom_theme::icon())
+            icons::icon_light(glyph, menu_icons::TITLEBAR_SIZE, wechat_theme::icon())
                 .into_any_element()
         } else {
-            icons::icon(glyph, menu_icons::TITLEBAR_SIZE, wecom_theme::icon()).into_any_element()
+            icons::icon(glyph, menu_icons::TITLEBAR_SIZE, wechat_theme::icon()).into_any_element()
         };
         base.on_click(move |_: &gpui::ClickEvent, window, _| action(window))
             .child(icon)
@@ -26131,16 +26131,16 @@ impl PilotApp {
             .size(px(size))
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_CHIP))
-            .bg(wecom_theme::avatar_color(id))
+            .bg(wechat_theme::avatar_color(id))
             .flex()
             .items_center()
             .justify_center()
             .child(
                 div()
-                    .font_family(wecom_theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(size * 0.42))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(wecom_theme::nav_text_active())
+                    .text_color(wechat_theme::nav_text_active())
                     .child(name.chars().next().unwrap_or('B').to_string()),
             )
             .into_any_element()
@@ -26161,7 +26161,7 @@ impl PilotApp {
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_CHIP))
             .overflow_hidden()
-            .bg(wecom_theme::group_avatar_bg())
+            .bg(wechat_theme::group_avatar_bg())
             .p(px(pad))
             .flex()
             .flex_col()
@@ -26237,14 +26237,14 @@ impl PilotApp {
             .size(px(size))
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_TAG))
-            .bg(wecom_theme::avatar_color(id))
+            .bg(wechat_theme::avatar_color(id))
             .flex()
             .items_center()
             .justify_center()
             .child(icons::icon(
                 icons::Icon::Hash,
                 size * 0.52,
-                wecom_theme::nav_text_active(),
+                wechat_theme::nav_text_active(),
             ))
     }
 
@@ -26256,13 +26256,13 @@ impl PilotApp {
             .map(|chat| chat.unread)
             .sum();
         let mut rail = div()
-            .w(px(wecom_theme::NAV_WIDTH))
+            .w(px(wechat_theme::NAV_WIDTH))
             .flex_shrink_0()
             .h_full()
             .flex()
             .flex_col()
             .items_center()
-            .bg(wecom_theme::nav_gradient())
+            .bg(wechat_theme::nav_gradient())
             .pt(px(12.))
             .pb(px(12.))
             .gap(px(4.));
@@ -26287,9 +26287,9 @@ impl PilotApp {
                         .bottom(px(0.))
                         .size(px(10.))
                         .rounded_full()
-                        .bg(wecom_theme::online_dot())
+                        .bg(wechat_theme::online_dot())
                         .border_2()
-                        .border_color(wecom_theme::titlebar_bg()),
+                        .border_color(wechat_theme::titlebar_bg()),
                 ),
         );
         rail = rail.child(div().h(px(8.)));
@@ -26311,7 +26311,7 @@ impl PilotApp {
                     .justify_center()
                     .pointer()
                     .bg(gpui::rgba(0x00000000))
-                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.wecom_nav = filter;
                         this.settings_open = false;
@@ -26323,9 +26323,9 @@ impl PilotApp {
                         active,
                         menu_icons::RAIL_SIZE,
                         if active {
-                            wecom_theme::send_enabled()
+                            wechat_theme::send_enabled()
                         } else {
-                            wecom_theme::nav_icon()
+                            wechat_theme::nav_icon()
                         },
                         true,
                     ))
@@ -26338,14 +26338,14 @@ impl PilotApp {
                             .h(px(16.))
                             .px(px(4.))
                             .rounded_full()
-                            .bg(wecom_theme::nav_badge_bg())
+                            .bg(wechat_theme::nav_badge_bg())
                             .flex()
                             .items_center()
                             .justify_center()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(11.))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(wecom_theme::nav_text_active())
+                            .text_color(wechat_theme::nav_text_active())
                             .child(SharedString::from(if total_unread > 99 {
                                 "99+".to_string()
                             } else {
@@ -26366,7 +26366,7 @@ impl PilotApp {
                     .justify_center()
                     .pointer()
                     .bg(gpui::rgba(0x00000000))
-                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.open_settings_at(tab, _window, cx);
                         cx.notify();
@@ -26376,9 +26376,9 @@ impl PilotApp {
                         active,
                         menu_icons::RAIL_SIZE,
                         if active {
-                            wecom_theme::send_enabled()
+                            wechat_theme::send_enabled()
                         } else {
-                            wecom_theme::nav_icon()
+                            wechat_theme::nav_icon()
                         },
                         true,
                     )),
@@ -26394,7 +26394,7 @@ impl PilotApp {
                 .justify_center()
                 .pointer()
                 .bg(gpui::rgba(0x00000000))
-                .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     // 设置页头不再放关闭按钮；导轨齿轮同时承担开/关。
                     this.settings_open = !this.settings_open;
@@ -26414,9 +26414,9 @@ impl PilotApp {
                     self.settings_open,
                     menu_icons::RAIL_SIZE,
                     if self.settings_open {
-                        wecom_theme::send_enabled()
+                        wechat_theme::send_enabled()
                     } else {
-                        wecom_theme::nav_icon()
+                        wechat_theme::nav_icon()
                     },
                     true,
                 )),
@@ -26596,12 +26596,12 @@ impl PilotApp {
     fn wecom_list(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 设置页菜单与会话列表同宽（246），切页时左列不跳变。
         let list = div()
-            .w(px(wecom_theme::LIST_WIDTH))
+            .w(px(wechat_theme::LIST_WIDTH))
             .flex_shrink_0()
             .h_full()
             .flex()
             .flex_col()
-            .bg(wecom_theme::list_gradient());
+            .bg(wechat_theme::list_gradient());
         if self.settings_open {
             // 行本身通栏到侧栏边缘，内容缩进放在行内；滚动条占右侧 6px。
             let mut rows = div()
@@ -26621,7 +26621,7 @@ impl PilotApp {
                             .mx(px(8.))
                             .my(px(6.))
                             .h(px(0.5))
-                            .bg(wecom_theme::divider()),
+                            .bg(wechat_theme::divider()),
                     );
                 }
                 // 尾部信息页照 DS 用次级色（关于/反馈/浏览器/电脑操控/更多）。
@@ -26636,8 +26636,8 @@ impl PilotApp {
                         // 焦点态只用底色 + inset 阴影：border 会增加元素宽度，
                         // 把固定 246px 宽的侧栏撑破（实测整体错位 3px）。
                         .when(nav_focused, |el| {
-                            el.bg(wecom_theme::nav_item_hover_bg())
-                                .shadow(vec![focus_ring_left(wecom_theme::send_enabled())])
+                            el.bg(wechat_theme::nav_item_hover_bg())
+                                .shadow(vec![focus_ring_left(wechat_theme::send_enabled())])
                         })
                         .on_action(cx.listener(
                             move |this, _: &ActivateTabStop, window, cx| {
@@ -26659,9 +26659,9 @@ impl PilotApp {
                         .items_center()
                         .gap(px(8.))
                         .pointer()
-                        .when(active, |el| el.bg(wecom_theme::send_enabled()))
+                        .when(active, |el| el.bg(wechat_theme::send_enabled()))
                         .when(!active, |el| {
-                            el.hover(|style| style.bg(wecom_theme::list_hover()))
+                            el.hover(|style| style.bg(wechat_theme::list_hover()))
                         })
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.settings_tab = index;
@@ -26682,9 +26682,9 @@ impl PilotApp {
                             if active {
                                 theme::accent_ink()
                             } else if secondary {
-                                wecom_theme::time_label()
+                                wechat_theme::time_label()
                             } else {
-                                wecom_theme::icon()
+                                wechat_theme::icon()
                             },
                         ))
                         .child(
@@ -26692,15 +26692,15 @@ impl PilotApp {
                                 .flex_1()
                                 .min_w(px(0.))
                                 .truncate()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(13.))
                                 .line_height(px(18.))
                                 .text_color(if active {
-                                    wecom_theme::list_title_selected()
+                                    wechat_theme::list_title_selected()
                                 } else if secondary {
-                                    wecom_theme::time_label()
+                                    wechat_theme::time_label()
                                 } else {
-                                    wecom_theme::list_title()
+                                    wechat_theme::list_title()
                                 })
                                 .child(i18n::t(label)),
                         )
@@ -26726,9 +26726,9 @@ impl PilotApp {
                                     if active {
                                         theme::accent_ink()
                                     } else if pinned {
-                                        wecom_theme::send_enabled()
+                                        wechat_theme::send_enabled()
                                     } else {
-                                        wecom_theme::panel_text()
+                                        wechat_theme::panel_text()
                                     },
                                 )),
                         ),
@@ -26761,9 +26761,9 @@ impl PilotApp {
             div()
                 .py(px(24.))
                 .text_center()
-                .font_family(wecom_theme::FONT_FAMILY)
+                .font_family(wechat_theme::FONT_FAMILY)
                 .text_size(px(12.))
-                .text_color(wecom_theme::list_preview())
+                .text_color(wechat_theme::list_preview())
                 .child(i18n::t("没有匹配的会话"))
                 .into_any_element()
         } else {
@@ -26788,11 +26788,11 @@ impl PilotApp {
                     div()
                         .id("wechat-search")
                         .flex_1()
-                        .h(px(wecom_theme::SEARCH_HEIGHT))
+                        .h(px(wechat_theme::SEARCH_HEIGHT))
                         .rounded(px(theme::RADIUS_TAG))
                         .border_1()
-                        .border_color(wecom_theme::composer_border())
-                        .bg(wecom_theme::search_bg())
+                        .border_color(wechat_theme::composer_border())
+                        .bg(wechat_theme::search_bg())
                         .px(px(8.))
                         .flex()
                         .items_center()
@@ -26800,16 +26800,16 @@ impl PilotApp {
                         .child(icons::icon(
                             icons::Icon::Search,
                             14.,
-                            wecom_theme::list_preview(),
+                            wechat_theme::list_preview(),
                         ))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.))
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(13.))
                                 .line_height(px(18.))
-                                .text_color(wecom_theme::list_title())
+                                .text_color(wechat_theme::list_title())
                                 .child(self.search_input.clone()),
                         ),
                 )
@@ -26818,19 +26818,19 @@ impl PilotApp {
                         .id("wechat-new")
                         .size(px(28.))
                         .rounded_full()
-                        .bg(wecom_theme::list_hover())
+                        .bg(wechat_theme::list_hover())
                         .flex()
                         .items_center()
                         .justify_center()
                         .pointer()
-                        .hover(|style| style.bg(wecom_theme::list_hover()))
+                        .hover(|style| style.bg(wechat_theme::list_hover()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             this.new_menu_open = !this.new_menu_open;
                             this.footer_menu_open = false;
                             this.detail_menu_open = false;
                             cx.notify();
                         }))
-                        .child(icons::icon(icons::Icon::Plus, 16., wecom_theme::icon())),
+                        .child(icons::icon(icons::Icon::Plus, 16., wechat_theme::icon())),
                 ),
         )
         .child(
@@ -26859,8 +26859,8 @@ impl PilotApp {
         let tab = self.settings_tab;
         // 右侧主区：窗口 - 导轨 - 设置列表 - 页面左右内边距(14+8) - 滚动条槽(6)。
         let content_width = (f32::from(window.viewport_size().width)
-            - wecom_theme::NAV_WIDTH
-            - wecom_theme::LIST_WIDTH
+            - wechat_theme::NAV_WIDTH
+            - wechat_theme::LIST_WIDTH
             - 28.
             - if self.settings_detail.is_some() {
                 ui_kit::PANEL_W
@@ -26876,7 +26876,7 @@ impl PilotApp {
             .h_full()
             .flex()
             .flex_col()
-            .bg(wecom_theme::chat_bg())
+            .bg(wechat_theme::chat_bg())
             // 内嵌设置：焦点句柄必须挂在主轴，否则无焦点元素时 Esc 会丢。
             .track_focus(&self.settings_focus)
             .child(
@@ -26891,11 +26891,11 @@ impl PilotApp {
                     .gap(px(8.))
                     .child(
                         div()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(15.))
                             .line_height(px(24.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(wecom_theme::chat_title())
+                            .text_color(wechat_theme::chat_title())
                             .child(title),
                     )
                     .children(subpage.then(|| {
@@ -26908,26 +26908,26 @@ impl PilotApp {
                             .items_center()
                             .gap(px(4.))
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.close_im_subpage(window, cx);
                             }))
                             .child(icons::icon(
                                 icons::Icon::ChevronLeft,
                                 14.,
-                                wecom_theme::chat_subtitle(),
+                                wechat_theme::chat_subtitle(),
                             ))
                             .child(
                                 div()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(12.))
                                     .line_height(px(18.))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(i18n::t("返回")),
                             )
                     }))
             )
-            .child(div().h(px(1.)).bg(wecom_theme::divider()))
+            .child(div().h(px(1.)).bg(wechat_theme::divider()))
             .child(
                 div()
                     .id("wecom-settings-scroll")
@@ -27067,11 +27067,11 @@ impl PilotApp {
                             .flex_1()
                             .min_w(px(0.))
                             .truncate()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(18.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(wecom_theme::chat_title())
+                            .text_color(wechat_theme::chat_title())
                             .child(SharedString::from(title)),
                     )
                     .child(ui::badge(status, status_tone))
@@ -27086,7 +27086,7 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.set_right_panel(false, window);
                                 cx.notify();
@@ -27094,7 +27094,7 @@ impl PilotApp {
                             .child(icons::icon(
                                 icons::Icon::SidebarCollapse,
                                 15.,
-                                wecom_theme::icon(),
+                                wechat_theme::icon(),
                             )),
                     ),
             )
@@ -27148,9 +27148,9 @@ impl PilotApp {
                                     .flex_1()
                                     .min_w(px(0.))
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(11.))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(item.content.clone())),
                             )
                             .into_any_element(),
@@ -27165,9 +27165,9 @@ impl PilotApp {
                             .py(px(ui::S1))
                             .child(
                                 div()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
-                                    .text_color(wecom_theme::time_label())
+                                    .text_color(wechat_theme::time_label())
                                     .child(SharedString::from(if i18n::is_en() {
                                         format!("{} more", overflow)
                                     } else {
@@ -27203,9 +27203,9 @@ impl PilotApp {
                             .gap(px(ui::S1))
                             .child(
                                 div()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
-                                    .text_color(wecom_theme::time_label())
+                                    .text_color(wechat_theme::time_label())
                                     .child(SharedString::from(format!("{}", index + 1))),
                             )
                             .child(
@@ -27213,9 +27213,9 @@ impl PilotApp {
                                     .flex_1()
                                     .min_w(px(0.))
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(11.))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(queued_item.text.clone())),
                             )
                             .into_any_element(),
@@ -27283,24 +27283,24 @@ impl PilotApp {
                             .items_center()
                             .gap(px(ui::S1))
                             .child(
-                                icons::icon(icons::Icon::Folder, 13., wecom_theme::icon()),
+                                icons::icon(icons::Icon::Folder, 13., wechat_theme::icon()),
                             )
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w(px(0.))
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(11.))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(name)),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
-                                    .text_color(wecom_theme::time_label())
+                                    .text_color(wechat_theme::time_label())
                                     .child(SharedString::from(label)),
                             )
                             .into_any_element(),
@@ -27315,9 +27315,9 @@ impl PilotApp {
                             .py(px(ui::S1))
                             .child(
                                 div()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
-                                    .text_color(wecom_theme::time_label())
+                                    .text_color(wechat_theme::time_label())
                                     .child(SharedString::from(if i18n::is_en() {
                                         format!("{} more files", overflow)
                                     } else {
@@ -27406,7 +27406,7 @@ impl PilotApp {
                             .items_center()
                             .gap(px(ui::S1))
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(move |this, _event, window, cx| {
                                 this.switch_to_history_session(
                                     bot_id.clone(),
@@ -27420,15 +27420,15 @@ impl PilotApp {
                                     .flex_1()
                                     .min_w(px(0.))
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(11.))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(label)),
                             )
                             .child(icons::icon(
                                 icons::Icon::ChevronRight,
                                 12.,
-                                wecom_theme::time_label(),
+                                wechat_theme::time_label(),
                             ))
                             .into_any_element(),
                     );
@@ -27464,7 +27464,7 @@ impl PilotApp {
                         .items_center()
                         .gap(px(ui::S1))
                         .pointer()
-                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.settings_detail = Some(SettingsDetail::BotMemory {
                                 bot_id: click_id.clone(),
@@ -27480,17 +27480,17 @@ impl PilotApp {
                                 .flex_1()
                                 .min_w(px(0.))
                                 .truncate()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(11.))
-                                .text_color(wecom_theme::list_preview())
+                                .text_color(wechat_theme::list_preview())
                                 .child(SharedString::from(summary)),
                         )
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(ui_kit::T_LABEL))
-                                .text_color(wecom_theme::time_label())
+                                .text_color(wechat_theme::time_label())
                                 .child(i18n::t("查看")),
                         )
                         .into_any_element(),
@@ -27527,7 +27527,7 @@ impl PilotApp {
             .h_full()
             // 不再画 border_l_1：面板底色（#252526）本来就比中栏（#1e1e1f）亮一档，
             // 再叠 1px 亮线会读成「两条分割线」。底色差已经够分隔。
-            .bg(wecom_theme::panel_bg())
+            .bg(wechat_theme::panel_bg())
             .px(px(12.))
             .py(px(12.))
             .child(
@@ -27607,7 +27607,7 @@ impl PilotApp {
             .h_full()
             .flex()
             .flex_col()
-            .bg(wecom_theme::chat_bg())
+            .bg(wechat_theme::chat_bg())
             .child(
                 div()
                     .h(px(56.))
@@ -27625,11 +27625,11 @@ impl PilotApp {
                             .child(
                                 div()
                                     .truncate()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(15.))
                                     .line_height(px(22.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(wecom_theme::chat_title())
+                                    .text_color(wechat_theme::chat_title())
                                     .child(SharedString::from(title)),
                             )
                             .children(is_bot_chat.then(|| {
@@ -27637,14 +27637,14 @@ impl PilotApp {
                                     .size(px(14.))
                                     .flex_shrink_0()
                                     .rounded(px(theme::RADIUS_TAG))
-                                    .bg(wecom_theme::chip_bg())
+                                    .bg(wechat_theme::chip_bg())
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .child(icons::icon(
                                         icons::Icon::Bot,
                                         10.,
-                                        wecom_theme::chip_text(),
+                                        wechat_theme::chip_text(),
                                     ))
                             })),
                     )
@@ -27666,7 +27666,7 @@ impl PilotApp {
                                         .justify_center()
                                         .pointer()
                                         .hover(|style| {
-                                            style.bg(wecom_theme::nav_item_hover_bg())
+                                            style.bg(wechat_theme::nav_item_hover_bg())
                                         })
                                         .on_click(cx.listener(|this, _event, window, cx| {
                                             this.set_right_panel(true, window);
@@ -27675,7 +27675,7 @@ impl PilotApp {
                                         .child(icons::icon(
                                             icons::Icon::SidebarExpand,
                                             18.,
-                                            wecom_theme::icon(),
+                                            wechat_theme::icon(),
                                         )),
                                 )
                             })
@@ -27690,14 +27690,14 @@ impl PilotApp {
                                     .items_center()
                                     .justify_center()
                                     .pointer()
-                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.new_session_for_selected(cx);
                                     }))
                                     .child(icons::icon(
                                         icons::Icon::Plus,
                                         18.,
-                                        wecom_theme::icon(),
+                                        wechat_theme::icon(),
                                     ))
                             }))
                             .child(
@@ -27709,7 +27709,7 @@ impl PilotApp {
                                     .items_center()
                                     .justify_center()
                                     .pointer()
-                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         if this.selection.is_some() {
                                             this.detail_menu_open = !this.detail_menu_open;
@@ -27720,7 +27720,7 @@ impl PilotApp {
                                     .child(icons::icon(
                                         icons::Icon::Ellipsis,
                                         22.,
-                                        wecom_theme::icon(),
+                                        wechat_theme::icon(),
                                     )),
                             ),
                     ),
@@ -28051,8 +28051,8 @@ impl PilotApp {
                 .gap(px(2.))
                 .rounded(px(theme::RADIUS_CHIP))
                 .border_1()
-                .border_color(wecom_theme::composer_border())
-                .bg(wecom_theme::panel_card_bg())
+                .border_color(wechat_theme::composer_border())
+                .bg(wechat_theme::panel_card_bg())
                 .p(px(2.));
             for (label, previous, enabled) in
                 [("↑", true, can_prev), ("↓", false, can_next)]
@@ -28076,7 +28076,7 @@ impl PilotApp {
                         .justify_center()
                         .pointer()
                         .when(!enabled, |el| el.opacity(0.35))
-                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             if previous {
                                 if this.wecom_turn_cursor > 0 {
@@ -28094,9 +28094,9 @@ impl PilotApp {
                         }))
                         .child(
                             div()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(12.))
-                                .text_color(wecom_theme::icon())
+                                .text_color(wechat_theme::icon())
                                 .child(i18n::t(label)),
                         ),
                 );
@@ -28149,7 +28149,7 @@ impl PilotApp {
         let spinner = gpui::svg()
             .data(include_bytes!("../assets/icons/spinner.svg"))
             .size(px(14.))
-            .text_color(wecom_theme::time_label())
+            .text_color(wechat_theme::time_label())
             .with_animation(
                 "wecom-working-spin",
                 gpui::Animation::new(Duration::from_millis(1200)).repeat(),
@@ -28170,13 +28170,13 @@ impl PilotApp {
                 .child(spinner)
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(if retry.is_some() {
                             theme::warning()
                         } else {
-                            wecom_theme::chat_title()
+                            wechat_theme::chat_title()
                         })
                         .child(if retry.is_some() {
                             i18n::t("重试中")
@@ -28187,7 +28187,7 @@ impl PilotApp {
                 .children(retry.as_ref().map(|(attempt, max_retries, _)| {
                     div()
                         .flex_shrink_0()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
                         .text_color(theme::warning())
                         .child(SharedString::from(format!("{attempt}/{max_retries}")))
@@ -28197,16 +28197,16 @@ impl PilotApp {
                         .flex_1()
                         .min_w(px(0.))
                         .truncate()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(SharedString::from(tool_render::single_line(reason, 80)))
                 }))
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(11.))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(SharedString::from(elapsed_label(elapsed))),
                 )
                 .into_any_element(),
@@ -28267,8 +28267,8 @@ impl PilotApp {
                 .w_full()
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
-                .border_color(wecom_theme::composer_border())
-                .bg(wecom_theme::panel_card_bg())
+                .border_color(wechat_theme::composer_border())
+                .bg(wechat_theme::panel_card_bg())
                 .overflow_hidden()
                 .child(
                     div()
@@ -28279,7 +28279,7 @@ impl PilotApp {
                         .items_center()
                         .gap(px(5.))
                         .pointer()
-                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             if let Some(key) = this.active_key()
                                 && let Some(chat) = this.chats.get_mut(&key)
@@ -28291,14 +28291,14 @@ impl PilotApp {
                         .child(icons::icon(
                             icons::Icon::Pencil,
                             12.,
-                            wecom_theme::time_label(),
+                            wechat_theme::time_label(),
                         ))
                         .child(
                             div()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(11.))
                                 .line_height(px(16.))
-                                .text_color(wecom_theme::list_preview())
+                                .text_color(wechat_theme::list_preview())
                                 .child(SharedString::from(if i18n::is_en() {
                                     format!("This turn changed {files} files")
                                 } else {
@@ -28314,7 +28314,7 @@ impl PilotApp {
                                 icons::Icon::ChevronRight
                             },
                             12.,
-                            wecom_theme::icon(),
+                            wechat_theme::icon(),
                         )),
                 );
             if open {
@@ -28334,7 +28334,7 @@ impl PilotApp {
                                     .truncate()
                                     .font_family(theme::FONT_MONO)
                                     .text_size(px(ui_kit::T_LABEL))
-                                    .text_color(wecom_theme::list_preview())
+                                    .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(path.clone())),
                             )
                             .children((*added > 0).then(|| {
@@ -28363,10 +28363,10 @@ impl PilotApp {
             column = column.child(
                 div().w_full().flex().justify_end().child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(ui_kit::T_LABEL))
                         .line_height(px(14.))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(SharedString::from(stats.join(" · "))),
                 ),
             );
@@ -28398,15 +28398,15 @@ impl PilotApp {
                 .items_center()
                 .justify_center()
                 .pointer()
-                .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.chat_find_step(if previous { -1 } else { 1 }, cx);
                 }))
                 .child(
                     div()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
-                        .text_color(wecom_theme::icon())
+                        .text_color(wechat_theme::icon())
                         .child(label),
                 )
         };
@@ -28418,8 +28418,8 @@ impl PilotApp {
                 .flex_shrink_0()
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
-                .border_color(wecom_theme::composer_border())
-                .bg(wecom_theme::panel_card_bg())
+                .border_color(wechat_theme::composer_border())
+                .bg(wechat_theme::panel_card_bg())
                 .px(px(8.))
                 .flex()
                 .items_center()
@@ -28427,7 +28427,7 @@ impl PilotApp {
                 .child(icons::icon(
                     icons::Icon::Search,
                     13.,
-                    wecom_theme::time_label(),
+                    wechat_theme::time_label(),
                 ))
                 .child(
                     div()
@@ -28439,9 +28439,9 @@ impl PilotApp {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .font_family(wecom_theme::FONT_FAMILY)
+                        .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(ui_kit::T_LABEL))
-                        .text_color(wecom_theme::time_label())
+                        .text_color(wechat_theme::time_label())
                         .child(SharedString::from(count)),
                 )
                 .child(nav_button("chat-find-prev", "↑", true, cx))
@@ -28455,13 +28455,13 @@ impl PilotApp {
                         .items_center()
                         .justify_center()
                         .pointer()
-                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             this.chat_find = None;
                             this.pending_find_scroll = false;
                             cx.notify();
                         }))
-                        .child(icons::icon(icons::Icon::X, 12., wecom_theme::time_label())),
+                        .child(icons::icon(icons::Icon::X, 12., wechat_theme::time_label())),
                 )
                 .into_any_element(),
         )
@@ -28490,9 +28490,9 @@ impl PilotApp {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(ui_kit::T_LABEL))
-                            .text_color(wecom_theme::time_label())
+                            .text_color(wechat_theme::time_label())
                             .child(SharedString::from(format!("{}.", index + 1))),
                     )
                     .child(
@@ -28500,18 +28500,18 @@ impl PilotApp {
                             .flex_1()
                             .min_w(px(0.))
                             .truncate()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(12.))
                             .line_height(px(16.))
-                            .text_color(wecom_theme::list_preview())
+                            .text_color(wechat_theme::list_preview())
                             .child(SharedString::from(preview)),
                     )
                     .children((attachment_count > 0).then(|| {
                         div()
                             .flex_shrink_0()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(ui_kit::T_LABEL))
-                            .text_color(wecom_theme::time_label())
+                            .text_color(wechat_theme::time_label())
                             .child(SharedString::from(if i18n::is_en() {
                                 format!("+{attachment_count} files")
                             } else {
@@ -28527,7 +28527,7 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 if let Some(chat) = this.chats.get_mut(&remove_key)
                                     && index < chat.queued.len()
@@ -28536,7 +28536,7 @@ impl PilotApp {
                                 }
                                 cx.notify();
                             }))
-                            .child(icons::icon(icons::Icon::X, 11., wecom_theme::time_label())),
+                            .child(icons::icon(icons::Icon::X, 11., wechat_theme::time_label())),
                     ),
             );
         }
@@ -28546,8 +28546,8 @@ impl PilotApp {
                 .mb(px(4.))
                 .rounded(px(theme::RADIUS_FIELD))
                 .border_1()
-                .border_color(wecom_theme::composer_border())
-                .bg(wecom_theme::panel_card_bg())
+                .border_color(wechat_theme::composer_border())
+                .bg(wechat_theme::panel_card_bg())
                 .overflow_hidden()
                 .child(
                     div()
@@ -28559,13 +28559,13 @@ impl PilotApp {
                         .child(icons::icon(
                             icons::Icon::ListChecks,
                             12.,
-                            wecom_theme::time_label(),
+                            wechat_theme::time_label(),
                         ))
                         .child(
                             div()
-                                .font_family(wecom_theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(11.))
-                                .text_color(wecom_theme::time_label())
+                                .text_color(wechat_theme::time_label())
                                 .child(SharedString::from(if i18n::is_en() {
                                     if key.starts_with("group:") {
                                         format!(
@@ -28623,27 +28623,27 @@ impl PilotApp {
             && !pending_approval
             && (has_text || has_attachments);
         let send_bg = if streaming {
-            wecom_theme::nav_badge_bg()
+            wechat_theme::nav_badge_bg()
         } else if send_enabled {
-            wecom_theme::send_enabled()
+            wechat_theme::send_enabled()
         } else {
-            wecom_theme::send_disabled_bg()
+            wechat_theme::send_disabled_bg()
         };
         let send_fg = if streaming || send_enabled {
-            wecom_theme::nav_text_active()
+            wechat_theme::nav_text_active()
         } else {
-            wecom_theme::send_disabled_text()
+            wechat_theme::send_disabled_text()
         };
         div()
             .ml(px(14.))
             .mr(px(14.))
             .mb(px(14.))
-            .min_h(px(wecom_theme::COMPOSER_HEIGHT))
+            .min_h(px(wechat_theme::COMPOSER_HEIGHT))
             .flex_shrink_0()
             .rounded(px(theme::RADIUS_FIELD))
             .border_1()
-            .border_color(wecom_theme::composer_border())
-            .bg(wecom_theme::composer_bg())
+            .border_color(wechat_theme::composer_border())
+            .bg(wechat_theme::composer_bg())
             .on_drop::<gpui::ExternalPaths>(cx.listener(
                 |this, paths: &gpui::ExternalPaths, _window, cx| {
                     let files: Vec<String> = paths
@@ -28670,10 +28670,10 @@ impl PilotApp {
                     // 输入文字视觉左/上边距约 12：外壳 8 + 编辑器内部 4。
                     .px(px(8.))
                     .pt(px(8.))
-                    .font_family(wecom_theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(ui_kit::T_PAGE))
                     .line_height(px(22.))
-                    .text_color(wecom_theme::bubble_text())
+                    .text_color(wechat_theme::bubble_text())
                     .child(self.input.clone()),
             )
             .child(
@@ -28694,7 +28694,7 @@ impl PilotApp {
                             // 不只靠鼠标（否则键盘可达性只修了一半）。
                             .track_focus(&plus_focus)
                             .key_context("TabStop")
-                            .when(plus_focused, |el| el.bg(wecom_theme::nav_item_hover_bg()))
+                            .when(plus_focused, |el| el.bg(wechat_theme::nav_item_hover_bg()))
                             .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
                                 this.on_palette_shortcut(&PaletteShortcut, window, cx);
                             }))
@@ -28704,18 +28704,18 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 // 与 Ctrl+P 同一条路径：开命令面板。
                                 this.on_palette_shortcut(&PaletteShortcut, window, cx);
                             }))
-                            .child(icons::icon_light(icons::Icon::Plus, 18., wecom_theme::icon())),
+                            .child(icons::icon_light(icons::Icon::Plus, 18., wechat_theme::icon())),
                     )
                     .children(permission.map(|level| {
                         let color = if level == "ask" {
-                            wecom_theme::icon()
+                            wechat_theme::icon()
                         } else {
-                            wecom_theme::send_enabled()
+                            wechat_theme::send_enabled()
                         };
                         div()
                             .id("wechat-tool-permission")
@@ -28725,7 +28725,7 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, _window, cx| {
                                 if let gpui::ClickEvent::Mouse(mouse) = event {
                                     // 菜单向上展开：把偏移算进锚点，避免 anchored offset
@@ -28751,35 +28751,35 @@ impl PilotApp {
                             .flex_shrink_0()
                             .rounded(px(theme::RADIUS_TAG))
                             .border_1()
-                            .border_color(wecom_theme::composer_border())
-                            .bg(wecom_theme::panel_card_bg())
+                            .border_color(wechat_theme::composer_border())
+                            .bg(wechat_theme::panel_card_bg())
                             .flex()
                             .items_center()
                             .gap(px(4.))
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.interject_current(window, cx);
                             }))
                             .child(icons::icon_light(
                                 icons::Icon::MessageSquare,
                                 14.,
-                                wecom_theme::icon(),
+                                wechat_theme::icon(),
                                 ))
                             .child(
                                 div()
-                                    .font_family(wecom_theme::FONT_FAMILY)
+                                    .font_family(wechat_theme::FONT_FAMILY)
                                     .text_size(px(11.))
-                                    .text_color(wecom_theme::icon())
+                                    .text_color(wechat_theme::icon())
                                     .child(i18n::t("插话")),
                             )
                     }))
                     .children((streaming && has_text).then(|| {
                         div()
                             .flex_shrink_0()
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(ui_kit::T_LABEL))
-                            .text_color(wecom_theme::time_label())
+                            .text_color(wechat_theme::time_label())
                             .child(i18n::t("Enter 排队"))
                     }))
                     .child(
@@ -28791,11 +28791,11 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.stage_attachments(cx);
                             }))
-                            .child(icons::icon_light(icons::Icon::Folder, 18., wecom_theme::icon())),
+                            .child(icons::icon_light(icons::Icon::Folder, 18., wechat_theme::icon())),
                     )
                     .child(
                         div()
@@ -28806,11 +28806,11 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.start_screenshot_capture(cx);
                             }))
-                            .child(icons::icon_light(icons::Icon::Scissors, 18., wecom_theme::icon())),
+                            .child(icons::icon_light(icons::Icon::Scissors, 18., wechat_theme::icon())),
                     )
                     .child(
                         div()
@@ -28821,14 +28821,14 @@ impl PilotApp {
                             .items_center()
                             .justify_center()
                             .pointer()
-                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.toggle_voice_typing(window, cx);
                             }))
                             .child(icons::icon_light(
                                 icons::Icon::Mic,
                                 18.,
-                                if self.voice_active { ui_accent() } else { wecom_theme::icon() },
+                                if self.voice_active { ui_accent() } else { wechat_theme::icon() },
                                 )),
                     )
                     .child(div().flex_1())
@@ -28845,7 +28845,7 @@ impl PilotApp {
                             .items_center()
                             .pointer()
                             .hover(|style| style.bg(theme::hover()))
-                            .font_family(wecom_theme::FONT_FAMILY)
+                            .font_family(wechat_theme::FONT_FAMILY)
                             .text_size(px(13.))
                             .line_height(px(18.))
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -28957,11 +28957,11 @@ impl Render for PilotApp {
                     .w(px(320.))
                     .rounded(px(theme::RADIUS_FIELD))
                     .border_1()
-                    .border_color(wecom_theme::composer_border())
-                    .bg(wecom_theme::panel_card_bg())
+                    .border_color(wechat_theme::composer_border())
+                    .bg(wechat_theme::panel_card_bg())
                     .px(px(16.))
                     .py(px(10.))
-                    .text_color(wecom_theme::chat_title()),
+                    .text_color(wechat_theme::chat_title()),
                 cx,
             );
         }
@@ -29213,29 +29213,29 @@ fn history_messages(entries: Vec<backend::HistoryEntry>) -> Vec<Message> {
 fn configure_kit_theme(cx: &mut App) {
     use gpui::component::Theme;
     Theme::update(cx, |theme| {
-        theme.background = gpui::Hsla::from(wecom_theme::chat_bg());
-        theme.foreground = gpui::Hsla::from(wecom_theme::chat_title());
-        theme.popover = gpui::Hsla::from(wecom_theme::panel_card_bg());
-        theme.popover_foreground = gpui::Hsla::from(wecom_theme::chat_title());
-        theme.border = gpui::Hsla::from(wecom_theme::composer_border());
-        theme.input = gpui::Hsla::from(wecom_theme::composer_border());
-        theme.primary = gpui::Hsla::from(wecom_theme::send_enabled());
-        theme.primary_foreground = gpui::Hsla::from(wecom_theme::nav_text_active());
-        theme.secondary = gpui::Hsla::from(wecom_theme::chip_bg());
-        theme.secondary_foreground = gpui::Hsla::from(wecom_theme::chat_title());
-        theme.muted = gpui::Hsla::from(wecom_theme::chip_bg());
-        theme.muted_foreground = gpui::Hsla::from(wecom_theme::panel_text());
-        theme.accent = gpui::Hsla::from(wecom_theme::list_hover());
-        theme.accent_foreground = gpui::Hsla::from(wecom_theme::chat_title());
-        theme.danger = gpui::Hsla::from(wecom_theme::nav_badge_bg());
-        theme.danger_foreground = gpui::Hsla::from(wecom_theme::nav_text_active());
-        theme.ring = gpui::Hsla::from(wecom_theme::send_enabled());
-        theme.caret = gpui::Hsla::from(wecom_theme::chat_title());
+        theme.background = gpui::Hsla::from(wechat_theme::chat_bg());
+        theme.foreground = gpui::Hsla::from(wechat_theme::chat_title());
+        theme.popover = gpui::Hsla::from(wechat_theme::panel_card_bg());
+        theme.popover_foreground = gpui::Hsla::from(wechat_theme::chat_title());
+        theme.border = gpui::Hsla::from(wechat_theme::composer_border());
+        theme.input = gpui::Hsla::from(wechat_theme::composer_border());
+        theme.primary = gpui::Hsla::from(wechat_theme::send_enabled());
+        theme.primary_foreground = gpui::Hsla::from(wechat_theme::nav_text_active());
+        theme.secondary = gpui::Hsla::from(wechat_theme::chip_bg());
+        theme.secondary_foreground = gpui::Hsla::from(wechat_theme::chat_title());
+        theme.muted = gpui::Hsla::from(wechat_theme::chip_bg());
+        theme.muted_foreground = gpui::Hsla::from(wechat_theme::panel_text());
+        theme.accent = gpui::Hsla::from(wechat_theme::list_hover());
+        theme.accent_foreground = gpui::Hsla::from(wechat_theme::chat_title());
+        theme.danger = gpui::Hsla::from(wechat_theme::nav_badge_bg());
+        theme.danger_foreground = gpui::Hsla::from(wechat_theme::nav_text_active());
+        theme.ring = gpui::Hsla::from(wechat_theme::send_enabled());
+        theme.caret = gpui::Hsla::from(wechat_theme::chat_title());
         // 滚动条：浅色皮肤默认深色滑块，会像一条黑杠。
         theme.scrollbar = gpui::Hsla::from(gpui::rgba(0x00000000));
-        theme.scrollbar_thumb = gpui::Hsla::from(wecom_theme::time_label());
-        theme.scrollbar_thumb_hover = gpui::Hsla::from(wecom_theme::icon_strong());
-        theme.font_family = wecom_theme::FONT_FAMILY.into();
+        theme.scrollbar_thumb = gpui::Hsla::from(wechat_theme::time_label());
+        theme.scrollbar_thumb_hover = gpui::Hsla::from(wechat_theme::icon_strong());
+        theme.font_family = wechat_theme::FONT_FAMILY.into();
         theme.font_size = px(13.);
     });
 }
@@ -29289,7 +29289,7 @@ fn main() {
     theme::load_preference();
     // 微信皮肤置位；浅色/深色/跟随系统由 prefs 在 application run 里应用。
     if std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1") {
-        wecom_theme::set_active(true);
+        wechat_theme::set_active(true);
     }
     // 崩溃先落盘（早于任何 UI/后台线程）：日志在试点状态目录，不碰产品数据。
     instance::install_panic_hook(&instance::state_dir());
@@ -29316,7 +29316,7 @@ fn main() {
         let saved_theme = load_theme_pref();
         let saved_light = theme_light_for(&saved_theme);
         theme::set_light_runtime(saved_light);
-        wecom_theme::set_light(saved_light);
+        wechat_theme::set_light(saved_light);
         gpui::component::Theme::change(
             if saved_light {
                 gpui::component::ThemeMode::Light

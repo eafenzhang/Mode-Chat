@@ -40,7 +40,7 @@ $CursorAllow = @('ui_kit.rs')
 $RadiusAllow = @('ui_kit.rs', 'theme.rs')
 # Brand-tint icon files may use rgb() (docs/ui-design-spec.md 10.1).
 $RgbAllow = @(
-  'theme.rs', 'wecom_theme.rs', 'agent_icons.rs', 'bot_icon.rs',
+  'theme.rs', 'wechat_theme.rs', 'agent_icons.rs', 'bot_icon.rs',
   'brand_icons.rs', 'avatar.rs', 'menu_icons.rs', 'icons.rs'
 )
 

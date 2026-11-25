@@ -19,7 +19,7 @@ use gpui::{App, Context, Entity, Window};
 use crate::i18n;
 use crate::simple_input::SimpleInput;
 use crate::theme;
-use crate::wecom_theme;
+use crate::wechat_theme;
 
 // ---- 间距（4px 基准，见规范 §2）----
 pub const S1: f32 = 4.;
@@ -45,12 +45,12 @@ pub const T_METRIC_LH: f32 = 28.;
 pub const R_CARD: f32 = 12.;
 
 fn wechat() -> bool {
-    wecom_theme::active()
+    wechat_theme::active()
 }
 
 fn font() -> &'static str {
     if wechat() {
-        wecom_theme::FONT_FAMILY
+        wechat_theme::FONT_FAMILY
     } else {
         theme::FONT_FAMILY
     }
@@ -59,7 +59,7 @@ fn font() -> &'static str {
 // ---- 语义色（规范 §5）----
 pub fn ink() -> Rgba {
     if wechat() {
-        wecom_theme::chat_title()
+        wechat_theme::chat_title()
     } else {
         theme::ink()
     }
@@ -67,7 +67,7 @@ pub fn ink() -> Rgba {
 
 pub fn ink_secondary() -> Rgba {
     if wechat() {
-        wecom_theme::list_preview()
+        wechat_theme::list_preview()
     } else {
         theme::ink_secondary()
     }
@@ -75,7 +75,7 @@ pub fn ink_secondary() -> Rgba {
 
 pub fn ink_tertiary() -> Rgba {
     if wechat() {
-        wecom_theme::time_label()
+        wechat_theme::time_label()
     } else {
         theme::ink_tertiary()
     }
@@ -83,7 +83,7 @@ pub fn ink_tertiary() -> Rgba {
 
 pub fn edge() -> Rgba {
     if wechat() {
-        wecom_theme::panel_divider()
+        wechat_theme::panel_divider()
     } else {
         theme::edge()
     }
@@ -91,7 +91,7 @@ pub fn edge() -> Rgba {
 
 pub fn describe_edge() -> Rgba {
     if wechat() {
-        wecom_theme::composer_border()
+        wechat_theme::composer_border()
     } else {
         theme::edge()
     }
@@ -99,7 +99,7 @@ pub fn describe_edge() -> Rgba {
 
 pub fn card_bg() -> Rgba {
     if wechat() {
-        wecom_theme::panel_bg()
+        wechat_theme::panel_bg()
     } else {
         theme::card()
     }
@@ -107,7 +107,7 @@ pub fn card_bg() -> Rgba {
 
 pub fn accent() -> Rgba {
     if wechat() {
-        wecom_theme::send_enabled()
+        wechat_theme::send_enabled()
     } else {
         theme::accent()
     }
@@ -236,7 +236,7 @@ pub fn card_row(content: impl IntoElement, last: bool) -> Div {
         row = row
             .border_b(px(0.5))
             .border_color(if wechat() {
-                wecom_theme::divider()
+                wechat_theme::divider()
             } else {
                 theme::edge()
             });
@@ -321,7 +321,7 @@ pub fn icon_tile(icon: impl IntoElement) -> Div {
         .flex_shrink_0()
         .rounded(px(theme::RADIUS_FIELD))
         .bg(if wechat() {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::hover()
         })
@@ -408,7 +408,7 @@ pub fn button(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> 
         .h(px(30.))
         .rounded_full()
         .bg(if wechat() {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::hover()
         })
@@ -456,7 +456,7 @@ pub fn chip(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, activ
         .border_color(if active { accent() } else { edge() })
         .bg(if active {
             if wechat() {
-                wecom_theme::chip_bg()
+                wechat_theme::chip_bg()
             } else {
                 theme::accent_soft()
             }
@@ -581,7 +581,7 @@ pub fn value_box(value: impl Into<SharedString>, label_text: Option<SharedString
         .border_1()
         .border_color(describe_edge())
         .bg(if wechat() {
-            wecom_theme::chip_bg()
+            wechat_theme::chip_bg()
         } else {
             theme::card()
         })
@@ -613,7 +613,7 @@ pub fn switch(id: impl Into<gpui::ElementId>, on: bool) -> Stateful<Div> {
         .bg(if on {
             accent()
         } else if wechat() {
-            wecom_theme::panel_divider()
+            wechat_theme::panel_divider()
         } else {
             theme::hover()
         })
@@ -637,7 +637,7 @@ pub fn segment(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, ac
         .rounded(px(theme::RADIUS_SEGMENT))
         .bg(if active {
             if wechat() {
-                wecom_theme::send_enabled()
+                wechat_theme::send_enabled()
             } else {
                 theme::accent()
             }
@@ -662,7 +662,7 @@ pub fn segment(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, ac
                 .line_height(px(T_BODY_LH))
                 .text_color(if active {
                     if wechat() {
-                        wecom_theme::nav_text_active()
+                        wechat_theme::nav_text_active()
                     } else {
                         theme::accent_ink()
                     }
