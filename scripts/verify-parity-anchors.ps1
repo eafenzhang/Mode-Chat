@@ -1,4 +1,4 @@
-﻿# Verify every cited file:line anchor in docs/parity-matrix.md and docs/prd-0.5.md.
+﻿# Verify every cited file:line anchor in docs/parity-matrix.md, docs/prd-0.5.md and docs/prd-0.6.md.
 # Checks: file resolves under one of the three roots, line number in range, and (for
 # cited lines that name a symbol in backticks) that the line is non-empty.
 param(
@@ -60,7 +60,7 @@ if ($Baseline -eq 'Head') {
   # 源码是 HEAD 的，矩阵/PRD/锁却是工作区的。别人正在改 docs/ 时，同一 HEAD
   # 连跑三次会给出三种结果（实测 5 problem / 5 problem / 3 problem），
   # 这种门禁比没有门禁更糟——你没法判断红的是代码还是别人未提交的文档。
-  foreach ($rel in @('docs/parity-matrix.md', 'docs/prd-0.5.md', 'docs/parity-anchors.lock')) {
+  foreach ($rel in @('docs/parity-matrix.md', 'docs/prd-0.5.md', 'docs/prd-0.6.md', 'docs/parity-anchors.lock')) {
     $blob = & git -C $root show "HEAD:$rel" 2>$null
     if (-not $blob) { continue }
     $dst = Join-Path $baselineDir $rel
@@ -98,7 +98,7 @@ function Resolve-DocPath([string]$rel) {
 # 锚点有三种写法，全都要覆盖：
 #   1) `path:12`  2) `path:12-34`  3) `path:12/34/56`（同一文件的多个位置）
 $rx = [regex]'`([A-Za-z0-9_./\\\- ]+\.(?:rs|js|mjs|md|json|yml|toml)):(\d+)(?:-(\d+)|\d+)?((?:/\d+)*)`'
-$docs = @('docs/parity-matrix.md', 'docs/prd-0.5.md')
+$docs = @('docs/parity-matrix.md', 'docs/prd-0.5.md', 'docs/prd-0.6.md')
 $seen = @{}
 $bad = New-Object System.Collections.Generic.List[string]
 $checked = 0

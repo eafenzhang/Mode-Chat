@@ -147,6 +147,8 @@ src/data.rs:175|demote_other_chiefs(&mut file, &new_id);
 src/data.rs:1824|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
 src/data.rs:1843|pub fn update_group(id: &str, draft: GroupDraft) -> Result<Group, String> {
 src/data.rs:1876|pub fn delete_group(id: &str) -> Result<(), String> {
+src/data.rs:2336|description: self.description.trim().to_string()
+src/data.rs:2676|fn plugin_switch_preserves_other_keys() {
 src/data.rs:289|fn cli_storage_dir() -> Option<String> {
 src/data.rs:345|const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
 src/data.rs:352|];
@@ -341,6 +343,7 @@ src/main.rs:7904|cx: &mut Context<Self>
 src/main.rs:8350|div()
 src/main.rs:8582|if ALL_MENTION.to_lowercase().contains(&needle) {
 src/main.rs:864|queued: Vec<QueuedSend>
+src/main.rs:8834|fn chat_detail_panel(
 src/main.rs:9055|crate::model_limits::placeholder(&limits);
 src/main.rs:9295|.roster
 src/main.rs:9299|let entries = data::bot_memory_entries(&bot_id);
@@ -406,11 +409,15 @@ src/team_tools.rs:208|"team_goal_pass"
 src/team_tools.rs:223|"team_goal_rework"
 src/team_tools.rs:246|"team_assign"
 src/theme.rs:133|pub fn is_light() -> bool {
+src/theme.rs:138|pub fn set_light_runtime(light: bool) {
 src/theme.rs:143|///
+src/theme.rs:499|pub const RADIUS_BUBBLE: f32 = 18.0;
 src/tool_scope.rs:1|//! 浏览器 / 电脑控制的「使用范围」。
 src/tool_scope.rs:9|//! 因此设置页关掉后立即生效，不必重开会话。
 src/ui_kit.rs:128|fn pointer(mut self) -> Self {
 src/ui_kit.rs:25|pub const S1: f32 = 4.;
+src/ui_kit.rs:405|pub fn button(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> 
+src/ui_kit.rs:433|pub fn button_ghost(id: impl Into<gpui::ElementId>, text: impl Into<SharedString
 src/update.rs:209|pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
 src/update.rs:322|pub fn spawn_swap_and_restart(current_exe: &Path, staged: &StagedUpdate) -> Resu
 src/update.rs:69|pub fn check(timeout: Duration) -> Check {

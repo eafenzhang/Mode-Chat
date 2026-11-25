@@ -46,7 +46,7 @@ shell()       :25917   if self.wecom_mode { wechat } else { classic }
 | 批 | 内容 | 量 | 判定依据 |
 | --- | --- | --- | --- |
 | 第一批 | `classic_shell`、`titlebar`、`window_button`、`sidebar`、`main_bot_card`、`unread_badge`、`chat_header`、`transcript`、`composer`、`right_panel`、`status_color`、`control_card`、`chat_status`、`two_line`、`text_block` + 16 个辅助 free fn | 约 2,772 行（含上方注释）/ 2,554 行（从 `fn` 行起） | 唯一调用方都在将被删除的 classic 函数内 → 删除方案 §3 |
-| 第二批 | `settings_overlay`、`theme_picker`、`wecom_mode` 字段、`BOT_PILOT_CLASSIC_UI` 环境变量、`SIDEBAR_WIDTH`、`BUBBLE_MAX_WIDTH`、`active_tab` 字段 | 约 241 行 | 删完第一批才变成死代码；`wecom_mode` 必须与 `:9040`、`:12118` 两处反向条件同批删，否则编译不过 → 删除方案 §6.1 |
+| 第二批 | `settings_overlay`、`theme_picker`、`wecom_mode` 字段、`BOT_PILOT_CLASSIC_UI` 环境变量、`SIDEBAR_WIDTH`、`BUBBLE_MAX_WIDTH`、`active_tab` 字段 | 约 241 行 | 删完第一批才变成死代码；`wecom_mode` 的两处反向条件必须同批删，否则编译不过 → 删除方案 §6.1 |
 | `theme.rs` 连带 | `set_light`、`hairline`、`ink_line`、`subtle_hover`、`accent_border`、`chief`、`bubble_user`、`bubble_assistant`、`member_color`、`shadow_1` + `RADIUS_COMPOSER`/`RADIUS_COMPOSER_MULTI` 两常量 + `shadow_1` 断言 | 未计入上面两个数 | 语料全在 classic 里；`theme.rs` 无 `allow(dead_code)`，不删则 `clippy -D warnings` 必红 |
 
 **五处易漏项（`@前端` 交叉验证发现，实测调用点已复核）**：
@@ -61,7 +61,7 @@ text_block    def=24666  ← group_details@21430/21434                    8 行
 
 `status_color` 与 `chat_status` 是成对的：`status_color` 唯一调用在 `right_panel@20803`，`chat_status` 只被 `status_color@18683` 和 `right_panel@20523` 用。**这五个函数不删，`clippy` 会在第一批结束时直接失败。**
 
-**`theme::set_light` 的陷阱**：`theme.rs:143` 的 `set_light` 唯一调用在 `theme_picker@13106`，可删；但 **`wechat_theme::set_light` 是另一个函数**，`12463` 和 `29319` 都在调用，**必须保留**；`theme.rs:138` 的 `set_light_runtime` 在 `12462`/`29318` 也在用，同样保留。同理 `RADIUS_BUBBLE` 必须留（`skeleton_rows@24764` 微信壳空态在用）。
+**`theme::set_light` 的陷阱**：`theme::set_light` 已随 D-CUT 删除，删除前唯一调用在 classic `theme_picker`；但 **`wechat_theme::set_light` 是另一个函数**，`src/main.rs` 里两处（`theme_picker` 的浅色分支与启动时读偏好）都在调用，**必须保留**；`src/theme.rs:138` 的 `set_light_runtime` 与之成对，同样保留。同理 `RADIUS_BUBBLE` 必须留（`skeleton_rows` 微信壳空态在用，常量在 `src/theme.rs:499`）。
 
 **D1 与 D2 必须合成一个提交**：`theme::set_light` / `theme::accent_border` 只有 `theme_picker` 用，而 `theme_picker` 在第二批；拆成两次提交，第一批结束时 `clippy` 一定报 unused 而失败。「删除批 vs 优化批」的分界线仍然有效，只是删除批内部不再拆。
 
@@ -84,15 +84,15 @@ Select-String -Path src\theme.rs -Pattern 'fn shadow_2|fn shadow_3|fn shadow_4|f
 
 **① A12「主卡位」：判定从 ✅ 降为 🟡，矩阵汇总 89/20/27 → 88/21/27。**
 
-实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`:19120`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
+实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`src/main.rs:19003`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
 
-所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `:26251`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
+所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `src/main.rs:22995`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
 
-同步改动：`docs/parity-matrix.md` 的 `:8`（汇总说明）、`:33`（A12 行）、`:249-254`（汇总表）、`:260`（A 域分域明细）、文末「v0.5.1 的变动」表补一行。
+同步改动：`docs/parity-matrix.md` 的汇总说明、A12 行、汇总表、A 域分域明细、文末「v0.5.1 的变动」表补一行。
 
-**② `chat_detail_panel`（109 行，`:9318-9426`）：保留并接回微信壳，不删。**
+**② `chat_detail_panel`（D-CUT 前 109 行、第 9318–9426 行；HEAD 上在 `src/main.rs:8834`）：保留并接回微信壳，不删。**
 
-现状是既有缺陷：`chat_detail` 只被 `:9325` / `:9420` 读、`:17460`（`DetailMenuAction::RunStatus`，微信壳的「⋯」也走这里）写，唯一渲染点是 `right_panel@20823`。也就是说**微信壳里点「⋯ → 运行状态」现在什么都不显示**。删 classic 会让它彻底没有渲染点。
+现状是既有缺陷：`chat_detail` 只被 `chat_detail_panel` 内两处读（D-CUT 前第 9325 / 9420 行）、被 `DetailMenuAction::RunStatus` 写（D-CUT 前第 17460 行，微信壳的「⋯」也走这里），D-CUT 前唯一渲染点是 classic `right_panel`。也就是说**微信壳里点「⋯ → 运行状态」现在什么都不显示**。删 classic 会让它彻底没有渲染点。
 
 判定：**接 10 行进 `chat_info_panel`**（删除方案 §6.2 选项 1）。理由两条：删掉它是功能回退（「⋯」里少一项）；保持现状则是把已知缺陷固化进新架构。这 10 行是「接回已有实现」，不构成新功能，**计入本版范围**。
 
@@ -117,9 +117,9 @@ D-CUT 删完 classic 后 `clippy -D warnings` 报出 20 条 dead code，其中�
 | --- | --- | --- | --- | --- |
 | 1 | **会话重命名**（`SettingsDetail::RenameSession`） | HEAD 里唯一触发点是 classic `right_panel` 的 `hist-rename-{id}`「改名」按钮（`c86c899:21286-21309`）；微信壳历史会话行（`panel-history-{target}`）只有切换，没有改名。对话框、`sessions.set_title`、state.json 落盘全都还在 | **接回**。微信壳 `chat_info_panel` 历史会话行加一个「改名」按钮触发同一个 `SettingsDetail::RenameSession`，复用现成对话框与落盘逻辑，约 12 行。这是「给已存在功能补回丢失的入口」，不是新功能 | D3，与 O-2 同批 |
 | 2 | **浏览器「打开 URL / 最近记录 / 已装浏览器」**（`browser_panel_section`、`record_browser_open`、`browser_recents`、`browser_url_input`、`save/load_browser_recents`、`installed_browsers`） | HEAD 里只在 classic `control_card(kind==1)` 内渲染（`c86c899:8861`）；微信壳浏览器页（`settings_page_browser`）只有「打开 / 关闭 / 页面截图 + 使用范围」 | **不接回，明确记为功能回退**。接回等于在设置页新增一整块 URL 输入 + 最近列表 + 已装浏览器列表，属于新功能，超出「优化」边界。矩阵 **G04 差距列必须改写**（现在写的是「只有用系统浏览器打开 URL + 最近 + 已装浏览器列表」，v0.6.0 起这句不再成立），保持 ❌，留给 v0.7 的内嵌浏览器面板 | 随 D-CUT 删除；矩阵改判归 D4 |
-| 3 | **插件开关二次确认**（`PluginSwitchConfirm`、`apply_plugin_switch`、`open_plugin_confirm_dialog`、`data::set_plugin_switch`） | HEAD 里只在 classic `control_card` 的插件分页触发；微信壳插件页明写「暂未接入插件宿主」。`data::set_plugin_switch` 在框架层无消费者（只有 `data.rs:2676` 的单测） | **UI 删，数据层留**。`data.rs` 的 `set_plugin_switch` + 它的单测保留，加 `#[allow(dead_code)]`（同文件 `workspace_plugins:217` 已有同款先例）；插件宿主 K09 是 ❌ 降级 v0.6，v0.7 接宿主时直接用，删了要重写，且删测试会压低测试数 | 随 D-CUT 删除 UI；`data.rs` 只加注解 |
+| 3 | **插件开关二次确认**（`PluginSwitchConfirm`、`apply_plugin_switch`、`open_plugin_confirm_dialog`、`data::set_plugin_switch`） | HEAD 里只在 classic `control_card` 的插件分页触发；微信壳插件页明写「暂未接入插件宿主」。`data::set_plugin_switch` 在框架层无消费者（只有 `src/data.rs:2676` 的单测） | **UI 删，数据层留**。`data.rs` 的 `set_plugin_switch` + 它的单测保留，加 `#[allow(dead_code)]`（同文件 `workspace_plugins:217` 已有同款先例）；插件宿主 K09 是 ❌ 降级 v0.6，v0.7 接宿主时直接用，删了要重写，且删测试会压低测试数 | 随 D-CUT 删除 UI；`data.rs` 只加注解 |
 
-**纯死代码（无功能含义，直接删，不留记录）**：`avatar.rs` 的 `deg` / `shell` / `bot_avatar` / `channel_avatar` / `unread_dot`（`bot_avatar_rect` 保留，微信壳在用）、`sidebar_status_badge`、`nav_row`、`NavRowFocus`、`tool_state_color`、`settings_nav`（微信壳侧栏是 `wechat_nav`，导航一致性由 `settings_page_in_nav` 单测覆盖）。字段级 dead（`browser_url_input`、`PluginSwitchConfirm` 等）随所属结构体一起清；**`Bot.description` / `last_session_id` 不在其列**——它们由 `data.rs:2336` / `:2344` 序列化读，clippy 若仍报，报的是别的结构体，按报错的具体类型处理，不许顺手把 `data::Bot` 的字段删掉（会破坏 state.json 兼容）。
+**纯死代码（无功能含义，直接删，不留记录）**：`avatar.rs` 的 `deg` / `shell` / `bot_avatar` / `channel_avatar` / `unread_dot`（`bot_avatar_rect` 保留，微信壳在用）、`sidebar_status_badge`、`nav_row`、`NavRowFocus`、`tool_state_color`、`settings_nav`（微信壳侧栏是 `wechat_nav`，导航一致性由 `settings_page_in_nav` 单测覆盖）。字段级 dead（`browser_url_input`、`PluginSwitchConfirm` 等）随所属结构体一起清；**`Bot.description` / `last_session_id` 不在其列**——它们由 `src/data.rs:2336` / 第 2344 行 序列化读，clippy 若仍报，报的是别的结构体，按报错的具体类型处理，不许顺手把 `data::Bot` 的字段删掉（会破坏 state.json 兼容）。
 
 **本节的验收口径**：`cargo clippy --all-targets --locked -- -D warnings` **0 error**；`cargo test` 总数 **≥575**（`composer_radius` 单测随函数删除是唯一允许的下降，其余只许不变或上升）。
 
@@ -188,13 +188,13 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 - 深色主题 · 群聊：新开一个群，0 条消息 → 九宫格成员头像 + 「群名 · N 人」+ 成员名单 + 「成员：…。发消息开始群聊对话；用 @成员名 点名。」
 - 浅色主题 · 群聊：同上。
 
-**群聊空态是 D-CUT 引出的功能回退，不是「本来就没有」**：classic 的 `group_placeholder`（`c93ef4a~1` 的 `main.rs:21439-21460`）随 classic 一起被删了，它调用 `empty_state_badged(Some(channel_avatar(...)), "{group.name} · {count_members}", "成员：…。发消息开始群聊对话；用 @成员名 点名。")`。删掉后微信壳群聊 0 条消息就只剩裸 `div()`。现在（`0f9b4b5`）单 Bot 已修好，**群聊仍白屏**：`wechat_welcome` 的 `bot: Option<&Bot>` 在 `selected_bot()` 返回 `None`（`Selection::Group`）时直接返回空 div。所以 O-1 的验收**单聊、群聊分开记**，只拍单聊会把这个缺口一路带到发版。
+**群聊空态是 D-CUT 引出的功能回退，不是「本来就没有」**：classic 的 `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行）随 classic 一起被删了，它调用 `empty_state_badged(Some(channel_avatar(...)), "{group.name} · {count_members}", "成员：…。发消息开始群聊对话；用 @成员名 点名。")`。删掉后微信壳群聊 0 条消息只剩裸 `div()`。**已补齐**：`0f9b4b5` 修单聊（`wechat_welcome`），`0706ebb` 补群聊（`wechat_group_welcome`，id `wechat-group-welcome`，九宫格 + 「群名 · N 位成员」+ 成员名单）。验收仍**单聊、群聊分开记**，四张截图缺一不可。
 
 **本条属 D3，不属于 D-CUT 的验收**。classic `transcript` 删除后，「0 条消息且 `ready=true`」这条分支在微信壳里返回裸 `div()`（微信壳自身代码，与 classic 无关），屏幕上就是一片空白。**D-CUT 提交时这块空白是预期状态，按空白判阶段 2 失败是误判；D3 做完仍空白才算失败。** 两个阶段的判据分开：
 
 > 行号口径：`if chat.messages.is_empty()` 在 D-CUT 前是第 27783 行、裸 `return div()` 在 27795；D-CUT 后分别是第 24542 行与第 24554 行（`c93ef4a` 起）。**这几个是历史/现状描述，不写成「文件:行号」的锚点形式**——那样会被 parity 当成当前 HEAD 的锚点去校验，而 27783 在 HEAD 上已不存在。
 >
-> **`0f9b4b5` 之后 `:24554` 已不是裸 div**，而是 `return self.wechat_welcome(bot.as_ref(), cx);`，欢迎区实现在 `:24873`、chip id 在 `:24893`。所以本节上面那段「D-CUT 后是裸 div」描述的是 `c93ef4a`~`0f9b4b4` 这段时间的状态。
+> **`0f9b4b5` 之后**，这条分支已改调 `self.wechat_welcome(bot, group, cx)`（`0706ebb` 起群聊也接上了），欢迎区实现在 `wechat_welcome`、`wechat_group_welcome` 两个函数里，chip id 前缀 `wechat-welcome-suggestion-`。所以本节上面那段「D-CUT 后是裸 div」描述的是 `c93ef4a`~`0f9b4b4` 这段时间的状态。
 
 | 阶段 | 判据 | 空会话截图 |
 | --- | --- | --- |
@@ -236,7 +236,7 @@ src/avatar.rs     281 ->    190   (-91)
 
 `26,662` 比区间下限 `26,850` 低 188 行，原因两条，都不是漏算：
 
-1. **`avatar.rs` 不在原清单里**：`bot_avatar` / `channel_avatar` / `unread_dot` / `shell` / `deg` 整条色相头像栈只被 classic 的 `message_row` 使用，微信壳走 `wechat_avatar`（`:22870`）。这 91 行是删干净的结果，清单当时漏统计。
+1. **`avatar.rs` 不在原清单里**：`bot_avatar` / `channel_avatar` / `unread_dot` / `shell` / `deg` 整条色相头像栈只被 classic 的 `message_row` 使用，微信壳走 `wechat_avatar`（第 22870 行）。这 91 行是删干净的结果，清单当时漏统计。
 2. 多处连续双空行合并成一个。
 
 判定界限：**低于下限只要能归到上面两类就通过**（空行合并、清单外连带删除且符号在微信壳有替代实现）；**不允许为了对齐区间反过来补空行**。
@@ -253,7 +253,7 @@ scripts\verify-parity-anchors.ps1 -Baseline WorkTree    drifted=0 unlocked=0
 scripts\verify-arch-anchors.ps1            anchors=143 ok=92 bad=0
 ```
 
-**测试数只允许上升或不变**：`composer_radius` 的单测（`:29536-29546`）随函数一起删，所以 `576` 会变成 `575`；此时必须由新增的欢迎区/运行状态测试补回来，总数不低于 575。低于 575 说明有人顺手删了别的测试。
+**测试数只允许上升或不变**：`composer_radius` 的单测随函数一起删（D-CUT 前它在第 29536–29546 行），所以 `576` 会变成 `575`；此时必须由新增的欢迎区/运行状态测试补回来，总数不低于 575。低于 575 说明有人顺手删了别的测试。
 
 **D-CUT 实测（`c93ef4a`）**：`575 passed / 0 failed / 2 ignored`，正好等于下限，六道门禁全 `EXIT=0`，`parity` 双口径 `drifted=0 unlocked=0`、锁 **412 条**（原 419，随 classic 一起死掉 7 条）。**D3 加欢迎区与改名入口后，测试数必须 ≥575；低于此数视为回归。**
 
@@ -266,7 +266,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 # 判据：删除+改判后为 0
 ```
 
-锁的条数：**419 条，其中 `src/main.rs` 144 条 → 删 17 / 平移 77 / 不变 50**（删除方案 §7.1，`17+77+50=144` 自洽；起作用的判据是三个数相加等于删除前的 `main.rs` 锚点数，不是某一版数字）。`419` 是 v0.6.0 PRD 提交（`454cb36`）后的实测值，不是 v0.5.1 的 417——那次提交为 A12 新增了 `:21754`（`wechat_list_row`）和 `:26251`（`wechat_nav`）两个锚点。**代码、文档、锁必须在同一个提交里**，顺序见删除方案 §7.4。
+锁的条数：**419 条，其中 `src/main.rs` 144 条 → 删 17 / 平移 77 / 不变 50**（删除方案 §7.1，`17+77+50=144` 自洽；起作用的判据是三个数相加等于删除前的 `main.rs` 锚点数，不是某一版数字）。`419` 是 v0.6.0 PRD 提交（`454cb36`）后的实测值，不是 v0.5.1 的 417——那次提交为 A12 新增了 `wechat_list_row` 与 `wechat_nav` 两个锚点。**代码、文档、锁必须在同一个提交里**，顺序见删除方案 §7.4。
 
 > 早前 PRD 写的「平移 31 / 不变 94」只算了 D1 旧区间；把 `settings_overlay`、`theme_picker` 与五处易漏项并进来后，删除区之后的锚点从 31 涨到 77。**以此处和删除方案 §7.1 为准**。
 
@@ -279,7 +279,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | R1 | 把「看着只被 classic 调」的共用函数一起删了，编译失败或功能静默消失 | 中 | 高 | 删除方案 §4 的「必须保留」表是唯一依据，删前逐个 `grep` 调用点；每批删完立刻 `cargo check`，不攒到最后 |
 | R2 | 一次删 2,600 行，视觉回归无法逐项验收 | 高 | 中 | 分批提交（§6），每批自带 `cargo check`；欢迎区与运行状态面板各配截图 |
 | R3 | 锚点大规模重排，混进一条「指向别人代码」的假锚点 | 中 | 中 | 严格按删除方案 §7.4：先删代码 → 再改文档 → 最后 `-UpdateAnchors -Baseline WorkTree` → 同一提交 → 两口径复核 |
-| R4 | `wecom_mode` 与 `:9040` / `:12118` 不同批删，编译中断 | 高（若操作不规范） | 低 | 第二批把三者当一个原子改动；删除方案 §6.1 已写明 |
+| R4 | `wecom_mode` 的两处反向条件不同批删，编译中断 | 高（若操作不规范） | 低 | 第二批把三者当一个原子改动；删除方案 §6.1 已写明 |
 | R5 | 微信壳在删除后暴露出原本被 classic 掩盖的缺陷（例：运行状态面板） | 中 | 中 | §3.5 已定为必做项；其余同类在优化批逐条修，不做的不进本版 |
 | R6 | 用户装了 `BOT_PILOT_CLASSIC_UI=1` 后启动，行为突变 | 低 | 低 | 环境变量被移除后即忽略；发布说明写「v0.6.0 起只有一套界面，该变量已废弃」 |
 
@@ -298,13 +298,13 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
-| **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript:19535-19664`（头像 / 欢迎语 / `welcome-suggestion-{i}`）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的 `:21439-21460`：九宫格头像 + 「群名 · N 人」+ 成员名单）。**单聊已完成（`0f9b4b5`）**，`wechat_welcome:24873`、chip id `:24893`；**群聊仍白屏**——`wechat_welcome` 收到 `bot=None` 直接返回空 div | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。**群聊：把 `wechat_welcome` 改成同时接 Bot / Group**（`wechat_transcript:24505-24506` 已取好两者），群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members` / `empty_state_badged`，文案走 `tri!` | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | P0（D3，群聊部分待补） |
-| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：grep `chat-detail-run` = 1；**行号不写死**（见 §5.3） |
-| **O-3** | 工作中状态行的文案分档 | 现状 `:28181-28184` 只有「工作中 / 重试中」两种；DS Bot `cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
-| **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
+| **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript` 的欢迎区（头像 / 欢迎语 / `welcome-suggestion-{i}`，D-CUT 前第 19535–19664 行）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行：九宫格头像 + 「群名 · N 人」+ 成员名单）。**两条路径均已完成**：单聊 `0f9b4b5`（`wechat_welcome`），群聊 `0706ebb`（`wechat_group_welcome`，id `wechat-group-welcome`） | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。群聊：`wechat_welcome` 同时接 Bot / Group，群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members` / `empty_state_badged`，文案走 `tri!` | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | P0（D3） |
+| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（第 17460 行 → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：grep `chat-detail-run` = 1；**行号不写死**（见 §5.3） |
+| **O-3** | 工作中状态行的文案分档 | 现状 `i18n::t("重试中")` / `i18n::t("工作中")` 两档，没有按工具名分短语；DS Bot `ds-bot/src/client/cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
+| **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `ds-bot/src/client/cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
 | **O-5** | 间距统一归入 4px 档（U-01） | `0.5.1-ui-review.md` U-01；标准见 `docs/ui-design-spec.md` 第 2 节「只用这六档」（4 / 8 / 12 / 16 / 24 / 32），同节末「废弃 5 / 10 / 14 / 18」。实测量级：`.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m*` 共 **560** 处，档外 **276** 处（`px(6)` 95、`px(10)` 64、`px(2)` 50、`px(14)` 33、`px(5)` 9、`px(1)` 6、`px(9)` 6、`px(3)` 3、`px(7)` 3、`px(56)` 1）。**数字只作量级参考，不进 AC**（理由见 §5.2） | 见 §5.2：先给 `scripts/ui-lint.ps1` 加第 5 条规则并以 report-only 跑出基线，再按页清零（会话列表 → 聊天区 → 右栏 → 设置页），每页改完前后各一张截图 | 见 §5.2：唯一判据是第 5 条规则在 `-Enforce` 下 **0 违规**；基线数值以脚本输出为准，不写手数的数字 | P1 |
 | **O-6** | 21 处 `truncate()` 缺 `min_w(px(0.))`（U-03） | 54 处 `truncate()`，21 处前 10 行内无 `min_w(px(0.))`；gpui 的 flex 子项 `min-width` 默认 `auto`，长 Bot 名 / 长路径会把父容器撑开而不是省略 | 只给**父容器是 flex 行且右侧有按钮**的位置补 `min_w(px(0.))`；父容器本身 `w_full` 的不补（避免多出无意义的省略号） | 逐处改完 `grep` 计数下降；超长 Bot 名（≥40 字）截图不撑破行 | P2 |
-| **O-7** | `ui_kit::button` / `button_ghost` 补 disabled 形态（U-04） | `ui_kit.rs:405/433` 两个函数无 disabled 参数、无置灰视觉 | 加 `disabled(bool)`，置灰用 `theme::ink_tertiary()` + 去 `cursor_pointer` + 不挂 hover；现有调用点不用改（默认 `false`） | 截图：一个 disabled 按钮与一个正常按钮同屏；`grep` 新增签名 | P2 |
+| **O-7** | `ui_kit::button` / `button_ghost` 补 disabled 形态（U-04） | `src/ui_kit.rs:405/433` 两个函数无 disabled 参数、无置灰视觉 | 加 `disabled(bool)`，置灰用 `theme::ink_tertiary()` + 去 `cursor_pointer` + 不挂 hover；现有调用点不用改（默认 `false`） | 截图：一个 disabled 按钮与一个正常按钮同屏；`grep` 新增签名 | P2 |
 
 > 表中 O-3 / O-4 的 DS Bot 行号是 `D:\Mode Bot\DS-Bot` 的源码位置（v0.3.6），仅作参照，不在本仓。
 
@@ -345,17 +345,17 @@ ui_kit.rs  总间距   5   在档   0  档外   5   ← gap(px(2.)) / py(px(1.))
 
 ### 5.3 本 PRD 里行号的写法规则（阶段 3 的教训）
 
-`main.rs` 在阶段 3 每一批 UI 改动都会整体下移（O-1 单聊 +113、群聊再 +76），**写死在 PRD 里的「文件:行号」会静默过期而门禁抓不到**——`scripts/verify-parity-anchors.ps1` 的 `$docs` 只含 `docs/parity-matrix.md` 与 `docs/prd-0.5.md`，`prd-0.6.md` 一条都不扫，所以 `drifted=0` 不代表本文件正确。
+`main.rs` 在阶段 3 每一批 UI 改动都会整体下移（O-1 单聊 +113、群聊再 +76），**写死在 PRD 里的「文件:行号」会静默过期而门禁抓不到**。`36136db` 之后本文件已把全部「裸行号」改成纯文本（第 N 行），并由 `scripts/verify-parity-anchors.ps1` 的 `$docs` 覆盖本文件——两条一起做才算真解：只改写法、不进门禁，下一次照样能写回锚点形式。
 
 所以本文件的行号分三类，写法不同：
 
 | 类型 | 写法 | 例子 | 为什么 |
 | --- | --- | --- | --- |
-| **当前 HEAD 的活锚点** | 尽量不写；必须写时同一次提交里跑 `-UpdateAnchors` 并人工核内容 | 现在只剩 **0 条**（`:302` 的 O-2 已去掉行号，只留 grep 判据） | 会被下移，且门禁不覆盖本文件 |
-| **历史位置**（描述「删除前在哪」） | 纯文本，不写「文件:行号」 | 「D-CUT 前 `if chat.messages.is_empty()` 在第 27783 行」 | 写成锚点会被当成当前引用去校验，而该行已不存在 |
+| **当前 HEAD 的活锚点** | 必须写「文件:行号」时，仓库内文件一律带 `src/` 或 `crates/` 前缀，外部对照树带 `ds-bot/` 或 `rpi-*` 前缀 | 现在剩 **8 条**（`src/theme.rs` 2、`src/data.rs` 2、`src/ui_kit.rs` 1、`src/main.rs` 0、`ds-bot/.../cells.js` 2），全部在 `$docs` 覆盖内，会被逐条校验内容 | 不带前缀的 `theme.rs:N` 会被当成仓库根下的文件，直接 FILE NOT FOUND；带前缀才能同时被位置校验、符号校验和指纹锁三层覆盖 |
+| **历史位置**（描述「删除前在哪」） | 纯文本，写成「第 N 行」，不加反引号、不写 `文件:N` | 「D-CUT 前 `if chat.messages.is_empty()` 在第 27783 行」 | 写成锚点会被当成当前引用去校验，而该行在 HEAD 上早已不存在 |
 | **判据** | 只写 grep 模式 / id / 截图，不写行号 | `grep 'chat-detail-run' = 1`、`wechat-welcome-suggestion-` ≥1 | 判据要能长期成立，行号会漂 |
 
-**给 @架构 的建议（门禁范围，归你定）**：把 `docs/prd-0.6.md` 加进 `$docs` 才是根治；`plans/**` 与 `docs/testing/**` 保持显式排除（它们记录的是当时 tag 的行号）。在门禁覆盖之前，本文件按上表执行。
+**门禁范围（`@架构` 已定，`36136db` 之后落地）**：`$docs` 已加入 `docs/prd-0.6.md`，`-Baseline Head` 会连本文件一起取 HEAD 版本，所以「工作区改了文档、HEAD 没改」不会让结果抖动。`docs/plans/**`、`docs/testing/**`、`docs/prd-0.5.md` 之外的历史快照保持显式排除——它们记录的是当时 tag 的行号，按今天的 HEAD 去改等于篡改历史实测。
 
 ---
 
