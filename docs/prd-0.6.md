@@ -154,6 +154,13 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 - 浅色主题：同上。
 - 群聊会话不出现欢迎区（微信壳无「当前 Bot」语义）。
 
+**本条属 D3，不属于 D-CUT 的验收**。classic `transcript` 删除后，「0 条消息且 `ready=true`」这条分支在微信壳里返回裸 `div()`（删除前位于 `src/main.rs:24727`，微信壳自身代码，与 classic 无关），屏幕上就是一片空白。**D-CUT 提交时这块空白是预期状态，按空白判阶段 2 失败是误判；D3 做完仍空白才算失败。** 两个阶段的判据分开：
+
+| 阶段 | 判据 | 空会话截图 |
+| --- | --- | --- |
+| D-CUT（阶段 2） | §3.1 / §3.2 / §3.3 的 grep + §3.6 行数 + §3.7 六道门禁 + 测试数 ≥575 | 不拍；拍了必然是空白，不作判据 |
+| D3（阶段 3） | 本节 grep（`wechat-welcome-suggestion-` ≥1）+ 上面三张截图 | 必拍；空白即失败 |
+
 ### 3.5 运行状态面板接回（grep + 截图）
 
 ```powershell
