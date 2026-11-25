@@ -283,8 +283,8 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
-| **O-1** | 空会话欢迎区 + 三条建议 chip | classic `transcript:19535-19664`（头像 / 欢迎语 / `welcome-suggestion-{i}`）；微信壳 `:27795` 现在是裸 `return div()`，**一片空白** | 复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` 的 assistant 气泡色；chip 28px 高、`RADIUS_TAG`、hover 用 `wechat_theme::nav_item_hover_bg()`；id 用 `wechat-welcome-suggestion-{i}`；点击 `input.set_content` + 聚焦 | §3.4 的 grep + 深/浅两张截图 | P0（删除批同步） |
-| **O-2** | 运行状态面板接回 | 现状：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | P0（删除批同步） |
+| **O-1** | 空会话欢迎区 + 三条建议 chip | classic `transcript:19535-19664`（头像 / 欢迎语 / `welcome-suggestion-{i}`）；微信壳 `src/main.rs:24554` 现在是裸 `return div()`，**一片空白**（D-CUT 后行号；删除前为 `:24727`） | 复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` 的 assistant 气泡色；chip 28px 高、`RADIUS_TAG`、hover 用 `wechat_theme::nav_item_hover_bg()`；id 用 `wechat-welcome-suggestion-{i}`；点击 `input.set_content` + 聚焦 | §3.4 的 grep + 深/浅两张截图 | P0（D3） |
+| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：`src/main.rs:24272` 渲染点，grep `chat-detail-run` = 1 |
 | **O-3** | 工作中状态行的文案分档 | 现状 `:28181-28184` 只有「工作中 / 重试中」两种；DS Bot `cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
 | **O-5** | 间距统一归入 4px 档（U-01） | `0.5.1-ui-review.md` U-01；标准见 `docs/ui-design-spec.md` 第 2 节「只用这六档」（4 / 8 / 12 / 16 / 24 / 32），同节末「废弃 5 / 10 / 14 / 18」。实测量级：`.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m*` 共 **560** 处，档外 **276** 处（`px(6)` 95、`px(10)` 64、`px(2)` 50、`px(14)` 33、`px(5)` 9、`px(1)` 6、`px(9)` 6、`px(3)` 3、`px(7)` 3、`px(56)` 1）。**数字只作量级参考，不进 AC**（理由见 §5.2） | 见 §5.2：先给 `scripts/ui-lint.ps1` 加第 5 条规则并以 report-only 跑出基线，再按页清零（会话列表 → 聊天区 → 右栏 → 设置页），每页改完前后各一张截图 | 见 §5.2：唯一判据是第 5 条规则在 `-Enforce` 下 **0 违规**；基线数值以脚本输出为准，不写手数的数字 | P1 |
@@ -328,7 +328,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | 批 | 内容 | 负责 | 前置 | 验证 |
 | --- | --- | --- | --- | --- |
 | **D-CUT** | ① 删 §2.1 第一批（约 2,772 行含注释）+ 五处易漏项（`control_card` / `chat_status` / `status_color` / `two_line` / `text_block`）；② 删第二批（241 行）+ `shell()` 改单分支 + `BOT_PILOT_CLASSIC_UI` 移除；③ 清 `theme.rs` 10 函数 + 2 常量 + `shadow_1` 断言 | 前端 | 删除方案补完五处易漏项与 `theme.rs` 清单 | 每删一组 `cargo check`；本批结束时 §3.1 / §3.2 / §3.3 的 grep 全过，`clippy -D warnings` 0 告警 |
-| **D3** | 搬欢迎区（O-1）+ 接回运行状态面板（O-2）+ 接回会话改名入口（§2.4 ①） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（深浅 × 两功能） |
+| **D3** | 搬欢迎区（O-1）+ 接回会话改名入口（§2.4 ①） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（深浅 × 两功能）；O-2 已在 D-CUT 内完成，不再重做 |
 | **D4** | 文档锚点重指 + 锁重建 + 矩阵 A12 改判 | 产品（锚点语义）+ 架构（重排脚本） | D-CUT / D3 完成 | 删除方案 §7.4 五步；§3.8；矩阵 88/21/27 |
 | **O 批** | O-3 / O-4 / O-5 / O-6 / O-7 | 前端（O-5 先加规则再逐页，见 §5.2） | D4 六道门禁全绿 | §5 各行「验收怎么验」+ §5.2 四步 |
 | **V 批** | 回归验证 + 发布 v0.6.0 | 测试 | O 批完成 | 见目标验收 |
