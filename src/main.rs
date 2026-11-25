@@ -23507,22 +23507,21 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
             .into_any_element();
     }
     let mut card_rows: Vec<gpui::AnyElement> = Vec::new();
+    // 表头：名称列跟随 flex_1，四个数字列与数据行同宽同对齐，否则表头会漂。
     let header = |text: &'static str, width: Option<f32>| {
-        let mut cell = div()
+        div()
             .flex()
             .items_center()
             .min_w(px(0.))
-            .when(width.is_none(), |el| el.flex_1())
             .when_some(width, |el, width| el.w(px(width)).justify_end())
+            .when(width.is_none(), |el| el.flex_1())
             .child(
                 div()
                     .font_family(theme::FONT_FAMILY)
                     .text_size(px(ui::T_LABEL))
                     .text_color(theme::ink_tertiary())
                     .child(i18n::t(text)),
-            );
-        cell = cell.when(width.is_none(), |el| el.justify_start());
-        cell
+            )
     };
     card_rows.push(
         div()
@@ -23530,6 +23529,8 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
             .flex()
             .items_center()
             .gap(px(ui::S2))
+            .px(px(ui::S3))
+            .py(px(ui::S2))
             .child(header("名称", None))
             .child(header("回合", Some(COL_TURNS)))
             .child(header("输入", Some(COL_TOKENS)))
@@ -23560,6 +23561,8 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
                     .flex()
                     .items_center()
                     .gap(px(ui::S2))
+                    .px(px(ui::S3))
+                    .py(px(ui::S2))
                     .child(
                         div()
                             .flex_1()
@@ -23631,6 +23634,8 @@ fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoEleme
         .flex()
         .items_center()
         .gap(px(ui::S2))
+        .px(px(ui::S3))
+        .py(px(ui::S2))
         .child(
             div()
                 .flex_1()
@@ -23671,6 +23676,8 @@ fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoEleme
                     .flex()
                     .items_center()
                     .gap(px(ui::S2))
+                    .px(px(ui::S3))
+                    .py(px(ui::S2))
                     .child(
                         div()
                             .flex_1()
