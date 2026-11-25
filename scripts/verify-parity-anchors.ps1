@@ -213,14 +213,13 @@ function Get-SourceLines([string]$path) {
   return ,$lineCache[$path]
 }
 # 返回 @{ distance = 最近距离（-1 表示标签里没有可校验的标识符）; name = 命中的符号 }
-function Measure-Label([string]$relAnchor, [int]$n, [string]$label) {
+function Measure-Label([string]$relAnchor, [int]$n, [string[]]$candidateIdentifiers) {
   $full = Resolve-Path3 $relAnchor
   if (-not $full) { return $null }
   $lines = Get-SourceLines $full
   if ($n -lt 1 -or $n -gt $lines.Count) { return $null }
   $idents = @()
-  foreach ($im in $identRx.Matches($label)) {
-    $w = $im.Value
+  foreach ($w in $candidateIdentifiers) {
     if ($w.Length -lt 4) { continue }
     if ($w -notmatch '_' -and $w -notmatch '::' -and $w -cnotmatch '[A-Z]') { continue }
     $idents += $w
@@ -241,29 +240,66 @@ function Measure-Label([string]$relAnchor, [int]$n, [string]$label) {
   return @{ distance = $best; name = $bestName }
 }
 
+function Get-Identifiers([string]$text) {
+  $out = @()
+  foreach ($im in $identRx.Matches($text)) {
+    $w = $im.Value
+    if ($w.Length -lt 4) { continue }
+    if ($w -notmatch '_' -and $w -notmatch '::' -and $w -cnotmatch '[A-Z]') { continue }
+    $out += $w
+  }
+  return @($out | Sort-Object -Unique)
+}
+
 $labelStrict = 0
 $labelLoose = 0
 $labelSkipped = 0
 $labelMiss = 0
 $looseList = New-Object System.Collections.Generic.List[string]
+$skipList = New-Object System.Collections.Generic.List[string]
 
-function Test-AnchorLabel([string]$rel, [int]$n, [string]$label, [string]$where) {
-  if (-not $label) { return }
-  $r = Measure-Label $rel $n $label
+# 单条锚点的符号校验。
+# 先用自己的标签；标签里抽不出标识符时（「classic 两处调用」这种纯中文描述），
+# 退回**同一表格行**里其它锚点出现过的一整套标识符——同一行讲的是同一个功能，
+# 用这一行的符号集合来验，比直接跳过强得多。
+# 负向用例就是这么漏的：F06 的 `:19395`（classic 两处调用）改成 `:1200`，
+# 因为标签无标识符被判 skipped，而 :1200 那行非空非结构，于是一路放行。
+function Test-AnchorLabel([string]$rel, [int]$n, [string]$label, [string]$rowText, [string]$where) {
+  $own = @()
+  if ($label) { $own = Get-Identifiers $label }
+  $source = 'label'
+  # 只用锚点自己的标签。曾经试过「标签没符号就退回整行的符号集合」，实测不可行：
+  # 矩阵一行有十几个锚点，整行的标识符跟某一个锚点无关，直接制造 11 条误报
+  #（`bot_icon` 371 行外、`private_bot_id` 1350 行外…）。标签里没符号的锚点
+  # 交给指纹锁兜底（见下方「锁覆盖完整性」），那才是真能挡住漂移的一层。
+  if ($own.Count -eq 0) {
+    $script:labelSkipped++
+    $script:skipList.Add(("{0} :{1}" -f $rel, $n))
+    return
+  }
+  $r = Measure-Label $rel $n $own
   if ($null -eq $r) { return }
-  if ($r.distance -lt 0) { $script:labelSkipped++; return }
-  if ($r.distance -le $STRICT_LINES) { $script:labelStrict++; return }
+  if ($r.distance -lt 0) {
+    $script:labelSkipped++
+    $script:skipList.Add(("{0} :{1}" -f $rel, $n))
+    return
+  }
+  if ($r.distance -le $STRICT_LINES) {
+    $script:labelStrict++
+    return
+  }
   if ($r.distance -le $LOOSE_LINES) {
     $script:labelLoose++
-    $script:looseList.Add(("{0} :{1}  ``{2}`` 在 {3} 行外" -f $rel, $n, $r.name, $r.distance))
+    $script:looseList.Add(("{0} :{1}  ``{2}`` 在 {3} 行外（{4}）" -f $rel, $n, $r.name, $r.distance, $source))
     return
   }
   $script:labelMiss++
-  $script:bad.Add("LABEL MISS -> $rel :$n 标签里的符号最近也在 $($r.distance) 行外（``$($r.name)``，上限 $LOOSE_LINES）；`n    该锚点很可能指到了无关代码 [$where]")
+  $script:bad.Add("LABEL MISS -> $rel :$n 标签里的符号最近也在 $($r.distance) 行外（``$($r.name)``，上限 $LOOSE_LINES，来源 $source）；`n    该锚点很可能指到了无关代码 [$where]")
 }
 
 $labelRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):(\d+)(?:-\d+)?(?:\d+)?`\s*[（(]([^）)]{0,160})[）)]'
 $bareLabelRx = [regex]'`:(\d+(?:/\d+)*)(?:-\d+)?`\s*[（(]([^）)]{0,160})[）)]'
+$bareAnyRx = [regex]'`:(\d+(?:/\d+)*)(?:-\d+)?`'
 $fileOnLineRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):'
 
 foreach ($doc in $docs) {
@@ -271,23 +307,23 @@ foreach ($doc in $docs) {
   foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
     # 1) 完整锚点：`path:N`（label）
     foreach ($m in $labelRx.Matches($line)) {
-      Test-AnchorLabel $m.Groups[1].Value.Trim() ([int]$m.Groups[2].Value) $m.Groups[3].Value $doc
+      Test-AnchorLabel $m.Groups[1].Value.Trim() ([int]$m.Groups[2].Value) $m.Groups[3].Value $line $doc
     }
     # 2) 裸行号：`:N`（label）——文件取同一行内紧挨在它前面的完整锚点。
     #    这一类以前完全没做符号校验，F06 的 `:19273` 指到 `.pointer()` 就是这么漏的。
     if ($line -notmatch '`:\d') { continue }
-    $currentFile = $null
-    foreach ($m in $fileOnLineRx.Matches($line)) {
-      if ($m.Index -lt $line.Length) { $currentFile = $m.Groups[1].Value.Trim() }
-    }
+    $labelled = @{}
+    foreach ($m in $bareLabelRx.Matches($line)) { $labelled[$m.Index] = $m }
     # 逐个裸锚点：文件归属按「它前面最近的完整锚点」重算，不能整行共用一个。
-    foreach ($m in $bareLabelRx.Matches($line)) {
+    foreach ($m in $bareAnyRx.Matches($line)) {
       $before = $line.Substring(0, $m.Index)
       $lastFile = $null
       foreach ($fm in $fileOnLineRx.Matches($before)) { $lastFile = $fm.Groups[1].Value.Trim() }
       if (-not $lastFile) { continue }
+      $ownLabel = ''
+      if ($labelled.ContainsKey($m.Index)) { $ownLabel = $labelled[$m.Index].Groups[2].Value }
       foreach ($n in ($m.Groups[1].Value -split '/' | Where-Object { $_ -ne '' })) {
-        Test-AnchorLabel $lastFile ([int]$n) $m.Groups[2].Value $doc
+        Test-AnchorLabel $lastFile ([int]$n) $ownLabel $line $doc
       }
     }
   }
@@ -296,36 +332,68 @@ Write-Output "label-nearby: strict(<=$STRICT_LINES lines)=$labelStrict  loose(<=
 if ($VerbosePreference -ne 'SilentlyContinue' -or $env:MODE_PARITY_SHOW_LOOSE -eq '1') {
   foreach ($l in $looseList) { Write-Output "  [loose] $l" }
 }
+# skipped 的锚点等于「只过了弱校验（非空 + 非结构行）」。数量不为 0 时逐条列出来，
+# 否则没人会去数，只会看到「skipped=54」这种没人负责的数字。
+if ($skipList.Count -gt 0) {
+  Write-Output "  [skipped] $($skipList.Count) 条锚点只有弱校验（标签与本行都没有可校验符号）："
+  foreach ($s in $skipList) { Write-Output "    $s" }
+}
 # --- 锚点指纹锁：没有写符号名的锚点也要防漂移 -------------------------------
-# 记录每个 `file:N` 当时指向那一行的内容摘要；下次跑若内容变了，说明代码移动过，
+# 记录每个锚点当时指向那一行的内容摘要；下次跑若内容变了，说明代码移动过，
 # 该锚点极可能已指错地方（前端重排 main.rs 行号时就是这样把一批锚点指到 `}` 上的）。
+#
+# 覆盖范围必须与「文档里实际存在的锚点集合」逐条对齐，否则 `drifted: 0` 是假的：
+# 锁里只认自己记过的 key，文档新增的锚点不在锁里就**永不参与比对**。
+# v0.5.1 就撞到过：锁停在 31f208e 的 296 条，文档 238 条里 80 条不在锁内，
+# 前端新加的 :22258 / :19395 / :19678 / :24639 全都没被比对过，输出却是 drifted: 0。
+# 现在两头都要校验：
+#   - 文档里有、锁里没有 → UNLOCKED（锚点没纳入比对，等于没防漂移）
+#   - 锁里有、文档里没有 → STALE（锁过期，说明没跟上文档，需要重跑 -UpdateAnchors）
 $lockPath = Join-Path $root 'docs/parity-anchors.lock'
 $lockLines = New-Object System.Collections.Generic.List[string]
-$lockChecked = 0
-$lockDrift = 0
+
+# 与校验阶段完全相同的锚点扫描（含裸行号），保证「锁的键集合」== 「文档锚点集合」。
+$lockSeen = @{}
+function Add-LockEntry([string]$rel, [int]$start) {
+  $full = Resolve-Path3 $rel
+  if (-not $full) { return }
+  $lines = [System.IO.File]::ReadAllLines($full)
+  if ($start -lt 1 -or $start -gt $lines.Count) { return }
+  $key = "$rel`:$start"
+  if ($script:lockSeen.ContainsKey($key)) { return }
+  $script:lockSeen[$key] = $true
+  # 指纹：去空白 + 去掉行尾逗号，避免纯格式调整误报
+  $sig = ($lines[$start - 1].Trim() -replace '\s+', ' ').TrimEnd(',')
+  if ($sig.Length -gt 80) { $sig = $sig.Substring(0, 80) }
+  $script:lockLines.Add("$key|$sig")
+}
+
 foreach ($doc in $docs) {
-  $text = [System.IO.File]::ReadAllText((Join-Path $root $doc))
-  foreach ($m in $rx.Matches($text)) {
-    $rel = $m.Groups[1].Value.Trim()
-    $positions = New-Object System.Collections.Generic.List[int]
-    $positions.Add([int]$m.Groups[2].Value)
-    if ($m.Groups[3].Success) { $positions.Add([int]$m.Groups[3].Value) }
-    foreach ($extra in ($m.Groups[4].Value -split '/' | Where-Object { $_ -ne '' })) {
-      $positions.Add([int]$extra)
+  $docPath = Join-Path $root $doc
+  foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
+    # 1) 完整锚点：`path:N`（含 1-9 区间与 1/2/3 多位置写法）
+    foreach ($m in $rx.Matches($line)) {
+      $rel = $m.Groups[1].Value.Trim()
+      Add-LockEntry $rel ([int]$m.Groups[2].Value)
+      if ($m.Groups[3].Success) { Add-LockEntry $rel ([int]$m.Groups[3].Value) }
+      foreach ($extra in ($m.Groups[4].Value -split '/' | Where-Object { $_ -ne '' })) {
+        Add-LockEntry $rel ([int]$extra)
+      }
     }
-    $full = Resolve-Path3 $rel
-    if (-not $full) { continue }
-    $lines = [System.IO.File]::ReadAllLines($full)
-    foreach ($start in $positions) {
-      if ($start -lt 1 -or $start -gt $lines.Count) { continue }
-      # 指纹：去空白 + 去掉行尾逗号，避免纯格式调整误报
-      $sig = ($lines[$start - 1].Trim() -replace '\s+', ' ').TrimEnd(',')
-      if ($sig.Length -gt 80) { $sig = $sig.Substring(0, 80) }
-      $lockLines.Add("$rel`:$start|$sig")
+    # 2) 裸行号 `:N` / `:N/M`：文件取同一行内紧挨在它前面的完整锚点
+    if ($line -notmatch '`:\d') { continue }
+    foreach ($m in $bareAnyRx.Matches($line)) {
+      $before = $line.Substring(0, $m.Index)
+      $lastFile = $null
+      foreach ($fm in $fileOnLineRx.Matches($before)) { $lastFile = $fm.Groups[1].Value.Trim() }
+      if (-not $lastFile) { continue }
+      foreach ($n in ($m.Groups[1].Value -split '/' | Where-Object { $_ -ne '' })) {
+        Add-LockEntry $lastFile ([int]$n)
+      }
     }
   }
 }
-$lockLines = $lockLines | Sort-Object -Unique
+$lockLines = @($lockLines | Sort-Object -Unique)
 if ($UpdateAnchors) {
   [System.IO.File]::WriteAllLines($lockPath, $lockLines, (New-Object System.Text.UTF8Encoding($false)))
   Write-Output "anchor lock rewritten: $($lockLines.Count) entries -> docs/parity-anchors.lock"
@@ -335,25 +403,35 @@ if ($UpdateAnchors) {
     $i = $l.IndexOf('|')
     if ($i -gt 0) { $locked[$l.Substring(0, $i)] = $l.Substring($i + 1) }
   }
+  $lockChecked = 0
+  $lockDrift = 0
+  $unlocked = New-Object System.Collections.Generic.List[string]
   foreach ($l in $lockLines) {
     $i = $l.IndexOf('|')
     $key = $l.Substring(0, $i)
     $sig = $l.Substring($i + 1)
-    if (-not $locked.ContainsKey($key)) { continue }
+    if (-not $locked.ContainsKey($key)) { $unlocked.Add($key); continue }
     $lockChecked++
     if ($locked[$key] -ne $sig) {
       $lockDrift++
-      # 只在明细里提示，前 5 条打出来，避免刷屏
       if ($lockDrift -le 5) {
         $bad.Add("ANCHOR MOVED -> $key 指向内容已变（原 [$($locked[$key])]，现 [$sig]）")
       }
     }
   }
-  Write-Output "anchor-fingerprint checked: $lockChecked  drifted: $lockDrift"
+  # 锁里多出来、文档里已不存在的条目：说明锁过期，不是错，但必须报告
+  $stale = 0
+  foreach ($k in $locked.Keys) { if (-not $lockSeen.ContainsKey($k)) { $stale++ } }
+  Write-Output "anchor-fingerprint checked: $lockChecked  drifted: $lockDrift  unlocked: $($unlocked.Count)  stale-in-lock: $stale"
+  # 未纳入比对 = 没有防漂移保护。只要有就判失败，并把前 10 条列出来，
+  # 否则「drifted: 0」会一直被当成通过了。
+  if ($unlocked.Count -gt 0) {
+    $bad.Add("LOCK COVERAGE -> $($unlocked.Count) 个锚点不在 docs/parity-anchors.lock 里，没参与漂移比对；跑一次 -UpdateAnchors 并提交锁文件")
+    foreach ($u in ($unlocked | Select-Object -First 10)) { Write-Output "    [unlocked] $u" }
+  }
 } else {
   Write-Output 'anchor-fingerprint: no lock file yet (run with -UpdateAnchors once)'
-}
-# --- 状态计数一致性：汇总表数字必须等于明细行实际计数 -------------------------
+}# --- 状态计数一致性：汇总表数字必须等于明细行实际计数 -------------------------
 # 明细行形如 `| A01 | ... | ✅ | ... |`；按行首 ID 归组，DOMAIN 表同样核对。
 $matrix = [System.IO.File]::ReadAllLines((Join-Path $root 'docs/parity-matrix.md'), [System.Text.Encoding]::UTF8)
 $rowRx = [regex]'^\|\s*([A-R])(\d{2})\s*\|'
