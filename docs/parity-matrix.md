@@ -79,13 +79,13 @@
 | E02 | 团队记忆进系统提示 | `README.zh.md`（In the prompt） | ✅ | `src/rpi_engine.rs:338-371`（system_prompt_for / system_prompt_for_bot） | 无 |
 | E03 | Bot 自身记忆进系统提示 | 同上 | ✅ | `src/rpi_engine.rs:346`（`system_prompt_for_bot`，预算 `clamp(window*0.06, 2000, 24000)` 字符）、`src/data.rs:608`（`bot_memory_context`）、注入点 `src/rpi_engine.rs:364` | 无 |
 | E04 | 群记忆进成员提示 | 同上 | ✅ | `src/backend.rs:1667`（`group_memory` 注入成员回合） | 无 |
-| E05 | 记忆工具 `remember` / `forget` / `recall` | `ds-bot/src/host/memory.js:1075/1114/1151` | ✅ | `src/memory_tools.rs:58`（`tools(bot_id)` 注册三个工具）、`src/data.rs:571`（`read_bot_memory`）/`:581`（`save_bot_memory`）/`:595`（`delete_bot_memory`）/`:530`（`undo_bot_memory`） | 无 |
+| E05 | 记忆工具 `remember` / `forget` / `recall` | `ds-bot/src/host/memory.js:1075/1114/1151` | ✅ | `src/memory_tools.rs:58`（`tools(bot_id)` 注册三个工具）、`src/data.rs:571`（`read_bot_memory`）/`:581`（`save_bot_memory`）/`:595`（`delete_bot_memory`）/`:602`（`undo_bot_memory`） | 无 |
 | E06 | 群记忆自动回顾（idle 后一次模型调用） | `ds-bot/src/host/memory-review.js:1-6` | ✅ | `src/memory_review.rs:83/196/318`、`src/backend.rs:2239`（run_memory_review） | 无 |
 | E07 | 私聊记忆自动回顾 | 同上 | ❌ | `src/backend.rs:2239-2247` 只处理 `group_id` | **明确降级到 v0.6**：私聊不自动回顾（手动 `remember` 已可用，见 E05） 〔降级 v0.6〕 |
 | E08 | 记忆面板：团队 / 群 | `ds-bot/src/client/memory-panel.js` | ✅ | `src/main.rs:15300`（`settings_page_team_memory`，团队）、:16702`（`group_memory_section`，群） | 无 |
 | E09 | 记忆面板：单个 Bot | 同上 | ✅ | `src/main.rs:9772`（`SettingsDetail::BotMemory` 列表/新增/撤销/编辑）、`src/main.rs:9815`（`MemoryScope::Bot`） | 无 |
 | E10 | 记忆整理（tidy / 合并重复 / archive） | `ds-bot/src/host/memory-tidy.js` | ✅ | `crates/bots-service/src/memory_store.rs:659`（tidy_memory）、`:640`（maybe_daily_tidy 每日一次，写入路径自动触发 `:1133/1161`） | 自动整理已在跑；缺「手动整理 + 撤销整批」的 UI 入口 |
-| E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:530`（`undo_team_memory`） | 无 |
+| E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:530`（`undo_team_memory`）/`:602`（`undo_bot_memory`） | 无 |
 | E12 | 条目移动到其他作用域 / 摘要 | `ds-bot/src/host/memory-copy.js` | 🟡 | `crates/bots-service/src/memory_store.rs:805`（move_memory，仅测试调用 `:1631`） | 能力有，UI 无入口 〔降级 v0.6〕 |
 | E13 | 记忆安全（拒绝密钥/密码） | `ds-bot/README.md`（Safety） | ✅ | `src/memory_tools.rs:396`（`looks_sensitive`：密码/令牌/密钥/长数字，`:194` 返回中文拒绝语）、`src/memory_review.rs:196`（字段校验） | 无 |
 
@@ -102,7 +102,7 @@
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7082`（`on_find_shortcut`）/:7107`（`search_sessions` 汇总）/:18352`（`find_dialog_overlay`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1536` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:246`（`TRANSCRIPT_WINDOW = 120`）/:22019`（累计翻页） | 无 |
-| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24759`（`kit_markdown_el`，`.selectable(true)` `:24761`）两壳正文都走它：classic `:19438`/`:19721`、wecom `:22118`。**但消息动作行只有 classic 有**：`message_actions`（`:22920`，含引用/复制/复制代码）调用点 `:19472`、`:19747` 均在 `transcript()` 内；`wecom_row_el`（`:21988`，区间到 `:22658`）内 `message_actions`/`copy`/`quote`/`context_menu` 全 0 命中 | 默认壳能选中文本，但没有「复制整条 / 引用 / 复制代码」按钮，也没有右键菜单 〔降级 v0.6：与 R6 同一根因；建议 v0.5.2（Q-04）〕 |
+| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24759`（`kit_markdown_el`，`.selectable(true)` `:24761`）两壳正文都走它：classic `:19438`/`:19721`、wecom `:22118`。**但消息动作行只有 classic 有**：`message_actions`（`:22920`，含引用/复制/复制代码）调用点 `:19472`、`:19747` 均在 `transcript()` 内；`wecom_row_el`（`:21988-22262`）内 `message_actions`/`copy`/`quote`/`context_menu` 全 0 命中 | 默认壳能选中文本，但没有「复制整条 / 引用 / 复制代码」按钮，也没有右键菜单 〔降级 v0.6：与 R6 同一根因；建议 v0.5.2（Q-04）〕 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:748`（MsgKind::Reasoning）、:3177`（工具折叠组） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
 | F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2117`（`ask_user_question` 工具名）、UI `src/main.rs:5341` | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
