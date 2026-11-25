@@ -259,17 +259,14 @@ src/main.rs:18588|if let Err(message) = data::delete_group(group_id) {
 src/main.rs:19086|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:19237|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
 src/main.rs:19403|column = column.child(compaction_status_row());
-src/main.rs:19411|if message.kind == MsgKind::Reasoning {
 src/main.rs:19446|.child(kit_markdown_el(
 src/main.rs:19480|Some(message_actions(
 src/main.rs:19686|column = column.child(compaction_status_row());
-src/main.rs:19694|if message.kind == MsgKind::Reasoning {
 src/main.rs:19729|.child(kit_markdown_el(
 src/main.rs:19755|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
 src/main.rs:19759|SharedString::from(format!("msg-p-{}", index))
 src/main.rs:19827|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
 src/main.rs:19975|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:20343|.mb(px(8.))
 src/main.rs:2069|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:20975|fn bot_details(
 src/main.rs:21050|rows = rows.child(section_label(i18n::t("审批策略")));
