@@ -82,7 +82,7 @@
 | E05 | 记忆工具 `remember` / `forget` / `recall` | `ds-bot/src/host/memory.js:1075/1114/1151` | ✅ | `src/memory_tools.rs:58`（`tools(bot_id)` 注册三个工具）、`src/data.rs:571`（`read_bot_memory`）/`:581`（`save_bot_memory`）/`:595`（`delete_bot_memory`）/`:602`（`undo_bot_memory`） | 无 |
 | E06 | 群记忆自动回顾（idle 后一次模型调用） | `ds-bot/src/host/memory-review.js:1-6` | ✅ | `src/memory_review.rs:83/196/318`、`src/backend.rs:2239`（run_memory_review） | 无 |
 | E07 | 私聊记忆自动回顾 | 同上 | ❌ | `src/backend.rs:2239-2247` 只处理 `group_id` | **明确降级到 v0.6**：私聊不自动回顾（手动 `remember` 已可用，见 E05） 〔降级 v0.6〕 |
-| E08 | 记忆面板：团队 / 群 | `ds-bot/src/client/memory-panel.js` | ✅ | `src/main.rs:15300`（`settings_page_team_memory`，团队）、:16702`（`group_memory_section`，群） | 无 |
+| E08 | 记忆面板：团队 / 群 | `ds-bot/src/client/memory-panel.js` | ✅ | `src/main.rs:15300`（`settings_page_team_memory`，团队）、`:16702`（`group_memory_section`，群） | 无 |
 | E09 | 记忆面板：单个 Bot | 同上 | ✅ | `src/main.rs:9772`（`SettingsDetail::BotMemory` 列表/新增/撤销/编辑）、`src/main.rs:9815`（`MemoryScope::Bot`） | 无 |
 | E10 | 记忆整理（tidy / 合并重复 / archive） | `ds-bot/src/host/memory-tidy.js` | ✅ | `crates/bots-service/src/memory_store.rs:659`（tidy_memory）、`:640`（maybe_daily_tidy 每日一次，写入路径自动触发 `:1133/1161`） | 自动整理已在跑；缺「手动整理 + 撤销整批」的 UI 入口 |
 | E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:530`（`undo_team_memory`）/`:602`（`undo_bot_memory`） | 无 |
@@ -99,14 +99,14 @@
 | F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | 🟡 | `src/main.rs:5320`（`queue_current`）/`:5366`（`flush_queue`）、`:866`（`queued: Vec<QueuedSend>`）、`:5327`（`MAX_QUEUED = 5`）；上限 5 条 | 逻辑有，但无排队条 UI（DS 有独立 dock），用户看不到排了几条 〔降级 v0.6〕 |
 | F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `src/main.rs:5228`（`strip_prefix("/side")` 命令入口）、`:7822`（`fn open_side`）、`:7920`（`fn apply_side_event`，旁路事件不进主 chat） | 无 |
 | F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`src/rpi_engine.rs:1170`（`harness.events().watch` 监听）、`:1181`（`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs:4673`（`chat.compacting`）、`:19395`/`:19678`（classic 两处调用）、`:22258`（默认壳 `WecomRow::Compacting`）、行定义 `:24639`（`id="chat-compaction-status"` `:24641`）、`:1050`（`PaletteCmd` 定义）→ `:7612`（`PaletteCmd::Compact` 派发）、默认壳入口 `:28588`（`composer-plus`）+ `:28595`/`:28606`（`on_palette_shortcut`） | checkpoint/handoff 语义未做（明确降级 v0.6）。v0.5.0 曾只有 classic 外壳接上这两处（默认壳 0 命中，实测 93 帧无一帧出现状态行），v0.5.1 已由 Q-01/Q-02 补齐默认壳 `:22258` + `:28588` | 〔降级 v0.6：checkpoint/handoff 语义〕 |
-| F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7082`（`on_find_shortcut`）/:7107`（`search_sessions` 汇总）/:18352`（`find_dialog_overlay`） | 无 |
+| F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7082`（`on_find_shortcut`）/`:7114`（`search_sessions` 调用）/`:18359`（`find_dialog_overlay`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1536` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:246`（`TRANSCRIPT_WINDOW = 120`）、`:22021`（`transcript_limit.saturating_add`，累计翻页） | 无 |
 | F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24759`（`kit_markdown_el`，`.selectable(true)` `:24761`）两壳正文都走它：classic `:19438`/`:19721`、wecom `:22118`。**但消息动作行只有 classic 有**：`message_actions`（`:22920`，含引用/复制/复制代码）调用点 `:19472`、`:19747` 均在 `transcript()` 内；`wecom_row_el`（`:21988-22262`）内 `message_actions`/`copy`/`quote`/`context_menu` 全 0 命中 | 默认壳能选中文本，但没有「复制整条 / 引用 / 复制代码」按钮，也没有右键菜单 〔降级 v0.6：与 R6 同一根因；建议 v0.5.2（Q-04）〕 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:755`（`MsgKind::Reasoning`，枚举在 `:753`）、`:3632`（`WecomRow::ToolGroup` 折叠组；渲染 `:21632`/`:22257`） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
 | F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2117`（`ask_user_question` 工具名）、UI `src/main.rs:5823`（`question_cards`）/`:5836`（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
-| F14 | ACP 表单提问（elicitation） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/main.rs:6042`（`elicitation_cards`）/:6055`（`elicitation_card_el`）/:6395`（`submit_elicitation`）、`src/backend.rs:144`（`ElicitationCard`） | 无 |
+| F14 | ACP 表单提问（elicitation） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/main.rs:6042`（`elicitation_cards`）/`:6055`（`elicitation_card_el`）/`:6395`（`submit_elicitation`）、`src/backend.rs:144`（`ElicitationCard`） | 无 |
 | F15 | 图片附件（发送 + 历史回源） | `ds-bot/src/host/images.js` | ✅ | `src/rpi_engine.rs:2051`（images_from_attachments）、`src/main.rs:19819`（`stage_attachment_paths`） | 无 |
 | F16 | 语音转写 | `ds-bot/src/client/voice.js`、`speech.js` | ❌ | `src/main.rs:19967`（`toggle_voice_typing`，只调系统 Win+H）、`:16474` 自认“未接入” | 无 ASR 〔降级 v0.6〕 |
 

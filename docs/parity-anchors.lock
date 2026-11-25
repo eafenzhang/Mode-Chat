@@ -250,9 +250,11 @@ src/main.rs:1633|format!("goal-stage-rework-{index}")
 src/main.rs:16472|i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据")
 src/main.rs:16474|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
 src/main.rs:1654|format!("goal-stage-acceptance-{index}")
+src/main.rs:16702|fn group_memory_section(&self, group_id: &str, cx: &mut Context<Self>) -> gpui::
 src/main.rs:16930|fn open_delete_bot_dialog(
 src/main.rs:1698|"goal-stage-error-{index}"
 src/main.rs:16987|(i18n::t("隐藏").to_string(), false, DetailMenuAction::HideBot(bot.id.clone()))
+src/main.rs:18359|fn find_dialog_overlay(
 src/main.rs:18580|if let Err(message) = data::delete_group(group_id) {
 src/main.rs:19078|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:19229|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -326,12 +328,15 @@ src/main.rs:5478|.filter(|bot| !bot.is_private)
 src/main.rs:5823|fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
 src/main.rs:5836|fn question_card_el(
 src/main.rs:6042|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:6055|fn elicitation_card_el(
+src/main.rs:6395|fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
 src/main.rs:6549|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
 src/main.rs:6562|fn approval_card_el(
 src/main.rs:6840|fn on_new_session_shortcut(
 src/main.rs:6872|.new_session(
 src/main.rs:703|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
 src/main.rs:7082|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
+src/main.rs:7114|results.extend(crate::rpi_engine::search_sessions(&query, remaining));
 src/main.rs:753|enum MsgKind {
 src/main.rs:755|Reasoning
 src/main.rs:7559|PaletteCmd::NewSession => {
