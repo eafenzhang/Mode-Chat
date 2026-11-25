@@ -5,10 +5,24 @@ param([switch]$UpdateAnchors)
 # -UpdateAnchors：把当前每个锚点指向的源码行内容重新记入 docs/parity-anchors.lock。
 # 只有在「确认锚点已按新代码重新映射过」之后才该跑它；它本身不做任何映射。
 $ErrorActionPreference = 'Stop'
-$root = 'D:\ModeChat'
-$ds   = 'D:\Mode Bot\DS-Bot'
-$rpi  = 'C:\Users\Administrator\.cargo\git\checkouts\pi-rust-ba8012a5f17fe953\29d8686'
-$roots = @($root, $ds, $rpi)
+# 仓库根从脚本位置反推（脚本在 scripts/ 下），这样 CI 的临时检出目录也能跑；
+# 两个外部对照树（DS-Bot 基线、pi-rust checkout）可选，用
+# MODE_PARITY_DS_ROOT / MODE_PARITY_RPI_ROOT 指过去，没有就跳过（不当作 OK）。
+$root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+$ds   = if ($env:MODE_PARITY_DS_ROOT)  { $env:MODE_PARITY_DS_ROOT }  else { '' }
+$rpi  = if ($env:MODE_PARITY_RPI_ROOT) { $env:MODE_PARITY_RPI_ROOT } else { '' }
+$roots = @($root)
+if ($ds)  { $roots += $ds }
+if ($rpi) { $roots += $rpi }
+
+# 外部对照树里的路径（DS-Bot 基线、pi-rust checkout）：CI 里没有这些树，
+# 找不到时跳过并计数，不当成坏锚点；但仓库自己的路径找不到必须报错。
+function External-Kind([string]$rel) {
+  if ($rel -like 'ds-bot/*' -or $rel -eq 'README.zh.md' -or $rel -eq 'README.md') { return 'ds' }
+  if ($rel -like 'rpi-*/*' -or $rel -like 'crates/rpi-harness/*') { return 'rpi' }
+  return $null
+}
+$script:skippedExternal = 0
 
 function Resolve-Path3([string]$p) {
   if ([System.IO.Path]::IsPathRooted($p)) { if (Test-Path $p) { return $p } else { return $null } }
@@ -44,7 +58,11 @@ foreach ($doc in $docs) {
       $positions.Add([int]$extra)
     }
     $full = Resolve-Path3 $rel
-    if (-not $full) { $bad.Add("$rel :$($positions[0]) -> FILE NOT FOUND"); continue }
+    if (-not $full) {
+      $kind = External-Kind $rel
+      if ($kind) { $script:skippedExternal++; continue }
+      $bad.Add("$rel :$($positions[0]) -> FILE NOT FOUND"); continue
+    }
     $lines = [System.IO.File]::ReadAllLines($full)
     foreach ($start in $positions) {
       $key = "$rel|$start"
@@ -98,7 +116,7 @@ foreach ($doc in $docs) {
     }
   }
 }
-Write-Output "anchors checked: $checked  symbol-checked: $nearChecked"
+Write-Output "anchors checked: $checked  symbol-checked: $nearChecked  skipped-external: $script:skippedExternal"
 
 # --- 裸行号锚点：` :760/767` 这种省略文件名的写法 ---------------------------
 # 表格里常写「`src/goals.js:19`（…）、`:760/767`（…）」，后半截只有行号。

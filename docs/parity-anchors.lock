@@ -1,6 +1,6 @@
-.github/workflows/release.yml:104|run: |
 .github/workflows/release.yml:54|- name: Test
-Cargo.toml:25|version = "0.4.0"
+.github/workflows/release.yml:79|if ($LASTEXITCODE -ne 0) { exit 1 }
+Cargo.toml:25|version = "0.5.0"
 crates/automation-schedule/src/cron.rs:1|//! 五段/六段/七段 cron 解析与下次/上次触发计算。
 crates/automation-schedule/src/cron.rs:49|pub fn parse(pattern: &str) -> Result<Self, String> {
 crates/bots-service/src/lib.rs:59|pub const RETIRED_BOT_PROVIDERS: &[&str] = &["telegram", "webhook", "discord", "
@@ -19,8 +19,6 @@ crates/bot-team/src/mentions.rs:110|pub fn is_pass_reply(text: &str) -> bool {
 crates/bot-team/src/orchestration.rs:85|pub fn decide_reply_sink(has_text: bool, is_pass_reply: bool, waiting: bool) -> 
 crates/bot-team/src/teammate.rs:36|pub instructions: String
 crates/connectors-service/src/lib.rs:174|pub const CATALOG: &[ConnectorSpec] = &[
-crates/rpi-harness/src/types.rs:327|pub const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = CompactionSettings {
-crates/rpi-harness/src/types.rs:330|keep_recent_tokens: 20000
 docs/pilot-notes.md:146|- 长会话只渲染最近 120 条（「显示更早」按批放开），未做完整虚拟化；自动更新
 ds-bot/src/host/capabilities.js:21|export function expandCapabilityNames(capabilities, library) {
 ds-bot/src/host/chat-index.js:4|// Chat index. read_own_chat searches a SQLite FTS5 table of every part of a Bot
@@ -83,23 +81,23 @@ src/automations.rs:101|
 src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
-src/backend.rs:1259|} => {
-src/backend.rs:1436|let internal = member_session_key(&spec.group_key, &member.member_id);
-src/backend.rs:1541|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
-src/backend.rs:1551|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
-src/backend.rs:1601|addressed_by_user
-src/backend.rs:1911|memory: spec.info.memory.clone()
-src/backend.rs:1919|let session = Arc::clone(session);
+src/backend.rs:1321|} => {
+src/backend.rs:1498|let internal = member_session_key(&spec.group_key, &member.member_id);
+src/backend.rs:1603|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
+src/backend.rs:1613|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
+src/backend.rs:1667|memory: crate::data::group_memory_context(
+src/backend.rs:191|Delta {
+src/backend.rs:194|}
+src/backend.rs:2239|async fn run_memory_review(
+src/backend.rs:2247|};
 src/backend.rs:320|async fn open_rpi_session(
 src/backend.rs:335|let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, w
 src/backend.rs:353|// 记忆回顾是隐藏的 JSON 任务，不给控制类工具，也不给记忆写入工具。
-src/backend.rs:441|pub(crate) fn v4_selftest_delta(text: &str) {
-src/backend.rs:442|if v4_selftest() {
-src/backend.rs:557|/// 立即压缩上下文（命令面板「立即压缩」，W4）。
-src/backend.rs:565|text: String
+src/backend.rs:561|AskBot {
+src/backend.rs:569|PostGroup {
 src/bot_icon.rs:1|//! Bot 图标 + 颜色：面罩机器人 9 表情，全局按 Bot id 存一份外观。
-src/bot_tools.rs:103|"post_to_group"
-src/bot_tools.rs:58|pub fn tools(identity: &str) -> Vec<HarnessTool> {
+src/bot_tools.rs:104|"post_to_group"
+src/bot_tools.rs:59|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/browser_tools.rs:377|/// 进程退出前清空所有浏览器会话（profile 目录保留）。
 src/browser_tools.rs:46|fn session_key(scope: &str) -> String {
 src/browser_tools.rs:589|Action::Press
@@ -214,11 +212,11 @@ src/main.rs:23275|"密钥"
 src/main.rs:23286|///
 src/main.rs:23340|AddModel {
 src/main.rs:23375|/// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
-src/main.rs:2458|bots: Vec<(String, String, String)>
 src/main.rs:2488|if let Some(index) =
 src/main.rs:2522|.flex()
 src/main.rs:2552|let active = self.admin_id == *id;
 src/main.rs:2814|fn push_member_delta(&mut self, member: &str, delta: &str) {
+src/main.rs:2832|fn finish_member(&mut self, member: &str) {
 src/main.rs:3258|usage_range: usize
 src/main.rs:3797|settings_detail_flags: Vec::new()
 src/main.rs:3865|gpui::ListAlignment::Top
@@ -262,6 +260,7 @@ src/rpi_engine.rs:144|let limits = crate::model_limits::read(&spec.provider_id, 
 src/rpi_engine.rs:147|model.max_tokens = max_tokens.max(1) as u64;
 src/rpi_engine.rs:1536|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
 src/rpi_engine.rs:1575|collect_search(&path, needle, limit, private_workspaces, out);
+src/rpi_engine.rs:1589|if !private_workspaces.is_empty()
 src/rpi_engine.rs:1692|pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
 src/rpi_engine.rs:1731|pub fn usage_grouped(days: usize) -> GroupedUsage {
 src/rpi_engine.rs:1776|}

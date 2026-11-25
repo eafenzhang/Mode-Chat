@@ -2,7 +2,7 @@
 
 > 作者：架构
 > 基准：`D:\Mode Bot\DS-Bot`（v0.3.6 源码）+ 本机 DS Bot 实机
-> 被核实项目：`D:\ModeChat`（Rust + GPUI，v0.4.0，417 测试）
+> 被核实项目：`D:\ModeChat`（Rust + GPUI，v0.5.0，576 测试）
 > 用途：`docs/parity-matrix.md` 的技术注释来源。每条带 `源文件:行号`，产品可直接搬进矩阵"证据"列。
 > 分类口径：
 > - **框架性缺口** = 现有结构承载不了，必须先改架构/加抽象层（工期按天算，会带动多个模块）
@@ -76,7 +76,7 @@
 - 分类：**无需改动**，这是 MC 的强项。
 
 ### 2.2 记忆注入 — 半成品（预算写死）
-- MC：`src/rpi_engine.rs:357` 注入团队记忆、`src/backend.rs:1473` 注入群记忆，两处都是 `memory_context(root, 4_000)` 固定 4000 字符（`src/data.rs:384`、`:401`）
+- MC：`src/rpi_engine.rs:357` 注入团队记忆、`src/backend.rs:1667` 注入群记忆，两处都是 `memory_context(root, 4_000)` 固定 4000 字符（`src/data.rs:384`、`:401`）
 - DS：按模型上下文窗口动态算预算，`ds-bot/src/host/memory.js:688`（`shownEntries`）+ `ds-bot/src/host/memory-entries.js:75`（`fitWindow`）
 - 分类：**补实现**。`memory_context` 已有 `max_chars` 参数，把 4000 换成按模型窗口算的比例即可。
 
@@ -92,7 +92,7 @@
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
-- `src/memory_review.rs:83`（build_prompt）、`:196`（parse_operations）、`:318`（apply_operations）、`src/backend.rs:539`（memory_review）、`:1911`（run_memory_review）
+- `src/memory_review.rs:83`（build_prompt）、`:196`（parse_operations）、`:318`（apply_operations）、`src/backend.rs:755`（memory_review）、`:2239`（run_memory_review）
 - 分类：无需改动。
 
 ---
@@ -101,7 +101,7 @@
 
 ### 3.1 群任务台账与派活 — 已有
 - `crates/bot-team/src/tasks.rs`：状态机 `:18`（`TaskState`）、`apply_transition:207`、`route_task:763`
-- `src/team_tools.rs:246`（team_assign）、`src/backend.rs:1309`（只有 Chief 拿到团队工具）、`:1629`（note_dispatch）、`src/main.rs:3981`（每回合派活上限 4 次）
+- `src/team_tools.rs:246`（team_assign）、`src/backend.rs:1503`（只有 Chief 拿到团队工具）、`:1957`（note_dispatch）、`src/main.rs:3981`（每回合派活上限 4 次）
 - 分类：**无需改架构**。
 
 ### 3.2 群目标（Goal）— 半成品（缺验收/证据/打回）
@@ -120,7 +120,7 @@
 
 ### 4.1 已做的隔离 — 已有
 - 数据校验：`src/data.rs:88`（`check_chief_private`）、`:590`（`demote_other_chiefs`）
-- 会话落盘隔离：`src/backend.rs:335`（隐私 Bot 不复用主目录旧会话，新会话落 `.private/<id>`）
+- 会话落盘隔离：`src/backend.rs:369`（隐私 Bot 不复用主目录旧会话，新会话落 `.private/<id>`）
 - 全局搜索排除：`src/main.rs:6551`、`:6647`（`is_private_session`）
 - 不进群：`src/main.rs:3795`、`:4905`、`:8015`
 - 分类：**无需改动**。
@@ -318,19 +318,19 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:267`（approval_policy）、`:422`（hook） | `ds-bot/src/host/approvals.js`(110) |
 | 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:11910`、`:15059` | `ds-bot/src/client/memory-panel.js:325` |
 | 7 | Bot | 记忆写入工具 remember/forget/recall | 缺失 | 0 命中 | `ds-bot/src/host/memory.js:1075/1114/1151` |
-| 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:634`（interject）、`src/rpi_engine.rs:1244` | `ds-bot/src/host/steer.js`(255) |
+| 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:697`（interject）、`src/rpi_engine.rs:1244` | `ds-bot/src/host/steer.js`(255) |
 | 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:7803`（open_side） | `ds-bot/src/host/side.js`(377) |
 | 10 | Bot | 会话全文搜索 | 已有 | `src/main.rs:1052`、`src/rpi_engine.rs:1536` | `ds-bot/src/host/chat-index.js`(276) |
 | 11 | Main bot | Chief 身份与降级规则 | 已有 | `src/data.rs:88`、`:590` | `ds-bot/src/host/roster.js`(900) |
 | 12 | Main bot | 管理其它 Bot/群（工具化） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:325/363/496/526/590` |
 | 13 | 群聊 | 建群/改群/删群 | 已有 | `src/data.rs:1816`（create_group）、`src/main.rs:3741` | `ds-bot/src/host/groups.js`(1885) |
 | 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:4541`（route_group_members） | `ds-bot/src/host/groups.js` |
-| 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:246`、`src/backend.rs:1309` | `ds-bot/src/host/tools.js` |
+| 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:246`、`src/backend.rs:1503` | `ds-bot/src/host/tools.js` |
 | 16 | 群聊 | 群目标（阶段） | 半成品 | `crates/bot-team/src/goal.rs:53/64` | `ds-bot/src/host/goals.js:670` |
 | 17 | 群聊 | 目标验收标准 pass/rework | 缺失 | 0 命中 | `ds-bot/src/host/goals.js:760/767` |
-| 18 | 群聊 | 群记忆自动回顾 | 已有 | `src/memory_review.rs:83`、`src/backend.rs:1911` | `ds-bot/src/host/memory-review.js:23` |
+| 18 | 群聊 | 群记忆自动回顾 | 已有 | `src/memory_review.rs:83`、`src/backend.rs:2239` | `ds-bot/src/host/memory-review.js:23` |
 | 19 | 群聊 | 排队消息 dock | 半成品 | `src/main.rs:4754` | `ds-bot/src/client/queue-dock.js:99` |
-| 20 | 隐私 bot | 独立会话落盘 + 搜索排除 | 已有 | `src/backend.rs:335`、`src/main.rs:6551` | `ds-bot/src/host/privacy.js:222` |
+| 20 | 隐私 bot | 独立会话落盘 + 搜索排除 | 已有 | `src/backend.rs:369`、`src/main.rs:6551` | `ds-bot/src/host/privacy.js:222` |
 | 21 | 隐私 bot | 文件归属守卫 | 缺失 | 0 命中 | `ds-bot/src/host/privacy.js:242` |
 | 22 | 隐私 bot | 团队外发审批 | 缺失 | 0 命中 | `ds-bot/src/host/privacy.js:172` |
 | 23 | 本地 Agent | ACP 引擎接入（pi/deepseek/hermes/zcode） | 已有 | `src/acp.rs:122/167`、`src/data.rs:366` | `ds-bot/src/host/local-agents/acp.js`(267) |

@@ -57,6 +57,27 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
+      # 三道文档/UI 门禁：任一 scripts 非 0 退出就这里失败，挡住发版。
+      # 对外部对照树（DS-Bot 基线、pi-rust checkout）的锚点脚本会自动跳过并计数，
+      # 不设置 MODE_PARITY_*_ROOT 时只校验仓库自己的文件。
+      - name: UI design-token gate
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Verify parity anchors
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-parity-anchors.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Verify architecture anchors
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-arch-anchors.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Resolve version
         id: version
         env:
@@ -69,16 +90,25 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
           else
-            latest="$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)"
-            if [ -z "$latest" ]; then
-              version="0.1.0"
+            # push main 与 push tag 会各触发一次（concurrency 串行，但都会跑完）。
+            # 若当前提交本身已被打上 v* tag，就用那个版本，别再算 patch+1，
+            # 否则同一次发版会多出一个 patch Release（v0.5.0 + v0.5.1）。
+            on_head="$(git tag --points-at HEAD --list 'v*' --sort=-v:refname | head -n1 || true)"
+            if [ -n "$on_head" ]; then
+              version="${on_head#v}"
+              echo "HEAD 已带 tag $on_head，按该版本发版"
             else
-              base="${latest#v}"
-              major="${base%%.*}"
-              rest="${base#*.}"
-              minor="${rest%%.*}"
-              patch="${rest#*.}"
-              version="${major}.${minor}.$((patch + 1))"
+              latest="$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)"
+              if [ -z "$latest" ]; then
+                version="0.1.0"
+              else
+                base="${latest#v}"
+                major="${base%%.*}"
+                rest="${base#*.}"
+                minor="${rest%%.*}"
+                patch="${rest#*.}"
+                version="${major}.${minor}.$((patch + 1))"
+              fi
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
