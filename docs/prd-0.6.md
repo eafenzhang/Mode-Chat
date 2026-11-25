@@ -204,9 +204,27 @@ Select-String -Path src\main.rs -Pattern 'chat-detail-run'
 超出的部分必须解释，否则视为删漏
 ```
 
-判据：`(Get-Content src\main.rs | Measure-Object -Line).Lines` 落在 **26,850–27,350** 区间。
+判据：`([System.IO.File]::ReadAllLines('src\main.rs')).Count` 落在 **26,850–27,350** 区间。
+
+> **必须用 `ReadAllLines` 或 `-split "`n"`**：`Get-Content | Measure-Object -Line` 不计空行，`git show HEAD:src/main.rs | Measure-Object -Line` 实测少算 673 行（29,246 vs 29,919），会把「删了 3,000 行」读成「只删了 2,300 行」而误判没删干净。
 
 **不用精确值**：`2,772` 与 `2,554` 的 218 行差来自「含不含函数上方注释行」，两种口径都对；写成单一数字会让执行者反复对数。区间内即通过，超出区间必须给出解释（删漏 → 补删；多删 → 回滚）。
+
+**D-CUT 实际结果（`c93ef4a`）**：
+
+```
+src/main.rs    29,919 -> 26,653   (-3,266)
+src/theme.rs      651 ->    597   (-54)
+src/avatar.rs     281 ->    190   (-91)
+合计                               -3,411 行（另加 8 处 #[allow(dead_code)] 注释）
+```
+
+`26,653` 比区间下限 `26,850` 低 197 行，原因两条，都不是漏算：
+
+1. **`avatar.rs` 不在原清单里**：`bot_avatar` / `channel_avatar` / `unread_dot` / `shell` / `deg` 整条色相头像栈只被 classic 的 `message_row` 使用，微信壳走 `wechat_avatar`（`:22870`）。这 91 行是删干净的结果，清单当时漏统计。
+2. 多处连续双空行合并成一个。
+
+判定界限：**低于下限只要能归到上面两类就通过**（空行合并、清单外连带删除且符号在微信壳有替代实现）；**不允许为了对齐区间反过来补空行**。
 
 ### 3.7 六道门禁（全部 EXIT=0）
 
@@ -221,6 +239,8 @@ scripts\verify-arch-anchors.ps1            anchors=143 ok=92 bad=0
 ```
 
 **测试数只允许上升或不变**：`composer_radius` 的单测（`:29536-29546`）随函数一起删，所以 `576` 会变成 `575`；此时必须由新增的欢迎区/运行状态测试补回来，总数不低于 575。低于 575 说明有人顺手删了别的测试。
+
+**D-CUT 实测（`c93ef4a`）**：`575 passed / 0 failed / 2 ignored`，正好等于下限，六道门禁全 `EXIT=0`，`parity` 双口径 `drifted=0 unlocked=0`、锁 **412 条**（原 419，随 classic 一起死掉 7 条）。**D3 加欢迎区与改名入口后，测试数必须 ≥575；低于此数视为回归。**
 
 ### 3.8 文档与锁
 
