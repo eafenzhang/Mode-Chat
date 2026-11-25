@@ -162,7 +162,7 @@ Select-String -Path src\main.rs -Pattern 'fn kv_row|fn short_id|fn count_members
 
 ### 3.3 单分支（grep + 代码审读）
 
-**D-CUT 后 `fn shell(` 这个函数已整个删除**，`render` 直接调用 `self.wechat_shell(window, cx)`（`src/main.rs:25764`）。所以单分支的判据改为：
+**D-CUT 后 `fn shell(` 这个函数已整个删除**，`render` 直接调用 `self.wechat_shell(window, cx)`（`render` 内唯一一条该调用；**这里刻意不写行号**，O-1/O-3/O-4 每次改 `main.rs` 都会把它推下去，写死行号必然过期）。所以单分支的判据改为：
 
 ```powershell
 # ① 不存在任何名为 shell 的分支函数
@@ -299,7 +299,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
 | **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript:19535-19664`（头像 / 欢迎语 / `welcome-suggestion-{i}`）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的 `:21439-21460`：九宫格头像 + 「群名 · N 人」+ 成员名单）。**单聊已完成（`0f9b4b5`）**，`wechat_welcome:24873`、chip id `:24893`；**群聊仍白屏**——`wechat_welcome` 收到 `bot=None` 直接返回空 div | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。**群聊：把 `wechat_welcome` 改成同时接 Bot / Group**（`wechat_transcript:24505-24506` 已取好两者），群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members` / `empty_state_badged`，文案走 `tri!` | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | P0（D3，群聊部分待补） |
-| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：`src/main.rs:24272` 渲染点，grep `chat-detail-run` = 1 |
+| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：grep `chat-detail-run` = 1；**行号不写死**（见 §5.3） |
 | **O-3** | 工作中状态行的文案分档 | 现状 `:28181-28184` 只有「工作中 / 重试中」两种；DS Bot `cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
 | **O-5** | 间距统一归入 4px 档（U-01） | `0.5.1-ui-review.md` U-01；标准见 `docs/ui-design-spec.md` 第 2 节「只用这六档」（4 / 8 / 12 / 16 / 24 / 32），同节末「废弃 5 / 10 / 14 / 18」。实测量级：`.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m*` 共 **560** 处，档外 **276** 处（`px(6)` 95、`px(10)` 64、`px(2)` 50、`px(14)` 33、`px(5)` 9、`px(1)` 6、`px(9)` 6、`px(3)` 3、`px(7)` 3、`px(56)` 1）。**数字只作量级参考，不进 AC**（理由见 §5.2） | 见 §5.2：先给 `scripts/ui-lint.ps1` 加第 5 条规则并以 report-only 跑出基线，再按页清零（会话列表 → 聊天区 → 右栏 → 设置页），每页改完前后各一张截图 | 见 §5.2：唯一判据是第 5 条规则在 `-Enforce` 下 **0 违规**；基线数值以脚本输出为准，不写手数的数字 | P1 |
@@ -342,6 +342,20 @@ ui_kit.rs  总间距   5   在档   0  档外   5   ← gap(px(2.)) / py(px(1.))
 删除前全 src 是 545 / 274，D-CUT 带走约 44 处档外；**这也说明「删 classic 顺手把间距改干净」不成立**——删完还剩 230 处，O-5 仍是实打实的工作量。`ui_kit.rs` 那 5 处是令牌层自己的微间距（`gap(px(2.))`），要么进 `$SpacingTokens` 白名单、要么统一到 `S1`，**必须在 ① 之前定，否则 ④ 切 `-Enforce` 时会挡住自己**。
 
 **@测试 的验收动作固定为一条命令**：`scripts/ui-lint.ps1 -Enforce`，要求输出里出现 `spacing_offtoken` 这一项且 `total violations: 0`。只看 `PASS` 不看规则名，会在第 5 条尚未上线时**假通过**——这是本项唯一必须防的坑。
+
+### 5.3 本 PRD 里行号的写法规则（阶段 3 的教训）
+
+`main.rs` 在阶段 3 每一批 UI 改动都会整体下移（O-1 单聊 +113、群聊再 +76），**写死在 PRD 里的「文件:行号」会静默过期而门禁抓不到**——`scripts/verify-parity-anchors.ps1` 的 `$docs` 只含 `docs/parity-matrix.md` 与 `docs/prd-0.5.md`，`prd-0.6.md` 一条都不扫，所以 `drifted=0` 不代表本文件正确。
+
+所以本文件的行号分三类，写法不同：
+
+| 类型 | 写法 | 例子 | 为什么 |
+| --- | --- | --- | --- |
+| **当前 HEAD 的活锚点** | 尽量不写；必须写时同一次提交里跑 `-UpdateAnchors` 并人工核内容 | 现在只剩 **0 条**（`:302` 的 O-2 已去掉行号，只留 grep 判据） | 会被下移，且门禁不覆盖本文件 |
+| **历史位置**（描述「删除前在哪」） | 纯文本，不写「文件:行号」 | 「D-CUT 前 `if chat.messages.is_empty()` 在第 27783 行」 | 写成锚点会被当成当前引用去校验，而该行已不存在 |
+| **判据** | 只写 grep 模式 / id / 截图，不写行号 | `grep 'chat-detail-run' = 1`、`wechat-welcome-suggestion-` ≥1 | 判据要能长期成立，行号会漂 |
+
+**给 @架构 的建议（门禁范围，归你定）**：把 `docs/prd-0.6.md` 加进 `$docs` 才是根治；`plans/**` 与 `docs/testing/**` 保持显式排除（它们记录的是当时 tag 的行号）。在门禁覆盖之前，本文件按上表执行。
 
 ---
 
