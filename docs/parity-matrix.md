@@ -5,13 +5,15 @@
 > 证据格式：`源文件:行号`；DS-Bot 侧证据同样给出行号，便于复核。
 > 状态图例：✅ 已有（可用且对得上）｜🟡 半成品（有代码/有界面，但不通、不完整或语义不同）｜❌ 缺失。
 >
-> **本文档状态已按 v0.5.1 收口结果更新（2026-11-25）。** 各实现项在「证据」列给出新行号；未实现项在「差距」列写明**明确降级说明**（降级到 v0.6 或标为不在 v0.5 范围），与阶段验收口径「全部实现或明确降级说明」一致。v0.5.0 交付时为 ✅91 / 🟡18 / ❌27，v0.5.1 的变动只有 **F06、F10 两项因判据变严由 ✅ 降为 🟡**（F02 状态不变，仅证据补全）。
+> **本文档状态已按 v0.6.0 更新（2026-11-26）。** 各实现项在「证据」列给出新行号；未实现项在「差距」列写明**明确降级说明**（降级到 v0.7 或标为不在 v0.6 范围）。历次变更：v0.5.0 交付 ✅91 / 🟡18 / ❌27 → v0.5.1 因判据变严 F06、F10 降为 🟡（✅89 / 🟡20）→ **v0.6.0 因删 classic 导致 A12 主卡位无等价物，降为 🟡（✅88 / 🟡21）**。
 >
 > **锚点基线：`git HEAD` 的已提交内容，不是工作区。** 校验命令 `powershell -File scripts/verify-parity-anchors.ps1`（默认 `-Baseline Head`）。理由：多人并行改 `src/main.rs` 时工作区行号会整体漂移，拿工作区校验会把好锚点误判成「指到了 `}`」——本轮前端未提交的 +45 行就制造过 10 个假失败。要对着工作区校验（改完代码、准备重排锚点前）用 `-Baseline WorkTree`。
 
-统计口径：共 **136 项**，✅ 89 项、🟡 20 项、❌ 27 项（见文末汇总）。v0.4.0 基数为 ✅ 73 / 🟡 22 / ❌ 41，**从 v0.4.0 起累计**净增 ✅ 16 项（73 → 89，跨 v0.5.0 / v0.5.1 两次交付），不是 v0.5.1 单轮的净增。
+统计口径：共 **136 项**，✅ 88 项、🟡 21 项、❌ 27 项（见文末汇总）。v0.4.0 基数为 ✅ 73 / 🟡 22 / ❌ 41，**从 v0.4.0 起累计**净增 ✅ 15 项（73 → 88，跨 v0.5.0 / v0.5.1 / v0.6.0 三次交付），不是单轮净增。
 
-相对 v0.5.0 交付时的 ✅ 91 / 🟡 18 / ❌ 27，本轮 ✅ 减 2。差额全部落在 F06 与 F10：v0.5.1 复验改用「默认外壳为主判据」重新定级，这两项在 v0.5.0 被记为全 ✅，但实际都还留有降级项（F06 的 checkpoint/handoff 语义、F10 的引用条），因此不再算全 ✅。**数字变小是判据变严，不是功能退步**——两项在默认外壳下的真实能力都比 v0.5.0 强（F06 补齐压缩状态行，F10 补齐复制/复制代码）。
+相对 v0.5.1 交付时的 ✅ 89 / 🟡 20 / ❌ 27，v0.6.0 的 ✅ 再减 1，落在 A12 主卡位：`main_bot_card` 随 classic 外壳一起删除，微信壳没有等价的主 Bot 视觉位，本版也不补（`docs/prd-0.6.md` §2.3 明确不做）。**这与 v0.5.1 的降级性质不同**：那两项是判据变严把记宽了的项改准，A12 是删代码带走的真实能力损失，所以补主卡位记 v0.7。
+
+（v0.5.1 的 −2 记录：F06 与 F10 在 v0.5.0 被记为全 ✅ 但都留着降级项——F06 的 checkpoint/handoff 语义、F10 的引用条——复验改用「默认外壳为主判据」后按真实完成度重算。两项在默认外壳下的能力实际都比 v0.5.0 强。）
 
 ---
 
@@ -30,7 +32,7 @@
 | A09 | 侧栏分组（section）归组/折叠/染色 | `ds-bot/src/client/folder-menu.js`、`host/folders.js` | ✅ | `src/main.rs:13715`（`sidebar_sections_section`，分组 CRUD）、`:13757`（`section-up-*`）、`:13809`（`section-delete-*`）、`src/main.rs:703`（`sidebar_section_dot` 染色辅助） | 无 |
 | A10 | 置顶 / 隐藏 / 恢复显示 | `ds-bot/src/client/sidebar.js`（pushpin） | ✅ | `src/data.rs:40`（`pinned`）、`:79`（`hidden_bots`）、`src/data.rs:815`（`set_bot_flags`）、`src/main.rs:16995`（「隐藏」菜单项）、`:13977`（「已隐藏」区） | 无 |
 | A11 | Bot 实时状态（正在做什么） | `ds-bot/src/client/member-status.js`、`host/feed.js` | 🟡 | `src/backend.rs:191`（`SessionEvent::Delta` 带 `member`，成员状态事件）、`src/main.rs:2818`（`push_member_delta`） | 只有“正在输出”，没有“正在做什么/在哪一步” 〔降级 v0.6〕 |
-| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | ✅ | `src/main.rs:19086`（`main_bot_card`）、`src/data.rs:37` | 与 Chief 解耦，语义已对 |
+| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | 🟡 | `src/data.rs:37`（`is_main` / `is_chief` 字段在）；微信壳 `src/main.rs:26251`（`fn wechat_nav`，删 classic 后的唯一侧栏） | v0.6 删 classic 后，`main_bot_card`（原 `:19086`）随 `sidebar` 一并删除；微信壳区间 `25799-29000` 内 `is_chief`/`is_main`/`chief` **0 命中**，侧栏行 `wechat_list_row`（`:21754`）只画头像/名字/时间/未读点，**无「谁是主 Bot」的视觉位**。〔降级 v0.7：补主卡位〕 |
 | A13 | Bot 详情页用量/待办 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:21330`（`section_label`，待办；`const TODO_ROWS` 在 `:21331`）、`:14868`（`im-group-activation-{label}`，用量） | 无 |
 
 ## B. Main bot 与权限（5 项）
@@ -104,7 +106,7 @@
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7090`（`on_find_shortcut`）/`:7122`（`search_sessions` 调用）/`:18367`（`find_dialog_overlay`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1536` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:246`（`TRANSCRIPT_WINDOW = 120`）、`:22004`（`transcript_limit.saturating_add`，累计翻页） | 无 |
-| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24842`（`kit_markdown_el`，`.selectable(true)` `:24844`）两壳正文都走它：classic `:19446`/`:19729`、wecom `:22111`。**v0.5.1 Q-04 已给默认壳补上动作条**：`wechat_message_actions`（`:22930`）在 `wechat_row_el` 内两个调用点 —— 用户气泡 `:22066`（`.child(wechat_message_actions(` 起，第 4 个实参 `true` = 挂右上）、助手气泡 `:22130`（`.child(wechat_message_actions(` 起，第 4 个实参 `false` = 挂左上），含「复制」`:22968`（`cx.write_to_clipboard`；按钮 id `wecom-copy-{index}` 在 `:22958`）与「复制代码」`:22990`（`cx.write_to_clipboard`；仅当 `:22976` 的 `fenced_code` 命中）。classic 那份仍是 `message_actions`（`:23003`），调用点 `:19480`、`:19755` | **「引用」默认壳仍缺**：`wechat_row_el`（`:21969-22263`）内 `quote`/`引用` 0 命中 —— 引用要写回 composer 的引用条，而 `wechat_composer` 没有引用 UI，属交互层改动 〔降级 v0.6：与 R6 同一根因〕 |
+| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:24842`（`kit_markdown_el`，`.selectable(true)` `:24844`）两壳正文都走它：classic `:19446`/`:19729`、wecom `:22111`。**v0.6 删除 classic 后只剩 wecom `:22111` 一条路径。****v0.5.1 Q-04 已给默认壳补上动作条**：`wechat_message_actions`（`:22930`）在 `wechat_row_el` 内两个调用点 —— 用户气泡 `:22066`（`.child(wechat_message_actions(` 起，第 4 个实参 `true` = 挂右上）、助手气泡 `:22130`（`.child(wechat_message_actions(` 起，第 4 个实参 `false` = 挂左上），含「复制」`:22968`（`cx.write_to_clipboard`；按钮 id `wecom-copy-{index}` 在 `:22958`）与「复制代码」`:22990`（`cx.write_to_clipboard`；仅当 `:22976` 的 `fenced_code` 命中）。classic 那份仍是 `message_actions`（`:23003`），调用点 `:19480`、`:19755`（**v0.6 随 classic 一起删除**） | **「引用」仍缺**：`wechat_row_el`（`:21969-22263`）内 `quote`/`引用` 0 命中 —— 引用要写回 composer 的引用条，而 `wechat_composer` 没有引用 UI，属交互层改动。v0.6 把 classic 的引用实现一并删掉，**本版不新建引用交互** 〔降级 v0.7：引用条〕 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:755`（`MsgKind::Reasoning`，枚举在 `:753`）、`:3632`（`WecomRow::ToolGroup` 折叠组；渲染 `:21613`/`:22260`） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
 | F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2117`（`ask_user_question` 工具名）、UI `src/main.rs:5823`（`question_cards`）/`:5836`（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
@@ -246,10 +248,10 @@
 
 ## 汇总
 
-| 状态 | v0.4.0 | v0.5.1 | 占比（v0.5.1） |
+| 状态 | v0.4.0 | v0.6.0 | 占比（v0.6.0） |
 | --- | --- | --- | --- |
-| ✅ 已有 | 73 | **89** | 65.4% |
-| 🟡 半成品 | 22 | **20** | 14.7% |
+| ✅ 已有 | 73 | **88** | 64.7% |
+| 🟡 半成品 | 22 | **21** | 15.4% |
 | ❌ 缺失 | 41 | **27** | 19.9% |
 | 合计 | 136 | 136 | 100% |
 
@@ -257,7 +259,7 @@
 
 | 域 | 项数 | ✅/🟡/❌ | 结论 |
 | --- | --- | --- | --- |
-| A Bot 身份 | 13 | 9/4/0 | 记忆行与管理入口已补（A08）；缺指令编辑、形象上传、换目录重建会话（降级 v0.6） |
+| A Bot 身份 | 13 | 8/5/0 | 记忆行与管理入口已补（A08）；A12 主卡位随 classic 删除降为 🟡（微信壳无主 Bot 视觉位）；缺指令编辑、形象上传、换目录重建会话（降级 v0.6） |
 | B Main bot | 5 | 3/1/1 | Bot 互相可见/互发消息已补（B05）；缺 Bot 自治建改 Bot（降级 v0.6） |
 | C 群聊 | 15 | 11/2/2 | 阶段证据/通过/打回（C08）、群外发言（C13）已补；缺 notice、引用整段对话（降级 v0.6） |
 | D 隐私 bot | 5 | 5/0/0 | 隔离闭环：会话/搜索/群 + 文件路径守卫（D05）+ 删除后归档（D04）全通 |
@@ -282,6 +284,14 @@ A08、B05、C08、C13、D04、D05、E03、E05、E09、E13、F06、G02、J08、M0
 
 对应交付证据：`src/memory_tools.rs`、`src/bot_tools.rs`、`src/privacy.rs`、`src/model_limits.rs`、`src/schedule_builder.rs`（新增）；`src/backend.rs`（`Command::AskBot` / `PostGroup` / `Compaction`）、`src/rpi_engine.rs`（`system_prompt_for_bot` / `compact` / `usage_grouped`）、`src/browser_tools.rs`（按 Bot 隔离）、`crates/bot-team/src/goal.rs` + `src/group_goal.rs`（v2 迁移）、`crates/connectors-service/src/lib.rs`（远程 HTTP）、`src/im_runtime.rs`（`/question`）、`src/main.rs` + `src/ui_kit.rs`（令牌与各面板）。
 
+### v0.6.0 的变动：A12 降到 🟡（删 classic 的必然结果）
+
+| 项 | v0.5.1 | v0.6.0 | 依据 |
+| --- | --- | --- | --- |
+| A12 主卡位 | ✅ | 🟡 | `main_bot_card`（`:19086`）唯一调用点是 `sidebar@19012`，随 classic 删除。微信壳区间 `25799-29000` 内 `is_chief`/`is_main`/`chief` **0 命中**，`wechat_list_row`（`:21754`）只画头像/名字/时间/未读点，**没有主 Bot 视觉位**。判定为真实功能损失，不是锚点问题 〔降级 v0.7：补主卡位〕 |
+
+净变化：✅ −1、🟡 +1，合计仍 136。**这一项是「删掉的那套壳里唯一没有等价物、也不在本版补」的能力**；其余 classic 独有能力（欢迎区、运行状态面板）已在 v0.6 搬进/接回微信壳，见 `docs/prd-0.6.md` §2.2、§5 的 O-1 / O-2。
+
 ### v0.5.1 的变动：两项降级、一项证据补全
 
 | 项 | v0.5.0 | v0.5.1 | 依据 |
@@ -292,7 +302,7 @@ A08、B05、C08、C13、D04、D05、E03、E05、E09、E13、F06、G02、J08、M0
 
 三项净变化：✅ −2、🟡 +2，合计仍 136，增减只来自 F06 与 F10。**这不是功能回退**：三项在默认外壳下的实际能力都比 v0.5.0 强，降级原因是复验改用「默认外壳为主判据」后，把 v0.5.0 记宽了的项按真实完成度重算。
 
-### 结论（产品视角，v0.5.1 之后的剩余差距）
+### 结论（产品视角，v0.6.0 之后的剩余差距）
 
 1. **记忆闭环已通**：Bot 现在有自己的记忆、能主动记/查/忘、下次进提示，面板可管（A08/E03/E05/E09）。剩余是「私聊自动回顾」（E07，v0.6）。
 2. **团队协作最小闭环已通**：`list_bots` / `message_bot` / `post_to_group` 可用，隐私 Bot 不可被直连（B05/C13）。剩余是「Main bot 自己建改 Bot」（B02，v0.6）。

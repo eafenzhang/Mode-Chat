@@ -278,6 +278,7 @@ src/main.rs:21198|// 历史会话列表：点行切换 resume 到对应会话（
 src/main.rs:21330|rows = rows.child(section_label(i18n::t("待办")));
 src/main.rs:21331|const TODO_ROWS: usize = 4;
 src/main.rs:21613|WecomRow::ToolGroup {
+src/main.rs:21754|fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
 src/main.rs:21969|fn wechat_row_el(
 src/main.rs:22004|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
 src/main.rs:22066|.child(wechat_message_actions(
@@ -305,6 +306,7 @@ src/main.rs:24724|.id("chat-compaction-status")
 src/main.rs:2477|for (id, bot_name, role) in &self.bots {
 src/main.rs:24842|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
 src/main.rs:24844|.selectable(true)
+src/main.rs:26251|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
 src/main.rs:27397|rows.push(
 src/main.rs:27740|fn wechat_transcript(
 src/main.rs:2818|fn push_member_delta(&mut self, member: &str, delta: &str) {
