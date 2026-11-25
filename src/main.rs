@@ -4510,7 +4510,7 @@ impl PilotApp {
                 let key = group_key(&group_id);
                 // D-06：群外机器人发言常常先于「用户点开这个群」到达。此时 backend 里
                 // 还没有这个群的 spec，后面的 send_group_in_turn 只会回「群聊会话尚未建立」，
-                // 消息只进了台账、群目录里连 transcript.jsonl 都不会有。
+                // 消息只进了台账、成员会话 JSONL 里一条都不会有（群没有独立 transcript 文件）。
                 // 这里按需补建一次（EnsureGroup 幂等，已存在则复用成员会话）。
                 if !self.chats.contains_key(&key)
                     && let Some(index) = self
