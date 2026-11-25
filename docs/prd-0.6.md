@@ -351,7 +351,7 @@ ui_kit.rs  总间距   5   在档   0  档外   5   ← gap(px(2.)) / py(px(1.))
 
 | 类型 | 写法 | 例子 | 为什么 |
 | --- | --- | --- | --- |
-| **当前 HEAD 的活锚点** | 必须写「文件:行号」时，仓库内文件一律带 `src/` 或 `crates/` 前缀，外部对照树带 `ds-bot/` 或 `rpi-*` 前缀 | 现在剩 **8 条**（`src/theme.rs` 2、`src/data.rs` 2、`src/ui_kit.rs` 1、`src/main.rs` 0、`ds-bot/.../cells.js` 2），全部在 `$docs` 覆盖内，会被逐条校验内容 | 不带前缀的 `theme.rs:N` 会被当成仓库根下的文件，直接 FILE NOT FOUND；带前缀才能同时被位置校验、符号校验和指纹锁三层覆盖 |
+| **当前 HEAD 的活锚点** | 必须写「文件:行号」时，仓库内文件一律带 `src/` 或 `crates/` 前缀，外部对照树带 `ds-bot/` 或 `rpi-*` 前缀 | 现在共 **10 条**：仓库内 **8 条**（`src/theme.rs` 2、`src/main.rs` 3、`src/data.rs` 2、`src/ui_kit.rs` 1）受位置 + 符号 + 指纹三层校验；`ds-bot/src/client/cells.js` **2 条**属外部对照树，计在 `skipped-external` 里**只验文件存在、不验内容**（DS 源码不在本仓，改不了也不该改） | 不带前缀的 `theme.rs:N` 会被当成仓库根下的文件，直接 FILE NOT FOUND；带前缀才能被位置校验、符号校验和指纹锁覆盖 |
 | **历史位置**（描述「删除前在哪」） | 纯文本，写成「第 N 行」，不加反引号、不写 `文件:N` | 「D-CUT 前 `if chat.messages.is_empty()` 在第 27783 行」 | 写成锚点会被当成当前引用去校验，而该行在 HEAD 上早已不存在 |
 | **判据** | 只写 grep 模式 / id / 截图，不写行号 | `grep 'chat-detail-run' = 1`、`wechat-welcome-suggestion-` ≥1 | 判据要能长期成立，行号会漂 |
 
