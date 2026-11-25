@@ -225,6 +225,8 @@ pub enum SessionEvent {
     Elicitation(ElicitationCard),
     /// 工具活动（scheduled/started/progress/result/error → 一张卡按 call_id 原地更新）。
     Tool(ToolCard),
+    /// 上下文压缩状态（v0.5.0 W4）：`active=true` 开始、`false` 结束（成功或失败都发）。
+    Compaction { active: bool, manual: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +249,13 @@ pub enum BackendEvent {
         task_id: String,
         root_task_id: String,
         root_message_id: String,
+    },
+    /// 别的 Bot 往群里发言（`post_to_group`）：UI 把它当一条用户消息插进群会话并派发。
+    GroupPost {
+        group_id: String,
+        text: String,
+        from_bot_id: String,
+        from_bot_name: String,
     },
 }
 
@@ -295,6 +304,13 @@ pub fn engine_is_acp(selected: Option<&str>) -> bool {
     matches!(resolve_engine(selected), EngineChoice::Acp(_))
 }
 
+/// Bot id → 显示名（只读名册；查不到就 None，用量页归「未归属」）。
+pub fn bot_name_of(bot_id: &str) -> Option<String> {
+    crate::data::Roster::load()
+        .bot_by_id(bot_id)
+        .map(|bot| bot.name.clone())
+}
+
 /// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
 #[allow(clippy::too_many_arguments)]
 async fn open_rpi_session(
@@ -313,7 +329,15 @@ async fn open_rpi_session(
         .ok_or_else(|| "未选择模型：请先在右栏或设置里为这个 Bot 选一个模型".to_string())?;
     let engine_model = crate::rpi_engine::resolve_model(&spec)?;
     let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, workspace);
-    let system_prompt = crate::rpi_engine::system_prompt_for(std::path::Path::new(workspace));
+    let bot_id = crate::rpi_engine::bot_id_from_identity(identity);
+    // 系统提示要带 Bot 自己的记忆；预算按模型窗口算，所以先解析窗口。
+    let limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
+    let (context_window, _) = crate::model_limits::resolve(&limits);
+    let system_prompt = crate::rpi_engine::system_prompt_for_bot(
+        std::path::Path::new(workspace),
+        bot_id.as_deref(),
+        context_window,
+    );
     let mut extra_tools = crate::mcp_host::for_workspace(workspace)
         .await
         .harness_tools();
@@ -322,8 +346,12 @@ async fn open_rpi_session(
         workspace,
         identity,
     ));
-    // 记忆回顾是隐藏的 JSON 任务，不给控制类工具。
+    // 记忆回顾是隐藏的 JSON 任务，不给控制类工具，也不给记忆写入工具。
     let controls = !key.starts_with("memory-review:");
+    if controls {
+        extra_tools.extend(crate::memory_tools::tools(bot_id.as_deref()));
+        extra_tools.extend(crate::bot_tools::tools(identity));
+    }
     if controls && crate::tool_scope::allowed(crate::tool_scope::Family::Browser, identity) {
         extra_tools.extend(crate::browser_tools::tools(identity));
     }
@@ -348,7 +376,8 @@ async fn open_rpi_session(
         member,
         approval_level,
         allowlist,
-        bot_id: crate::rpi_engine::bot_id_from_identity(identity),
+        bot_id: bot_id.clone(),
+        bot_name: bot_id.as_deref().and_then(bot_name_of),
         extra_tools,
         private_bot,
     };
@@ -521,10 +550,45 @@ enum Command {
     },
     /// 丢弃该 UI key 的会话上下文（切换引擎时用；ACP/Hermes 子进程随之退出）。
     ResetSession { key: String },
+    /// 立即压缩上下文（命令面板「立即压缩」，W4）。
+    Compact { key: String },
+    /// 跨 Bot 投递（`message_bot`）：开一个不进侧栏的会话把文本发给目标 Bot，
+    /// 回合结束把整段回复经 `oneshot` 回给调用者。
+    AskBot {
+        request_id: String,
+        target_bot_id: String,
+        target_bot_name: String,
+        text: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+    /// 往群聊里发言（`post_to_group`）：UI 收 `BackendEvent::GroupPost` 后走既有群发送路径。
+    PostGroup {
+        group_id: String,
+        text: String,
+        from_bot_id: String,
+        from_bot_name: String,
+    },
 }
 
 pub struct BackendHandle {
     tx: UnboundedSender<Command>,
+}
+
+impl Clone for BackendHandle {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+/// 进程级后台总线：工具（`message_bot` / `post_to_group`）在 Agent 线程里需要
+/// 把活投回 run loop，但工具拿不到 `BackendHandle`，所以 `spawn()` 时登记一份。
+static BUS: OnceLock<BackendHandle> = OnceLock::new();
+
+/// 取进程级总线（未启动时返回 None）。
+pub fn bus() -> Option<BackendHandle> {
+    BUS.get().cloned()
 }
 
 impl BackendHandle {
@@ -754,6 +818,56 @@ impl BackendHandle {
             option_id: option_id.into(),
         });
     }
+
+    /// 跨 Bot 投递（`message_bot`）：等目标 Bot 回合结束拿到整段回复。
+    ///
+    /// 超时 120s；目标忙 / 建会话失败都返回可读中文错误，调用方直接转述给用户。
+    pub async fn ask_bot(
+        &self,
+        target_bot_id: String,
+        target_bot_name: String,
+        text: String,
+    ) -> Result<String, String> {
+        let request_id = format!("ask-{}-{}", target_bot_id, crate::time::now_ms());
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(Command::AskBot {
+                request_id: request_id.clone(),
+                target_bot_id,
+                target_bot_name,
+                text,
+                reply: reply_tx,
+            })
+            .map_err(|_| "后台引擎已停止，无法跨 Bot 投递".to_string())?;
+        match tokio::time::timeout(Duration::from_secs(120), reply_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("目标 Bot 未返回结果".to_string()),
+            Err(_) => Err("等待目标 Bot 回复超时（120s）".to_string()),
+        }
+    }
+
+    /// 往群里发言（`post_to_group`）：只投一条事件，UI 走既有群发送路径。
+    pub fn post_group(
+        &self,
+        group_id: String,
+        text: String,
+        from_bot_id: String,
+        from_bot_name: String,
+    ) -> Result<(), String> {
+        self.tx
+            .send(Command::PostGroup {
+                group_id,
+                text,
+                from_bot_id,
+                from_bot_name,
+            })
+            .map_err(|_| "后台引擎已停止，无法往群里发言".to_string())
+    }
+
+    /// 立即压缩该会话的上下文（命令面板项）。
+    pub fn compact(&self, key: impl Into<String>) {
+        let _ = self.tx.send(Command::Compact { key: key.into() });
+    }
 }
 
 fn home_dir() -> PathBuf {
@@ -834,7 +948,12 @@ pub fn spawn() -> (BackendHandle, UnboundedReceiver<BackendEvent>) {
         });
     });
 
-    (BackendHandle { tx: command_tx }, event_rx)
+    let handle = BackendHandle {
+        tx: command_tx.clone(),
+    };
+    // 工具侧（message_bot / post_to_group）拿不到 handle，登记一份进程级总线。
+    let _ = BUS.set(handle.clone());
+    (handle, event_rx)
 }
 
 async fn run_agent(
@@ -944,8 +1063,14 @@ async fn run_agent(
                         };
                         let (approval_level, allowlist) =
                             crate::rpi_engine::approval_policy(&identity, &workspace);
-                        let system_prompt = crate::rpi_engine::system_prompt_for(
+                        let run_bot_id = crate::rpi_engine::bot_id_from_identity(&identity);
+                        let run_limits =
+                            crate::model_limits::read(&spec.provider_id, &spec.model_id);
+                        let (run_context_window, _) = crate::model_limits::resolve(&run_limits);
+                        let system_prompt = crate::rpi_engine::system_prompt_for_bot(
                             std::path::Path::new(&workspace),
+                            run_bot_id.as_deref(),
+                            run_context_window,
                         );
                         let private_bot = crate::rpi_engine::private_bot_id(&identity);
                         let resume_path = resume_id
@@ -976,6 +1101,8 @@ async fn run_agent(
                             extra_tools.extend(crate::computer_tools::tools(&identity));
                             extra_tools.extend(crate::cua_tree::tools(&identity));
                         }
+                        extra_tools.extend(crate::memory_tools::tools(run_bot_id.as_deref()));
+                        extra_tools.extend(crate::bot_tools::tools(&identity));
                         let options = crate::rpi_engine::OpenOptions {
                             workspace: workspace.clone().into(),
                             resume_path,
@@ -987,7 +1114,8 @@ async fn run_agent(
                             member: None,
                             approval_level,
                             allowlist,
-                            bot_id: crate::rpi_engine::bot_id_from_identity(&identity),
+                            bot_id: run_bot_id.clone(),
+                            bot_name: run_bot_id.as_deref().and_then(bot_name_of),
                             extra_tools,
                             private_bot,
                         };
@@ -1502,6 +1630,139 @@ async fn run_agent(
                         });
                     }
                 }
+            }
+            Command::PostGroup {
+                group_id,
+                text,
+                from_bot_id,
+                from_bot_name,
+            } => {
+                let _ = events.send(BackendEvent::GroupPost {
+                    group_id,
+                    text,
+                    from_bot_id,
+                    from_bot_name,
+                });
+            }
+            Command::AskBot {
+                request_id: _,
+                target_bot_id,
+                target_bot_name,
+                text,
+                reply,
+            } => {
+                let ctx_key = format!("bot:{target_bot_id}");
+                // 目标 Bot 已经有会话在跑同一份 lane：直接拒绝，避免 A→B→A 互相等。
+                if sessions.contains_key(&ctx_key) && active_internal.contains_key(&ctx_key) {
+                    let _ = reply.send(Err(format!("{target_bot_name} 正在执行回合，请稍后再联系")));
+                    continue;
+                }
+                let roster = crate::data::Roster::load();
+                let Some(bot) = roster.bot_by_id(&target_bot_id) else {
+                    let _ = reply.send(Err(format!("找不到 Bot：{target_bot_name}")));
+                    continue;
+                };
+                if bot.is_private {
+                    let _ = reply.send(Err("目标 Bot 已设为隐私，拒绝跨 Bot 读取".to_string()));
+                    continue;
+                }
+                let (tx, mut rx) = unbounded_channel::<BackendEvent>();
+                let opened = open_rpi_session(
+                    &ctx_key,
+                    &bot.directory,
+                    &bot.identity(),
+                    bot.model.clone(),
+                    None,
+                    None,
+                    &tx,
+                    Vec::new(),
+                )
+                .await;
+                let session = match opened {
+                    Ok((session, _spec)) => Arc::new(session),
+                    Err(message) => {
+                        let _ = reply.send(Err(format!("{target_bot_name} 建会话失败：{message}")));
+                        continue;
+                    }
+                };
+                let sender = Arc::clone(&session);
+                tokio::spawn(async move {
+                    sender.send(text, Vec::new()).await;
+                });
+                // 自己收流式事件，攒完整段回复（不往 UI 事件流里发假 delta）。
+                tokio::spawn(async move {
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+                    let mut answer = String::new();
+                    loop {
+                        let remaining =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if remaining.is_zero() {
+                            let _ = reply.send(Err("等待目标 Bot 回复超时（120s）".to_string()));
+                            break;
+                        }
+                        let Ok(Some(event)) =
+                            tokio::time::timeout(remaining, rx.recv()).await
+                        else {
+                            let _ = reply.send(Err("目标 Bot 事件通道关闭".to_string()));
+                            break;
+                        };
+                        let BackendEvent::Session { event, .. } = event else {
+                            continue;
+                        };
+                        match event {
+                            SessionEvent::Delta { text, .. } => answer.push_str(&text),
+                            SessionEvent::Done { .. } => {
+                                let _ = reply.send(Ok(answer));
+                                break;
+                            }
+                            SessionEvent::Error { message, .. } => {
+                                let _ = reply.send(Err(message));
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+            Command::Compact { key } => {
+                let ctx_key =
+                    active_internal.get(&key).cloned().unwrap_or_else(|| key.clone());
+                let Some(ctx) = sessions.get(&ctx_key) else {
+                    let _ = events.send(BackendEvent::Session {
+                        key,
+                        event: SessionEvent::Error {
+                            member: None,
+                            message: "会话尚未建立，无法压缩".to_string(),
+                        },
+                    });
+                    continue;
+                };
+                let SessionEngine::Rpi(session) = &ctx.engine else {
+                    let _ = events.send(BackendEvent::Session {
+                        key,
+                        event: SessionEvent::Error {
+                            member: None,
+                            message: "该引擎不支持手动压缩".to_string(),
+                        },
+                    });
+                    continue;
+                };
+                let session = Arc::clone(session);
+                let events = events.clone();
+                tokio::spawn(async move {
+                    let message = session.compact().await;
+                    let _ = events.send(BackendEvent::Session {
+                        key,
+                        event: if message.starts_with('✅') {
+                            SessionEvent::UserEcho(message.clone())
+                        } else {
+                            SessionEvent::Error {
+                                member: None,
+                                message: message.clone(),
+                            }
+                        },
+                    });
+                });
             }
             Command::ResetSession { key } => {
                 sessions.remove(&key);

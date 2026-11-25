@@ -75,6 +75,9 @@ pub fn load(db_path: &Path, bots: &[BotRef<'_>]) -> Result<Vec<Entry>, String> {
 }
 
 /// 设置页「+ 新建任务」：写一条与壳同 schema 的 automation（scope 归当前 Bot）。
+///
+/// 向导接上后统一走 [`create_task_with_rule`]；这里保留旧签名给还没改的调用方。
+#[allow(dead_code)]
 pub fn create_task(
     db_path: &Path,
     workspace_path: &str,
@@ -84,6 +87,40 @@ pub fn create_task(
     prompt: &str,
     recurring: bool,
 ) -> Result<String, String> {
+    create_task_with_rule(
+        db_path,
+        workspace_path,
+        workspace_identity,
+        title,
+        cron_expr,
+        prompt,
+        recurring,
+        None,
+    )
+}
+
+/// 带结构化 `scheduleRule` 的新建（v0.5.0 W8）：向导给的规则优先于 cron。
+///
+/// 8 个参数是既有调用约定的一部分（标题/cron/prompt/周期都来自表单），
+/// 拆结构体不值得为这一处改动承担调用面风险。
+#[allow(clippy::too_many_arguments)]
+pub fn create_task_with_rule(
+    db_path: &Path,
+    workspace_path: &str,
+    workspace_identity: Option<&str>,
+    title: &str,
+    cron_expr: &str,
+    prompt: &str,
+    recurring: bool,
+    schedule_rule: Option<serde_json::Value>,
+) -> Result<String, String> {
+    let schedule_rule = match schedule_rule {
+        Some(value) => Some(
+            serde_json::from_value::<automation_schedule::ScheduleRule>(value)
+                .map_err(|error| format!("调度规则不合法：{error}"))?,
+        ),
+        None => None,
+    };
     let repo = AutomationRepo::with_busy_timeout(db_path, 5_000);
     let service = automation_service::AutomationService::new(
         repo,
@@ -110,7 +147,7 @@ pub fn create_task(
             end_at: None,
             interval_unit: None,
             interval: None,
-            schedule_rule: None,
+            schedule_rule,
         },
         &scope,
         crate::time::now_ms() as i64,

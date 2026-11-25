@@ -4,22 +4,24 @@
 use std::path::Path;
 
 use connectors_service::{
-    read_state, resolve_mcp_servers, spec, state_path, write_state, ConnectorMcpServer,
+    read_state, resolve_mcp_servers, state_path, write_state, ConnectorMcpServer,
     ConnectorSpec, ConnectorState,
 };
+#[cfg(test)]
+use connectors_service::spec;
 
 /// 当前启用清单（未知 id 已在 crate 内过滤）。
 pub fn state(data_root: &Path) -> ConnectorState {
     read_state(&state_path(data_root))
 }
 
-/// 启停一个连接器；未知 id 报错。返回最新状态。
+/// 启停一个连接器；未知 id 报错。返回最新状态。远程（HTTP）条目也算已知。
 pub fn set_enabled(
     data_root: &Path,
     id: &str,
     enabled: bool,
 ) -> Result<ConnectorState, String> {
-    if spec(id).is_none() {
+    if !connectors_service::known(id) {
         return Err(format!("未知连接器 {id}"));
     }
     let file = state_path(data_root);
@@ -162,6 +164,9 @@ mod tests {
             args: vec!["-y".to_string(), "server-github".to_string()],
             env,
             transport: "stdio",
+            url: String::new(),
+            headers: std::collections::BTreeMap::new(),
+            auth_header: None,
         }]);
         let first = &payload[0];
         assert_eq!(first["name"], "github");

@@ -530,6 +530,90 @@ pub fn undo_group_memory(group_id: &str) -> Result<String, String> {
     undo_memory_in(&root)
 }
 
+// ---------------------------------------------------------------------------
+// Bot 自己的记忆（v0.5.0 W1）
+//
+// 身份用 `mode-bot:teammate:<id>`，与壳里 `workspaceIdentity` 完全同口径；
+// `resolve_memory_root` 自带 slug 回退，所以老 Bot 目录里的历史记忆**不用迁移**
+// 就能被新工具/新面板读到。
+// ---------------------------------------------------------------------------
+
+/// 某个 Bot 的记忆根（`mode-bot:teammate:<id>`）。
+pub fn bot_memory_root(bot_id: &str) -> Option<PathBuf> {
+    let bot_id = bot_id.trim();
+    if bot_id.is_empty() {
+        return None;
+    }
+    let storage = cli_storage_dir();
+    let identity = format!("mode-bot:teammate:{bot_id}");
+    bots_service::memory_store::resolve_memory_root(storage.as_deref(), &identity)
+}
+
+/// 某个 Bot 的记忆条目列表（Bot 详情页 / 设置页用；契约 §2.3，UI 待接）。
+#[allow(dead_code)]
+pub fn bot_memory_entries(bot_id: &str) -> Vec<bots_service::memory_store::MemoryEntry> {
+    let Some(root) = bot_memory_root(bot_id) else {
+        return Vec::new();
+    };
+    bots_service::memory_store::list_memory(&root).entries
+}
+
+/// 读一条 Bot 记忆的完整内容（编辑对话框回填；契约 §2.3，UI 待接）。
+#[allow(dead_code)]
+pub fn read_bot_memory(
+    bot_id: &str,
+    file: &str,
+) -> Option<bots_service::memory_store::MemoryReadResponse> {
+    let root = bot_memory_root(bot_id)?;
+    bots_service::memory_store::read_memory(&root, file).ok()
+}
+
+/// 新增/编辑一条 Bot 记忆（契约 §2.3，UI 待接）。
+#[allow(dead_code)]
+pub fn save_bot_memory(
+    bot_id: &str,
+    file: Option<&str>,
+    title: &str,
+    description: &str,
+    body: &str,
+) -> Result<(), String> {
+    let root = bot_memory_root(bot_id).ok_or_else(|| "记忆存储不可用".to_string())?;
+    let identity = format!("mode-bot:teammate:{bot_id}");
+    save_memory_in(root, &identity, file, title, description, body)
+}
+
+/// 删除一条 Bot 记忆（契约 §2.3，UI 待接）。
+#[allow(dead_code)]
+pub fn delete_bot_memory(bot_id: &str, file: &str) -> Result<(), String> {
+    let root = bot_memory_root(bot_id).ok_or_else(|| "记忆存储不可用".to_string())?;
+    bots_service::memory_store::delete_memory(&root, file)
+}
+
+/// 撤销最近一次 Bot 记忆修改，返回被撤销的标题（契约 §2.3，UI 待接）。
+#[allow(dead_code)]
+pub fn undo_bot_memory(bot_id: &str) -> Result<String, String> {
+    let root = bot_memory_root(bot_id).ok_or_else(|| "记忆存储不可用".to_string())?;
+    undo_memory_in(&root)
+}
+
+/// Bot 记忆注入 prompt 的文本（预算按模型窗口算，不再写死 4000 字符）。
+pub fn bot_memory_context(bot_id: &str, budget: usize) -> String {
+    let Some(root) = bot_memory_root(bot_id) else {
+        return String::new();
+    };
+    let context = bots_service::memory_store::memory_context(&root, budget);
+    context.trim().to_string()
+}
+
+/// 记忆注入预算（字符）：窗口的 6%，夹在 2000–24000 之间。
+///
+/// 6k 字符 ≈ 1.5–3k tokens，对 128k 窗口是 2% 量级，对 8k 小窗口也不会吃掉
+/// reserve（`CompactionSettings.reserve_tokens = 16384` 之下自洽）。
+pub fn memory_budget(context_window: i64) -> usize {
+    let window = context_window.max(1) as f64;
+    ((window * 0.06) as usize).clamp(2_000, 24_000)
+}
+
 /// 群聊目标 prompt（`{data_root}/v2/groups/<gid>/goal.json`；无目标/终态返回空串）。
 pub fn group_goal_prompt(group_id: &str) -> String {
     if group_id.trim().is_empty() {
@@ -602,12 +686,25 @@ pub fn update_bot(
 }
 
 /// 删除 Bot：按 id 从名册移除（原子写；会话库不动，槽位由调用方清理）。
+///
+/// 隐私 Bot（v0.5.0 W3）：删除前先把 `{id,name,directory}` 登记进
+/// `v2/private-archives.json`，目录继续受路径守卫保护；解除保护见
+/// `privacy::release_archive`（只删登记，不动目录）。
 pub fn delete_bot(id: &str) -> Result<(), String> {
     let path = data_root().join("v2").join("teammates.json");
     let bytes = std::fs::read(&path)
         .map_err(|error| format!("teammates.json 读取失败（{error}）"))?;
     let mut file = serde_json::from_slice::<bot_team::teammate::TeammatesFile>(&bytes)
         .map_err(|error| format!("teammates.json 解析失败（{error}）"))?;
+    // 先登记归档，再删名册：登记失败不阻断删除，但要留日志。
+    if let Some(record) = file.teammates.iter().find(|record| record.id == id)
+        && record.is_private
+    {
+        let (name, directory) = (record.name.clone(), record.directory.clone());
+        if let Err(error) = crate::privacy::archive_private_bot(id, &name, &directory) {
+            eprintln!("[privacy] 归档隐私 Bot 目录失败（{id}）：{error}");
+        }
+    }
     let before = file.teammates.len();
     file.teammates.retain(|record| record.id != id);
     if file.teammates.len() == before {

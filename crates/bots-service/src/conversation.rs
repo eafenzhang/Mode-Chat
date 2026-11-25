@@ -538,6 +538,60 @@ pub trait BotTurnOps: Send + Sync {
     ) -> RuntimeFuture<'a, Result<bool, String>> {
         Box::pin(async { Ok(false) })
     }
+
+    /// 回合仍在跑、但有话要对用户说（提问卡这类「必须用户作答才能继续」的中间态）。
+    ///
+    /// 返回 `Some(text)` 时 runner 会把它当一条普通回复发出去，**但继续轮询**：
+    /// 用户答完（`/question`）后 agent 才会走到 Done，真正的答案由后面的
+    /// `read_reply` 交付。默认 `None`（测试 fake / 通道未接线）。
+    fn take_notice<'a>(
+        &'a self,
+        _context: &'a ConversationContext,
+    ) -> RuntimeFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// 作答一条提问卡（`ask_user_question`）。`answer=None` = 取消提问。
+    fn resolve_question<'a>(
+        &'a self,
+        _context: &'a ConversationContext,
+        _request_id: &'a str,
+        _answer: Option<&'a str>,
+    ) -> RuntimeFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("当前通道不支持提问作答".to_string()) })
+    }
+
+    /// 当前待作答的提问卡（`/question` 用）。
+    fn pending_questions<'a>(
+        &'a self,
+        _context: &'a ConversationContext,
+    ) -> RuntimeFuture<'a, Result<Vec<PendingQuestionPrompt>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// IM 里的提问卡（`ask_user_question`）：问题 + 选项。渲染由通道自己决定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingQuestionPrompt {
+    pub request_id: String,
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+impl PendingQuestionPrompt {
+    /// 通道无关的展示文本（问题 + 编号选项 + 作答提示）。
+    pub fn render(&self) -> String {
+        let mut lines = vec![format!("📋 {}", self.question)];
+        for (index, option) in self.options.iter().enumerate() {
+            lines.push(format!("{}. {option}", index + 1));
+        }
+        if self.options.is_empty() {
+            lines.push("回复 /question <你的答案> 作答（/question 单独发送 = 取消）。".to_string());
+        } else {
+            lines.push("回复 /question <序号或答案> 作答（/question 单独发送 = 取消）。".to_string());
+        }
+        lines.join("\n")
+    }
 }
 
 /// 审批提示呈现（宿主实现：把通道无关的 prompt 渲染成 IM 文本并发出去）。
@@ -821,6 +875,21 @@ impl<'a> ConversationRunner<'a> {
         while polls < self.max_polls {
             polls += 1;
             tokio::time::sleep(self.poll_interval).await;
+            // 提问卡这类「回合内必须用户作答」的中间态：先把问题发出去，回合继续跑，
+            // 用户答完（`resolve_question`）后 agent 才会 Done。
+            // 注意：本 crate 是 edition 2021，let-chain 不可用，这里用嵌套 if。
+            if let Ok(Some(notice)) = self.ops.take_notice(&context).await {
+                if !notice.trim().is_empty() {
+                    self.sink
+                        .send_reply(
+                            &turn.bot_id,
+                            &turn.conversation_key,
+                            turn.provider_context_token.as_deref(),
+                            &notice,
+                        )
+                        .await?;
+                }
+            }
             match self.ops.read_reply(&context).await? {
                 Some(reply) if !reply.trim().is_empty() => {
                     if turn.quiet && crate::heartbeat::is_heartbeat_ok_only(&reply) {

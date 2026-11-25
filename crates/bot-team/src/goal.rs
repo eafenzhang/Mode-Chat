@@ -9,12 +9,17 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const GOAL_SCHEMA_VERSION: u32 = 1;
+pub const GOAL_SCHEMA_VERSION: u32 = 2;
+/// 兼容读取的旧版本（v1 数据在内存里升级成 v2，下次写入落 v2）。
+pub const LEGACY_GOAL_SCHEMA_VERSION: u32 = 1;
 const MAX_STAGES: usize = 20;
 const TITLE_MAX_CHARS: usize = 200;
 const DESCRIPTION_MAX_CHARS: usize = 2_000;
 const STAGE_TITLE_MAX_CHARS: usize = 120;
 const STAGE_NOTE_MAX_CHARS: usize = 500;
+/// 验收线 / 证据 / 打回原因的长度上限（与 DS `STAGE_ACCEPTANCE_MAX = 1000` 同量级）。
+const ACCEPTANCE_MAX_CHARS: usize = 1_000;
+const EVIDENCE_MAX_CHARS: usize = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +62,15 @@ pub struct GoalStage {
     pub status: StageStatus,
     #[serde(default)]
     pub note: String,
+    /// 这一阶段「做完的标准」（v2 新增；v1 数据为空）。[`ACCEPTANCE_MAX_CHARS`]
+    #[serde(default)]
+    pub acceptance: String,
+    /// pass 时填的证据（命令输出/文件路径/截图说明）。[`EVIDENCE_MAX_CHARS`]
+    #[serde(default)]
+    pub evidence: String,
+    /// pass 的时间（毫秒时间戳）；未通过为 None。
+    #[serde(default)]
+    pub passed_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,10 +81,16 @@ pub struct GroupGoal {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    /// 整体「做完的样子」（v2 新增）。
+    #[serde(default)]
+    pub acceptance: String,
     #[serde(default)]
     pub stages: Vec<GoalStage>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// 最近一次打回的原因（v2 新增；用于 prompt 里的「上次打回」）。
+    #[serde(default)]
+    pub last_rework_note: String,
 }
 
 /// 壳命令 `bot_group_goal_apply` 的动作面。renderer 只构造动作，不做状态判断。
@@ -111,6 +131,22 @@ pub enum GoalAction {
     SetStageStatus {
         stage_id: String,
         status: StageStatus,
+    },
+    /// 设置验收线：`stage_id = None` 是目标级，`Some` 是阶段级（v2）。
+    SetAcceptance {
+        #[serde(default)]
+        stage_id: Option<String>,
+        acceptance: String,
+    },
+    /// 通过一个阶段（只接受当前进行中的阶段），并落证据（v2）。
+    PassStage {
+        stage_id: String,
+        evidence: String,
+    },
+    /// 打回一个阶段（回到进行中），并记原因（v2）。
+    ReworkStage {
+        stage_id: String,
+        note: String,
     },
     Pause,
     Resume,
@@ -165,20 +201,53 @@ fn normalize_stages(stages: &mut [GoalStage]) -> Result<(), String> {
     Ok(())
 }
 
+/// v1 → v2 内存迁移：只补字段，不动状态与时间戳。
+///
+/// 读路径（`src/group_goal.rs`）先迁移再校验，所以旧 `goal.json` 不用手改；
+/// 下一次写操作才会落 v2 并留 `.v1.bak`。
+pub fn migrate_goal(mut goal: GroupGoal) -> GroupGoal {
+    if goal.version >= GOAL_SCHEMA_VERSION {
+        return goal;
+    }
+    goal.version = GOAL_SCHEMA_VERSION;
+    for stage in &mut goal.stages {
+        if stage.acceptance.is_empty() {
+            stage.acceptance = String::new();
+        }
+        if stage.evidence.is_empty() {
+            stage.evidence = String::new();
+        }
+        if stage.passed_at.is_none() && stage.status == StageStatus::Done {
+            // v1 里 done 没有时间：用目标更新时间兜底，保证 UI 能显示相对时间。
+            stage.passed_at = Some(goal.updated_at);
+        }
+    }
+    goal
+}
+
 /// 校验并归一化目标。损坏/越界输入返回可读错误，调用方决定拒绝写入还是按空处理。
 pub fn validate_goal(goal: GroupGoal) -> Result<GroupGoal, String> {
-    if goal.version != GOAL_SCHEMA_VERSION {
+    if goal.version != GOAL_SCHEMA_VERSION && goal.version != LEGACY_GOAL_SCHEMA_VERSION {
         return Err(format!(
-            "goal version 必须为 {}，实收 {}",
-            GOAL_SCHEMA_VERSION, goal.version
+            "goal version 必须为 {GOAL_SCHEMA_VERSION}（或兼容的 {LEGACY_GOAL_SCHEMA_VERSION}），实收 {}",
+            goal.version
         ));
     }
+    // 走到校验这一步一律按 v2 语义处理（只补字段，不重排状态）。
+    let goal = migrate_goal(goal);
     let title = require_title(&goal.title, "目标标题", TITLE_MAX_CHARS)?;
     let description = trimmed(&goal.description).to_string();
     let description_length = description.chars().count();
     if description_length > DESCRIPTION_MAX_CHARS {
         return Err(format!(
             "目标说明过长（{description_length}/{DESCRIPTION_MAX_CHARS} 字符）"
+        ));
+    }
+    let acceptance = trimmed(&goal.acceptance).to_string();
+    if acceptance.chars().count() > ACCEPTANCE_MAX_CHARS {
+        return Err(format!(
+            "目标验收线过长（{}/{ACCEPTANCE_MAX_CHARS} 字符）",
+            acceptance.chars().count()
         ));
     }
     if goal.stages.len() > MAX_STAGES {
@@ -213,11 +282,28 @@ pub fn validate_goal(goal: GroupGoal) -> Result<GroupGoal, String> {
                 "stage[{index}] 备注过长（{note_length}/{STAGE_NOTE_MAX_CHARS} 字符）"
             ));
         }
+        let stage_acceptance = trimmed(&stage.acceptance).to_string();
+        if stage_acceptance.chars().count() > ACCEPTANCE_MAX_CHARS {
+            return Err(format!(
+                "stage[{index}] 验收线过长（{}/{ACCEPTANCE_MAX_CHARS} 字符）",
+                stage_acceptance.chars().count()
+            ));
+        }
+        let evidence = trimmed(&stage.evidence).to_string();
+        if evidence.chars().count() > EVIDENCE_MAX_CHARS {
+            return Err(format!(
+                "stage[{index}] 证据过长（{}/{EVIDENCE_MAX_CHARS} 字符）",
+                evidence.chars().count()
+            ));
+        }
         stages.push(GoalStage {
             id: id.to_string(),
             title,
             status: stage.status,
             note,
+            acceptance: stage_acceptance,
+            evidence,
+            passed_at: stage.passed_at,
         });
     }
     normalize_stages(&mut stages)?;
@@ -226,14 +312,17 @@ pub fn validate_goal(goal: GroupGoal) -> Result<GroupGoal, String> {
     {
         return Err("目标已完成，但仍有阶段未完成".to_string());
     }
+    let last_rework_note = trimmed(&goal.last_rework_note).to_string();
     Ok(GroupGoal {
         version: GOAL_SCHEMA_VERSION,
         status: goal.status,
         title,
         description,
+        acceptance,
         stages,
         created_at: goal.created_at,
         updated_at: goal.updated_at,
+        last_rework_note,
     })
 }
 
@@ -298,6 +387,9 @@ pub fn apply_goal_action(
                 title: stage_title,
                 status: StageStatus::Pending,
                 note: String::new(),
+                acceptance: String::new(),
+                evidence: String::new(),
+                passed_at: None,
             });
         }
         let goal = validate_goal(GroupGoal {
@@ -305,14 +397,16 @@ pub fn apply_goal_action(
             status: GoalStatus::Active,
             title,
             description,
+            acceptance: String::new(),
             stages: built,
             created_at: now,
             updated_at: now,
+            last_rework_note: String::new(),
         })?;
         return Ok(Some(goal));
     }
 
-    let mut goal = current.ok_or_else(|| "当前没有群目标".to_string())?;
+    let mut goal = migrate_goal(current.ok_or_else(|| "当前没有群目标".to_string())?);
     require_editable(&goal)?;
 
     match action {
@@ -331,6 +425,9 @@ pub fn apply_goal_action(
                 title,
                 status: StageStatus::Pending,
                 note: String::new(),
+                acceptance: String::new(),
+                evidence: String::new(),
+                passed_at: None,
             });
         }
         GoalAction::RemoveStage { stage_id } => {
@@ -369,7 +466,79 @@ pub fn apply_goal_action(
                 }
                 StageStatus::Active => {}
             }
+            // 手工把阶段标 done 时也补时间戳（UI 相对时间才不会空）。
+            if status == StageStatus::Done {
+                goal.stages[index].passed_at = Some(now);
+            }
             goal.stages[index].status = status;
+        }
+        GoalAction::SetAcceptance {
+            stage_id,
+            acceptance,
+        } => {
+            let acceptance = trimmed(&acceptance).to_string();
+            if acceptance.chars().count() > ACCEPTANCE_MAX_CHARS {
+                return Err(format!(
+                    "验收线过长（{}/{ACCEPTANCE_MAX_CHARS} 字符）",
+                    acceptance.chars().count()
+                ));
+            }
+            match stage_id {
+                None => goal.acceptance = acceptance,
+                Some(stage_id) => {
+                    let index = find_stage(&mut goal.stages, &stage_id)?;
+                    goal.stages[index].acceptance = acceptance;
+                }
+            }
+        }
+        GoalAction::PassStage {
+            stage_id,
+            evidence,
+        } => {
+            let index = find_stage(&mut goal.stages, &stage_id)?;
+            if goal.stages[index].status != StageStatus::Active {
+                return Err("只有进行中的阶段可以通过".to_string());
+            }
+            let evidence = trimmed(&evidence).to_string();
+            if evidence.is_empty() {
+                return Err("证据不能为空".to_string());
+            }
+            if evidence.chars().count() > EVIDENCE_MAX_CHARS {
+                return Err(format!(
+                    "证据过长（{}/{EVIDENCE_MAX_CHARS} 字符）",
+                    evidence.chars().count()
+                ));
+            }
+            goal.stages[index].status = StageStatus::Done;
+            goal.stages[index].evidence = evidence;
+            goal.stages[index].passed_at = Some(now);
+        }
+        GoalAction::ReworkStage { stage_id, note } => {
+            let index = find_stage(&mut goal.stages, &stage_id)?;
+            if goal.stages[index].status == StageStatus::Pending {
+                return Err("只有已开始或已完成的阶段可以打回".to_string());
+            }
+            let note = trimmed(&note).to_string();
+            if note.is_empty() {
+                return Err("打回原因不能为空".to_string());
+            }
+            if note.chars().count() > STAGE_NOTE_MAX_CHARS {
+                return Err(format!(
+                    "打回原因过长（{}/{STAGE_NOTE_MAX_CHARS} 字符）",
+                    note.chars().count()
+                ));
+            }
+            // 打回第 i 阶段 = 它自己回进行中，后面的阶段一起回待开始（顺序不变式）。
+            goal.stages[index].status = StageStatus::Active;
+            goal.stages[index].passed_at = None;
+            goal.stages[index].evidence = String::new();
+            goal.stages[index].note = note.clone();
+            for later in goal.stages[index + 1..].iter_mut() {
+                later.status = StageStatus::Pending;
+                later.passed_at = None;
+                later.evidence = String::new();
+            }
+            goal.last_rework_note = note;
         }
         GoalAction::Pause => {
             if goal.status != GoalStatus::Active {
@@ -434,6 +603,9 @@ pub fn render_goal_prompt(goal: &GroupGoal) -> Option<String> {
     if !goal.description.trim().is_empty() {
         lines.push(goal.description.trim().to_string());
     }
+    if !goal.acceptance.trim().is_empty() {
+        lines.push(format!("验收线（整体）：{}", goal.acceptance.trim()));
+    }
     lines.push(match current {
         Some(title) => format!("阶段进度：{done}/{total}，当前阶段「{title}」"),
         None => format!("阶段进度：{done}/{total}"),
@@ -445,12 +617,21 @@ pub fn render_goal_prompt(goal: &GroupGoal) -> Option<String> {
             StageStatus::Pending => "[ ]",
         };
         lines.push(format!("- {mark} {}", stage.title));
+        if !stage.acceptance.trim().is_empty() {
+            lines.push(format!("  验收：{}", stage.acceptance.trim()));
+        }
+        if stage.status == StageStatus::Done && !stage.evidence.trim().is_empty() {
+            lines.push(format!("  证据：{}", stage.evidence.trim()));
+        }
+    }
+    if !goal.last_rework_note.trim().is_empty() {
+        lines.push(format!("上次打回原因：{}", goal.last_rework_note.trim()));
     }
     lines.push(
         if goal.status == GoalStatus::Paused {
             "目标已暂停：不要自行推进阶段，按用户本轮指示处理。"
         } else {
-            "请让本轮工作服务于当前阶段；阶段完成时简要说明依据。"
+            "请让本轮工作服务于当前阶段；阶段完成时用 team_goal_pass 提交证据（不要自己宣布通过）。"
         }
         .to_string(),
     );
@@ -634,6 +815,9 @@ mod tests {
                     StageStatus::Pending
                 },
                 note: String::new(),
+                acceptance: String::new(),
+                evidence: String::new(),
+                passed_at: None,
             })
             .collect();
         assert!(validate_goal(goal).is_err());
@@ -701,5 +885,147 @@ mod tests {
         })
         .unwrap();
         assert_eq!(serialized, r#"{"kind":"addStage","title":"验收"}"#);
+    }
+
+    #[test]
+    fn v1_goal_migrates_to_v2_without_losing_stages() {
+        let v1 = r#"{
+            "version": 1,
+            "status": "active",
+            "title": "发版",
+            "description": "一期",
+            "stages": [
+                {"id": "s1", "title": "调研", "status": "done", "note": "已核"},
+                {"id": "s2", "title": "实现", "status": "active", "note": ""}
+            ],
+            "createdAt": 1000,
+            "updatedAt": 2000
+        }"#;
+        let goal: GroupGoal = serde_json::from_str(v1).expect("v1 要能解析");
+        let migrated = migrate_goal(goal);
+        assert_eq!(migrated.version, GOAL_SCHEMA_VERSION);
+        assert_eq!(migrated.stages.len(), 2);
+        assert_eq!(migrated.stages[0].title, "调研");
+        // v1 的 done 阶段补上时间戳，UI 才能显示相对时间。
+        assert_eq!(migrated.stages[0].passed_at, Some(2000));
+        assert!(migrated.stages[1].acceptance.is_empty());
+        let validated = validate_goal(migrated).expect("迁移后要能过校验");
+        assert_eq!(validated.version, 2);
+        assert_eq!(validated.stages[1].status, StageStatus::Active);
+    }
+
+    #[test]
+    fn acceptance_and_pass_require_active_stage() {
+        let goal = create(&["设计", "实现"]);
+        let first = stage_id(&goal, 0);
+        let second = stage_id(&goal, 1);
+        // 目标级 + 阶段级验收线
+        let goal = apply_goal_action(
+            Some(goal),
+            GoalAction::SetAcceptance {
+                stage_id: None,
+                acceptance: "发版到 v0.5.0".into(),
+            },
+            2_000,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(goal.acceptance, "发版到 v0.5.0");
+        let goal = apply_goal_action(
+            Some(goal),
+            GoalAction::SetAcceptance {
+                stage_id: Some(first.clone()),
+                acceptance: "cargo test 全绿".into(),
+            },
+            2_100,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(goal.stages[0].acceptance, "cargo test 全绿");
+        // 证据为空必须拒绝
+        assert!(
+            apply_goal_action(
+                Some(goal.clone()),
+                GoalAction::PassStage {
+                    stage_id: first.clone(),
+                    evidence: "  ".into(),
+                },
+                2_200
+            )
+            .is_err()
+        );
+        // 非进行中阶段不能 pass
+        assert!(
+            apply_goal_action(
+                Some(goal.clone()),
+                GoalAction::PassStage {
+                    stage_id: second.clone(),
+                    evidence: "ok".into(),
+                },
+                2_300
+            )
+            .is_err()
+        );
+        let goal = apply_goal_action(
+            Some(goal),
+            GoalAction::PassStage {
+                stage_id: first.clone(),
+                evidence: "cargo test: 130 passed".into(),
+            },
+            2_400,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(goal.stages[0].status, StageStatus::Done);
+        assert_eq!(goal.stages[0].evidence, "cargo test: 130 passed");
+        assert_eq!(goal.stages[0].passed_at, Some(2_400));
+        // pass 后推进到下一阶段
+        assert_eq!(goal.stages[1].status, StageStatus::Active);
+    }
+
+    #[test]
+    fn rework_reopens_stage_and_resets_later_stages() {
+        let goal = create(&["a", "b"]);
+        let first = stage_id(&goal, 0);
+        let goal = apply_goal_action(
+            Some(goal),
+            GoalAction::PassStage {
+                stage_id: first.clone(),
+                evidence: "done".into(),
+            },
+            2_000,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(goal.stages[1].status, StageStatus::Active);
+        // 空原因拒绝
+        assert!(
+            apply_goal_action(
+                Some(goal.clone()),
+                GoalAction::ReworkStage {
+                    stage_id: first.clone(),
+                    note: " ".into(),
+                },
+                2_100
+            )
+            .is_err()
+        );
+        let goal = apply_goal_action(
+            Some(goal),
+            GoalAction::ReworkStage {
+                stage_id: first.clone(),
+                note: "缺少回归测试".into(),
+            },
+            2_200,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(goal.stages[0].status, StageStatus::Active);
+        assert_eq!(goal.stages[0].passed_at, None);
+        assert!(goal.stages[0].evidence.is_empty());
+        assert_eq!(goal.stages[1].status, StageStatus::Pending);
+        assert_eq!(goal.last_rework_note, "缺少回归测试");
+        let rendered = render_goal_prompt(&goal).expect("active goal");
+        assert!(rendered.contains("上次打回原因：缺少回归测试"));
     }
 }

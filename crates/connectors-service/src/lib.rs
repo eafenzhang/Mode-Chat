@@ -20,6 +20,42 @@ pub struct ConnectorSecret {
     pub label: &'static str,
 }
 
+/// 远程 MCP 的鉴权方式（v0.5.0 W7：只做 header / query key，不做 OAuth）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteAuth {
+    /// 无需凭据（公共远程 MCP）。
+    None,
+    /// `Authorization: <prefix><secret>`（如 `Bearer <token>`）。
+    Header {
+        name: &'static str,
+        prefix: &'static str,
+        secret: &'static str,
+    },
+    /// URL query 参数带 key（高德这类）。
+    Query {
+        name: &'static str,
+        secret: &'static str,
+    },
+}
+
+/// 远程 MCP 连接器（Streamable HTTP）。
+///
+/// 与 stdio 目录分开列：老条目一个字段都不用改，删除远程条目也不会影响
+/// stdio 的 `CATALOG`。OAuth 型远程（GitHub Copilot / Notion / Linear 等）
+/// 明确不在 v0.5 范围，见 §0.1。
+pub struct RemoteConnector {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// dev / docs / work / data / search / design / commerce
+    pub category: &'static str,
+    pub about: &'static str,
+    pub url: &'static str,
+    /// 额外的固定请求头（`(name, value)`）。
+    pub headers: &'static [(&'static str, &'static str)],
+    pub auth: RemoteAuth,
+    pub secret_label: &'static str,
+}
+
 /// 目录条目：id 与 DS-Bot 对齐，字段够渲染卡片、够起一个 MCP 服务。
 pub struct ConnectorSpec {
     pub id: &'static str,
@@ -33,6 +69,101 @@ pub struct ConnectorSpec {
     pub env: &'static [(&'static str, &'static str)],
     pub secrets: &'static [ConnectorSecret],
 }
+
+/// v0.5.0 W7 新增的远程（HTTP）连接器：选的是**公共或 key 型**远程 MCP，
+/// 不需要 OAuth 回调就能连。连不上取决于用户是否填了 key，未填时 UI 标「缺凭据」。
+pub const REMOTE_CATALOG: &[RemoteConnector] = &[
+    RemoteConnector {
+        id: "huggingface",
+        name: "Hugging Face",
+        category: "data",
+        about: "Models, datasets, and Spaces",
+        url: "https://huggingface.co/mcp",
+        headers: &[],
+        auth: RemoteAuth::None,
+        secret_label: "",
+    },
+    RemoteConnector {
+        id: "exa",
+        name: "Exa",
+        category: "search",
+        about: "Web search for agents",
+        url: "https://mcp.exa.ai/mcp",
+        headers: &[],
+        auth: RemoteAuth::None,
+        secret_label: "",
+    },
+    RemoteConnector {
+        id: "deepwiki",
+        name: "DeepWiki",
+        category: "docs",
+        about: "Documentation for public code repositories",
+        url: "https://mcp.deepwiki.com/mcp",
+        headers: &[],
+        auth: RemoteAuth::None,
+        secret_label: "",
+    },
+    RemoteConnector {
+        id: "context7",
+        name: "Context7",
+        category: "docs",
+        about: "Library documentation and code examples",
+        url: "https://mcp.context7.com/mcp",
+        headers: &[],
+        auth: RemoteAuth::None,
+        secret_label: "",
+    },
+    RemoteConnector {
+        id: "mslearn",
+        name: "Microsoft Learn",
+        category: "docs",
+        about: "Microsoft product documentation",
+        url: "https://learn.microsoft.com/api/mcp",
+        headers: &[],
+        auth: RemoteAuth::None,
+        secret_label: "",
+    },
+    RemoteConnector {
+        id: "cloudflare-docs",
+        name: "Cloudflare Docs",
+        category: "docs",
+        about: "Cloudflare product documentation",
+        url: "https://docs.mcp.cloudflare.com/mcp",
+        headers: &[],
+        auth: RemoteAuth::None,
+        secret_label: "",
+    },
+    RemoteConnector {
+        id: "amap",
+        name: "Amap",
+        category: "search",
+        about: "Maps, places, and routes in China",
+        url: "https://mcp.amap.com/mcp",
+        headers: &[],
+        auth: RemoteAuth::Query {
+            name: "key",
+            secret: "CONNECTOR_AMAP_KEY",
+        },
+        secret_label: "高德 Web 服务 key",
+    },
+    RemoteConnector {
+        id: "github-copilot",
+        name: "GitHub Copilot MCP",
+        category: "dev",
+        about: "Repositories, issues, and pull requests（需 PAT）",
+        url: "https://api.githubcopilot.com/mcp/",
+        headers: &[(
+            "X-MCP-Toolsets",
+            "context,repos,issues,pull_requests",
+        )],
+        auth: RemoteAuth::Header {
+            name: "Authorization",
+            prefix: "Bearer ",
+            secret: "CONNECTOR_GITHUB_COPILOT_TOKEN",
+        },
+        secret_label: "GitHub PAT（copilot 权限）",
+    },
+];
 
 const fn secret(name: &'static str, label: &'static str) -> ConnectorSecret {
     ConnectorSecret { name, label }
@@ -225,6 +356,16 @@ pub fn spec(id: &str) -> Option<&'static ConnectorSpec> {
     CATALOG.iter().find(|item| item.id == id)
 }
 
+/// 远程（HTTP）目录里的一条；stdio 目录里没有。
+pub fn remote_spec(id: &str) -> Option<&'static RemoteConnector> {
+    REMOTE_CATALOG.iter().find(|item| item.id == id)
+}
+
+/// 目录里是否存在这个 id（stdio 或 remote 都算）。
+pub fn known(id: &str) -> bool {
+    spec(id).is_some() || remote_spec(id).is_some()
+}
+
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectorState {
@@ -257,11 +398,7 @@ pub fn read_state(path: &Path) -> ConnectorState {
         Ok(state) => ConnectorState {
             version: 1,
             // 只保留目录里还存在的 id，目录改名不会留下幽灵条目。
-            enabled: state
-                .enabled
-                .into_iter()
-                .filter(|id| spec(id).is_some())
-                .collect(),
+            enabled: state.enabled.into_iter().filter(|id| known(id)).collect(),
         },
         Err(error) => {
             eprintln!("[mode-bot] 连接器状态损坏（{}）：{error}", path.display());
@@ -283,6 +420,10 @@ pub fn write_state(path: &Path, state: &ConnectorState) -> Result<(), String> {
 }
 
 /// 起 MCP 服务器要的形状（与插件 MCP 同构，渲染层直接合并）。
+///
+/// `transport` 仍是字符串，老消费者（`src/connectors.rs` 的 payload）不用改：
+/// stdio 条目照旧是 `"stdio"`，`url`/`headers` 为空；远程条目是 `"http"`，
+/// `command`/`args`/`env` 为空。这样新增字段对旧代码是纯增量。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectorMcpServer {
@@ -291,6 +432,15 @@ pub struct ConnectorMcpServer {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub transport: &'static str,
+    /// HTTP transport 的地址（stdio 为空）。
+    #[serde(default)]
+    pub url: String,
+    /// HTTP transport 的固定请求头（不含凭据；凭据在 `auth_header` 里单独给）。
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    /// 需要在调用时附加的鉴权头：`(头名, 完整值)`。日志里绝不能打这个值。
+    #[serde(default, skip_serializing)]
+    pub auth_header: Option<(String, String)>,
 }
 
 /// 启用清单 → MCP 服务器。`workspace` 供 filesystem 这类需要根目录的连接器使用；
@@ -302,6 +452,49 @@ pub fn resolve_mcp_servers(
 ) -> Result<Vec<ConnectorMcpServer>, String> {
     let mut servers = Vec::new();
     for id in &state.enabled {
+        // 远程（HTTP）条目：不带 command，只带 url + 头。
+        if let Some(remote) = remote_spec(id) {
+            let mut url = remote.url.to_string();
+            let mut auth_header = None;
+            match remote.auth {
+                RemoteAuth::None => {}
+                RemoteAuth::Header {
+                    name,
+                    prefix,
+                    secret,
+                } => {
+                    let value = secrets.get(secret).ok_or_else(|| {
+                        format!("连接器 {} 缺少凭据 {secret}", remote.name)
+                    })?;
+                    auth_header = Some((name.to_string(), format!("{prefix}{value}")));
+                }
+                RemoteAuth::Query { name, secret } => {
+                    let value = secrets.get(secret).ok_or_else(|| {
+                        format!("连接器 {} 缺少凭据 {secret}", remote.name)
+                    })?;
+                    let separator = if url.contains('?') { '&' } else { '?' };
+                    url.push(separator);
+                    url.push_str(name);
+                    url.push('=');
+                    url.push_str(&urlencode(value));
+                }
+            }
+            let mut headers = BTreeMap::new();
+            for (name, value) in remote.headers {
+                headers.insert((*name).to_string(), (*value).to_string());
+            }
+            servers.push(ConnectorMcpServer {
+                name: remote.id.to_string(),
+                command: String::new(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                transport: "http",
+                url,
+                headers,
+                auth_header,
+            });
+            continue;
+        }
         let Some(spec) = spec(id) else { continue };
         let mut args = Vec::with_capacity(spec.args.len());
         for arg in spec.args {
@@ -331,9 +524,26 @@ pub fn resolve_mcp_servers(
             args,
             env,
             transport: "stdio",
+            url: String::new(),
+            headers: BTreeMap::new(),
+            auth_header: None,
         });
     }
     Ok(servers)
+}
+
+/// query 参数的最小转义（key 这类都是字母数字，但不想赌）。
+fn urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -395,5 +605,79 @@ mod tests {
         let error = resolve_mcp_servers(&state, &Default::default(), None).unwrap_err();
         assert!(error.contains("Slack"), "{error}");
         assert!(error.contains("SLACK_BOT_TOKEN"), "{error}");
+    }
+
+    #[test]
+    fn remote_public_connector_needs_no_secret() {
+        let state = ConnectorState {
+            version: 1,
+            enabled: vec!["context7".into()],
+        };
+        let servers = resolve_mcp_servers(&state, &Default::default(), None).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].transport, "http");
+        assert_eq!(servers[0].url, "https://mcp.context7.com/mcp");
+        assert!(servers[0].command.is_empty());
+        assert!(servers[0].auth_header.is_none());
+    }
+
+    #[test]
+    fn remote_header_auth_builds_bearer_and_extra_headers() {
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "CONNECTOR_GITHUB_COPILOT_TOKEN".to_string(),
+            "ghp_x".to_string(),
+        );
+        let state = ConnectorState {
+            version: 1,
+            enabled: vec!["github-copilot".into()],
+        };
+        let servers = resolve_mcp_servers(&state, &secrets, None).unwrap();
+        assert_eq!(
+            servers[0].auth_header,
+            Some(("Authorization".to_string(), "Bearer ghp_x".to_string()))
+        );
+        assert_eq!(
+            servers[0]
+                .headers
+                .get("X-MCP-Toolsets")
+                .map(String::as_str),
+            Some("context,repos,issues,pull_requests")
+        );
+        // 鉴权头不参与序列化，避免顺手进了日志或前端 payload。
+        let json = serde_json::to_string(&servers[0]).unwrap();
+        assert!(!json.contains("ghp_x"), "{json}");
+    }
+
+    #[test]
+    fn remote_query_auth_appends_key() {
+        let mut secrets = BTreeMap::new();
+        secrets.insert("CONNECTOR_AMAP_KEY".to_string(), "abc".to_string());
+        let state = ConnectorState {
+            version: 1,
+            enabled: vec!["amap".into()],
+        };
+        let servers = resolve_mcp_servers(&state, &secrets, None).unwrap();
+        assert_eq!(servers[0].url, "https://mcp.amap.com/mcp?key=abc");
+        assert!(servers[0].auth_header.is_none());
+    }
+
+    #[test]
+    fn remote_missing_key_is_a_hard_error() {
+        let state = ConnectorState {
+            version: 1,
+            enabled: vec!["amap".into()],
+        };
+        let error = resolve_mcp_servers(&state, &Default::default(), None).unwrap_err();
+        assert!(error.contains("Amap"), "{error}");
+        assert!(error.contains("CONNECTOR_AMAP_KEY"), "{error}");
+    }
+
+    #[test]
+    fn remote_ids_are_kept_in_state() {
+        assert!(known("context7"));
+        assert!(known("github"));
+        assert!(!known("nope"));
+        assert!(remote_spec("github").is_none(), "github 是 stdio 条目");
     }
 }

@@ -84,6 +84,9 @@ enum Action {
     GoalShow,
     GoalCreate,
     GoalStage,
+    GoalAcceptance,
+    GoalPass,
+    GoalRework,
     TaskList,
     Assign,
 }
@@ -172,7 +175,8 @@ pub fn tools(
             Action::GoalStage,
             tool_def(
                 "team_goal_stage",
-                "更新群目标某个阶段的状态（pending / active / done）。stage 可以传阶段标题或 id。",
+                "更新群目标某个阶段的状态（pending / active / done）。stage 可以传阶段标题或 id。\
+                 想标记完成请优先用 team_goal_pass（要带证据）。",
                 json!({
                     "type": "object",
                     "properties": {
@@ -180,6 +184,51 @@ pub fn tools(
                         "status": {"type": "string", "enum": ["pending", "active", "done"]}
                     },
                     "required": ["stage", "status"]
+                }),
+            ),
+        ),
+        (
+            Action::GoalAcceptance,
+            tool_def(
+                "team_goal_acceptance",
+                "设置验收线：不给 stage 就是目标整体“做完的样子”，给了 stage 就是该阶段完成的标准。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "stage": {"type": "string", "description": "阶段标题或 id（可选）"},
+                        "acceptance": {"type": "string", "description": "验收标准（命令/结果/文件）"}
+                    },
+                    "required": ["acceptance"]
+                }),
+            ),
+        ),
+        (
+            Action::GoalPass,
+            tool_def(
+                "team_goal_pass",
+                "通过当前进行中的阶段，必须带证据（命令输出、文件路径或截图说明）。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "stage": {"type": "string", "description": "阶段标题或 id"},
+                        "evidence": {"type": "string", "description": "证据：命令 + 输出 / 文件路径"}
+                    },
+                    "required": ["stage", "evidence"]
+                }),
+            ),
+        ),
+        (
+            Action::GoalRework,
+            tool_def(
+                "team_goal_rework",
+                "打回一个阶段（回到进行中，后面的阶段一起回待开始），必须写原因。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "stage": {"type": "string", "description": "阶段标题或 id"},
+                        "note": {"type": "string", "description": "打回原因"}
+                    },
+                    "required": ["stage", "note"]
                 }),
             ),
         ),
@@ -264,6 +313,9 @@ impl TeamTool {
             Action::GoalShow => self.goal_show(),
             Action::GoalCreate => self.goal_create(&params),
             Action::GoalStage => self.goal_stage(&params),
+            Action::GoalAcceptance => self.goal_acceptance(&params),
+            Action::GoalPass => self.goal_pass(&params),
+            Action::GoalRework => self.goal_rework(&params),
             Action::TaskList => self.task_list(),
             Action::Assign => self.assign(&params),
         }
@@ -308,6 +360,12 @@ impl TeamTool {
                 stage.title,
                 stage.id
             ));
+            if !stage.acceptance.trim().is_empty() {
+                lines.push(format!("  验收：{}", stage.acceptance.trim()));
+            }
+            if !stage.evidence.trim().is_empty() {
+                lines.push(format!("  证据：{}", stage.evidence.trim()));
+            }
         }
         Ok(lines.join("\n"))
     }
@@ -381,6 +439,80 @@ impl TeamTool {
             },
         )?;
         Ok(format!("阶段「{stage_title}」已更新为 {}", status_label(status)))
+    }
+
+    /// 阶段标题或 id → 真实 stage id（v2 工具共用）。
+    fn resolve_stage_id(&self, target: &str) -> Result<String, String> {
+        let goal = crate::group_goal::read(&self.data_root, &self.group_id)
+            .ok_or_else(|| "当前群还没有目标".to_string())?;
+        goal.stages
+            .iter()
+            .find(|stage| {
+                stage.id == target || stage.title.eq_ignore_ascii_case(target.trim())
+            })
+            .map(|stage| stage.id.clone())
+            .ok_or_else(|| format!("找不到阶段：{target}"))
+    }
+
+    fn goal_acceptance(&self, params: &Value) -> Result<String, String> {
+        let acceptance = string_field(params, "acceptance")?;
+        let stage = params
+            .get("stage")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let stage_id = match stage {
+            Some(target) => Some(self.resolve_stage_id(target)?),
+            None => None,
+        };
+        crate::group_goal::apply(
+            &self.data_root,
+            &self.group_id,
+            bot_team::goal::GoalAction::SetAcceptance {
+                stage_id: stage_id.clone(),
+                acceptance,
+            },
+        )?;
+        Ok(match stage {
+            Some(target) => format!("阶段「{target}」的验收线已更新"),
+            None => "目标整体验收线已更新".to_string(),
+        })
+    }
+
+    fn goal_pass(&self, params: &Value) -> Result<String, String> {
+        let target = string_field(params, "stage")?;
+        let evidence = string_field(params, "evidence")?;
+        let stage_id = self.resolve_stage_id(&target)?;
+        let goal = crate::group_goal::apply(
+            &self.data_root,
+            &self.group_id,
+            bot_team::goal::GoalAction::PassStage {
+                stage_id: stage_id.clone(),
+                evidence,
+            },
+        )?
+        .ok_or_else(|| "通过阶段失败".to_string())?;
+        let next = goal
+            .stages
+            .iter()
+            .find(|stage| stage.status == bot_team::goal::StageStatus::Active)
+            .map(|stage| stage.title.clone());
+        Ok(match next {
+            Some(next) => format!("阶段「{target}」已通过，下一阶段「{next}」开始"),
+            None => format!("阶段「{target}」已通过；所有阶段都完成了"),
+        })
+    }
+
+    fn goal_rework(&self, params: &Value) -> Result<String, String> {
+        let target = string_field(params, "stage")?;
+        let note = string_field(params, "note")?;
+        let stage_id = self.resolve_stage_id(&target)?;
+        crate::group_goal::apply(
+            &self.data_root,
+            &self.group_id,
+            bot_team::goal::GoalAction::ReworkStage { stage_id, note },
+        )?;
+        Ok(format!("阶段「{target}」已打回"))
     }
 
     fn task_list(&self) -> Result<String, String> {

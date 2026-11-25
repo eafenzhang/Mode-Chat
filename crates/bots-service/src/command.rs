@@ -28,6 +28,10 @@ pub enum BotCommand {
     Stop,
     Send { value: String },
     PermissionRespond { value: String },
+    /// 作答提问卡（`ask_user_question`）：`/question <序号>` 或 `/question <自由文本>`。
+    QuestionRespond { value: String },
+    /// 取消当前提问卡。
+    QuestionCancel,
     ElicitationSubmit,
     ElicitationRespond { value: String },
     Approve { request_id: String, option_id: String },
@@ -138,6 +142,15 @@ pub fn parse_bot_command(text: &str) -> BotCommand {
                 unknown()
             } else {
                 BotCommand::PermissionRespond { value: rest }
+            }
+        }
+        // 提问卡作答（v0.5.0 W11）。`/question` 空参数 = 取消；与 `/permission` 分开，
+        // 避免序号语义互相歧义。
+        "question" | "提问" => {
+            if rest.is_empty() {
+                BotCommand::QuestionCancel
+            } else {
+                BotCommand::QuestionRespond { value: rest }
             }
         }
         "elicitation" | "answer" | "回答" => {

@@ -25,10 +25,29 @@ use tokio_util::sync::CancellationToken;
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-static SESSION: OnceLock<tokio::sync::Mutex<Option<Arc<Browser>>>> = OnceLock::new();
+/// 一个 Bot 一份浏览器会话（v0.5.0 W6）：key = `bot_id_from_identity` 或 `ui`。
+/// 上限 [`MAX_SESSIONS`]，超了关最久未用的那个（LRU，用 `last_used` 记）。
+static SESSIONS: OnceLock<tokio::sync::Mutex<HashMap<String, BrowserSlot>>> = OnceLock::new();
 
-async fn session_slot() -> &'static tokio::sync::Mutex<Option<Arc<Browser>>> {
-    SESSION.get_or_init(|| tokio::sync::Mutex::new(None))
+/// 同时活着的浏览器上限（每个是独立 profile 的 Chromium 进程，4 个约 700MB）。
+const MAX_SESSIONS: usize = 4;
+
+struct BrowserSlot {
+    browser: Arc<Browser>,
+    /// 最后使用时间（LRU 驱逐用）。
+    last_used: std::time::Instant,
+}
+
+async fn session_map() -> &'static tokio::sync::Mutex<HashMap<String, BrowserSlot>> {
+    SESSIONS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+/// 身份 → profile key：`mode-bot:teammate:<id>` 取 `<id>`，其余落 `ui`。
+fn session_key(scope: &str) -> String {
+    crate::rpi_engine::bot_id_from_identity(scope)
+        .map(|id| crate::rpi_engine::safe_segment_pub(&id))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "ui".to_string())
 }
 
 struct Browser {
@@ -113,20 +132,27 @@ async fn page_ws_url(port: u16) -> Result<String, String> {
 }
 
 impl Browser {
-    async fn launch() -> Result<Arc<Self>, String> {
+    /// 启动（或复用）某个 profile key 的浏览器。
+    ///
+    /// profile 目录从 `<pid>-<stamp>`（每次新目录、登录态必丢）改成
+    /// `runtime/browser-profiles/<key>`：同一个 Bot 重启后仍然登录着。
+    async fn launch(profile_key: &str) -> Result<Arc<Self>, String> {
         let exe = find_browser().ok_or_else(|| {
             "未找到 Edge 或 Chrome（浏览器控制需要本机安装其一）".to_string()
         })?;
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or_default();
         let profile = data_root()
             .join("runtime")
             .join("browser-profiles")
-            .join(format!("{}-{stamp}", std::process::id()));
+            .join(profile_key);
         std::fs::create_dir_all(&profile)
             .map_err(|error| format!("创建浏览器 profile 失败：{error}"))?;
+        // 上次非正常退出留下的单例锁会让新进程连不上调试端口。
+        for name in ["SingletonLock", "SingletonCookie", "SingletonSocket"] {
+            let path = profile.join(name);
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
         let child = tokio::process::Command::new(&exe)
             .arg("--remote-debugging-port=0")
             .arg(format!("--user-data-dir={}", profile.display()))
@@ -271,14 +297,37 @@ impl Browser {
     }
 }
 
-async fn get_session() -> Result<Arc<Browser>, String> {
-    let slot = session_slot().await;
-    let mut guard = slot.lock().await;
-    if let Some(browser) = guard.as_ref() {
-        return Ok(Arc::clone(browser));
+/// 取（或懒启动）某个 scope 的浏览器。
+///
+/// `scope` 是会话身份（`mode-bot:teammate:<id>`）或 UI 传的 `"ui"`；
+/// 不同 Bot 拿到的是**不同的 Chromium 进程 + 不同 profile**，登录态互不影响。
+async fn get_session(scope: &str) -> Result<Arc<Browser>, String> {
+    let key = session_key(scope);
+    let map = session_map().await;
+    let mut guard = map.lock().await;
+    if let Some(slot) = guard.get_mut(&key) {
+        slot.last_used = std::time::Instant::now();
+        return Ok(Arc::clone(&slot.browser));
     }
-    let browser = Browser::launch().await?;
-    *guard = Some(Arc::clone(&browser));
+    // LRU 驱逐：超上限时关掉最久没用的那个（profile 目录保留，登录态不丢）。
+    if guard.len() >= MAX_SESSIONS {
+        let victim = guard
+            .iter()
+            .min_by_key(|(_, slot)| slot.last_used)
+            .map(|(key, _)| key.clone());
+        if let Some(victim) = victim {
+            guard.remove(&victim);
+            eprintln!("[browser] LRU 关闭 profile={victim}");
+        }
+    }
+    let browser = Browser::launch(&key).await?;
+    guard.insert(
+        key,
+        BrowserSlot {
+            browser: Arc::clone(&browser),
+            last_used: std::time::Instant::now(),
+        },
+    );
     Ok(browser)
 }
 
@@ -287,21 +336,32 @@ pub fn browser_path() -> Option<String> {
     find_browser().map(|path| path.display().to_string())
 }
 
-/// 设置页「打开浏览器」：启动并返回一句状态。
-pub async fn launch_for_ui() -> Result<String, String> {
-    get_session().await?;
-    Ok("浏览器已启动（独立 profile）".to_string())
+/// 设置页「打开浏览器」：启动（或复用）该 Bot 的 profile 并返回一句状态。
+pub async fn launch_for_ui(scope: &str) -> Result<String, String> {
+    let key = session_key(scope);
+    get_session(scope).await?;
+    Ok(if key == "ui" {
+        "浏览器已启动（独立 profile）".to_string()
+    } else {
+        format!("浏览器已启动（Bot 独立 profile：{key}）")
+    })
 }
 
-/// 设置页「关闭浏览器」。
-pub async fn close_for_ui() -> Result<(), String> {
-    close_session().await
+/// 设置页「关闭浏览器」：只关这一个 scope 的会话。
+pub async fn close_for_ui(scope: &str) -> Result<(), String> {
+    let key = session_key(scope);
+    let map = session_map().await;
+    let mut guard = map.lock().await;
+    if let Some(slot) = guard.remove(&key) {
+        drop(slot.browser);
+    }
+    Ok(())
 }
 
 /// 设置页「页面截图」：返回 PNG 字节。
-pub async fn screenshot_png() -> Result<Vec<u8>, String> {
+pub async fn screenshot_png(scope: &str) -> Result<Vec<u8>, String> {
     use base64::Engine as _;
-    let browser = get_session().await?;
+    let browser = get_session(scope).await?;
     let result = browser
         .send("Page.captureScreenshot", json!({"format": "png"}))
         .await?;
@@ -314,13 +374,21 @@ pub async fn screenshot_png() -> Result<Vec<u8>, String> {
         .map_err(|error| format!("截图解码失败：{error}"))
 }
 
-async fn close_session() -> Result<(), String> {
-    let slot = session_slot().await;
-    let mut guard = slot.lock().await;
-    if let Some(browser) = guard.take() {
-        drop(browser);
-    }
-    Ok(())
+/// 进程退出前清空所有浏览器会话（profile 目录保留）。
+#[allow(dead_code)]
+pub async fn close_all() {
+    let map = session_map().await;
+    let mut guard = map.lock().await;
+    guard.clear();
+}
+
+/// 该 Bot 的 profile 目录（设置页展示用，契约 §2.10）。
+#[allow(dead_code)]
+pub fn profile_dir(scope: &str) -> PathBuf {
+    data_root()
+        .join("runtime")
+        .join("browser-profiles")
+        .join(session_key(scope))
 }
 
 #[derive(Clone, Copy)]
@@ -730,7 +798,7 @@ impl AgentTool for BrowserTool {
 
 impl BrowserTool {
     async fn screenshot(&self, full_page: bool) -> Result<AgentToolResult, String> {
-        let browser = get_session().await?;
+        let browser = get_session(&self.scope).await?;
         let result = browser
             .send(
                 "Page.captureScreenshot",
@@ -758,10 +826,10 @@ impl BrowserTool {
 
     async fn run_text(&self, params: Value) -> Result<String, String> {
         if matches!(self.action, Action::Close) {
-            close_session().await?;
+            close_for_ui(&self.scope).await?;
             return Ok("浏览器已关闭".to_string());
         }
-        let browser = get_session().await?;
+        let browser = get_session(&self.scope).await?;
         match self.action {
             Action::Open => {
                 let url = params
@@ -1200,7 +1268,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "拉起本机 Edge/Chrome"]
     async fn browser_navigates_and_inputs() {
-        let browser = Browser::launch().await.expect("launch browser");
+        let browser = Browser::launch("ui").await.expect("launch browser");
         let text = browser.navigate("https://example.com").await.expect("navigate");
         assert!(text.contains("example"));
         let snapshot = browser
@@ -1272,6 +1340,6 @@ mod tests {
             Some("mode-chat-upload.txt")
         );
         let _ = std::fs::remove_file(file);
-        close_session().await.expect("close");
+        drop(browser);
     }
 }

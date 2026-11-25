@@ -87,6 +87,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 附件上传（v4 sendText）：分片 base64 + sha256 校验。
 base64 = "0.22"
+# 模型窗口模板匹配：内置模板的 modelMatch/baseUrlMatch 是正则（bots-service 已在用，无新增编译成本）。
+regex = "1"
 sha2 = "0.10"
 
 # 内嵌 Agent 引擎：pi-rust（MIT），固定到 v0.26.1 的提交，避免上游漂移。

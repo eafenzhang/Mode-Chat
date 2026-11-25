@@ -1294,13 +1294,20 @@ struct RpiTurnState {
     running: bool,
     text: String,
     error: Option<String>,
+    /// 待发出去的提问卡提示（`take_notice` 取走即清空）。
+    notice: Option<String>,
 }
 
 struct RpiEntry {
     session: Arc<crate::rpi_engine::RpiSession>,
     state: Arc<Mutex<RpiTurnState>>,
     approvals: Arc<Mutex<Vec<PendingPermissionPrompt>>>,
+    /// 待作答的提问卡（`ask_user_question`）。
+    questions: Arc<Mutex<Vec<PendingQuestionPrompt>>>,
 }
+
+/// IM 里的提问卡：`request_id` + 问题 + 选项（类型在 `bots-service` 里，通道共用）。
+type PendingQuestionPrompt = bots_service::conversation::PendingQuestionPrompt;
 
 impl RpiTurnOps {
     pub fn new(data_root: PathBuf) -> Self {
@@ -1323,8 +1330,14 @@ impl RpiTurnOps {
         let engine_model = crate::rpi_engine::resolve_model(&spec)?;
         let (approval_level, allowlist) =
             crate::rpi_engine::approval_policy(identity, workspace);
-        let system_prompt =
-            crate::rpi_engine::system_prompt_for(std::path::Path::new(workspace));
+        let im_bot_id = crate::rpi_engine::bot_id_from_identity(identity);
+        let im_limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
+        let (im_window, _) = crate::model_limits::resolve(&im_limits);
+        let system_prompt = crate::rpi_engine::system_prompt_for_bot(
+            std::path::Path::new(workspace),
+            im_bot_id.as_deref(),
+            im_window,
+        );
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::backend::BackendEvent>();
         let mut extra_tools = crate::mcp_host::for_workspace(workspace)
             .await
@@ -1352,15 +1365,18 @@ impl RpiTurnOps {
             member: None,
             approval_level,
             allowlist,
-            bot_id: crate::rpi_engine::bot_id_from_identity(identity),
+            bot_id: im_bot_id.clone(),
+            bot_name: im_bot_id.as_deref().and_then(crate::backend::bot_name_of),
             extra_tools,
             private_bot: crate::rpi_engine::private_bot_id(identity),
         };
         let session = Arc::new(crate::rpi_engine::RpiSession::open(options).await?);
         let state = Arc::new(Mutex::new(RpiTurnState::default()));
         let approvals = Arc::new(Mutex::new(Vec::new()));
+        let questions = Arc::new(Mutex::new(Vec::new()));
         let state_for_reader = Arc::clone(&state);
         let approvals_for_reader = Arc::clone(&approvals);
+        let questions_for_reader = Arc::clone(&questions);
         tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
                 let crate::backend::BackendEvent::Session { event, .. } = event else {
@@ -1413,6 +1429,30 @@ impl RpiTurnOps {
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .retain(|prompt| prompt.request_id != request_id);
                     }
+                    // 提问卡（W11）：原来落进 `_ => {}`，用户在 IM 里永远看不到问题。
+                    // 现在记进 questions 并把问题文本挂到 notice，由 runner 发出去。
+                    crate::backend::SessionEvent::Question(card) => {
+                        let prompt = PendingQuestionPrompt {
+                            request_id: card.request_id,
+                            question: card.question,
+                            options: card.options.into_iter().map(|(_, label)| label).collect(),
+                        };
+                        let rendered = prompt.render();
+                        questions_for_reader
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(prompt);
+                        state_for_reader
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .notice = Some(rendered);
+                    }
+                    crate::backend::SessionEvent::QuestionResolved { request_id } => {
+                        questions_for_reader
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .retain(|prompt| prompt.request_id != request_id);
+                    }
                     _ => {}
                 }
             }
@@ -1421,6 +1461,7 @@ impl RpiTurnOps {
             session,
             state,
             approvals,
+            questions,
         });
         Ok(entry)
     }
@@ -1554,6 +1595,23 @@ impl BotTurnOps for RpiTurnOps {
         })
     }
 
+    /// 待作答的提问卡（`/question` 用）。
+    fn pending_questions<'a>(
+        &'a self,
+        context: &'a ConversationContext,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<Vec<PendingQuestionPrompt>, String>>
+    {
+        Box::pin(async move {
+            let entry = self.entry_for(context).await?;
+            let prompts = entry
+                .questions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            Ok(prompts)
+        })
+    }
+
     fn resolve_interaction<'a>(
         &'a self,
         context: &'a ConversationContext,
@@ -1566,6 +1624,47 @@ impl BotTurnOps for RpiTurnOps {
                 Ok(())
             } else {
                 Err("审批请求已失效".to_string())
+            }
+        })
+    }
+
+    /// 取一条待发的提问卡提示（W11）；取走即清空，避免重复发。
+    fn take_notice<'a>(
+        &'a self,
+        context: &'a ConversationContext,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async move {
+            let entry = self.entry_for(context).await?;
+            let mut state = entry
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Ok(state.notice.take())
+        })
+    }
+
+    /// 作答一条提问卡：`answer=None` = 取消（agent 侧会拿到「用户取消了提问」）。
+    fn resolve_question<'a>(
+        &'a self,
+        context: &'a ConversationContext,
+        request_id: &'a str,
+        answer: Option<&'a str>,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let entry = self.entry_for(context).await?;
+            if entry
+                .session
+                .questions
+                .answer(request_id, answer.map(str::to_string))
+            {
+                entry
+                    .questions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .retain(|prompt| prompt.request_id != request_id);
+                Ok(())
+            } else {
+                Err("提问已失效或已被回答".to_string())
             }
         })
     }
@@ -1593,6 +1692,7 @@ impl RpiTurnState {
             running: self.running,
             text: self.text.clone(),
             error: self.error.clone(),
+            notice: None,
         }
     }
 }
@@ -2108,7 +2208,7 @@ impl ImWeixinHandler {
     }
 
     fn help_text(&self) -> String {
-        "可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径> 切换\n/stop 停止当前生成\n/permission <序号> 作答审批\n/deny 拒绝当前审批\n/bind <绑定码> 绑定账号\n\n文件发送与模型/模式命令暂未接入 GPUI，请在桌面端处理。".to_string()
+        "可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径> 切换\n/stop 停止当前生成\n/permission <序号> 作答审批\n/deny 拒绝当前审批\n/question <序号或答案> 作答提问（单独 /question = 取消）\n/bind <绑定码> 绑定账号\n\n文件发送与模型/模式命令暂未接入 GPUI，请在桌面端处理。".to_string()
     }
 
     fn render_command_reply(&self, reply: CommandReply) -> String {
@@ -2329,6 +2429,81 @@ impl ImWeixinHandler {
                     Err(error) => format!("提交审批失败：{error}"),
                 }
             }
+            // 提问卡作答（W11）：原来这条命令会被 `_ =>` 吞掉当成「未接入」。
+            BotCommand::QuestionRespond { value } => {
+                let Some(context) = self.conversation_context(&conversation_key) else {
+                    return "还没有会话，无法作答提问。".to_string();
+                };
+                let prompts = match self.ops.pending_questions(&context).await {
+                    Ok(prompts) => prompts,
+                    Err(error) => return format!("读取提问失败：{error}"),
+                };
+                if prompts.is_empty() {
+                    return "当前没有待回答的提问。".to_string();
+                }
+                // 只有一条提问时允许直接回答案（自然语言），多条时要求带序号。
+                let picked = if prompts.len() == 1 {
+                    prompts[0].clone()
+                } else {
+                    let index = value
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| index.checked_sub(1))
+                        .and_then(|index| prompts.get(index).cloned());
+                    match index {
+                        Some(prompt) => prompt,
+                        None => {
+                            return "有多条提问：请回复 /question <序号>（序号见提问提示）"
+                                .to_string()
+                        }
+                    }
+                };
+                // 有序号就按序号取选项，否则把原文当作自由答案。
+                let answer = picked
+                    .options
+                    .iter()
+                    .position(|option| option == value.trim())
+                    .map(|index| picked.options[index].clone())
+                    .or_else(|| {
+                        value
+                            .trim()
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|index| index.checked_sub(1))
+                            .and_then(|index| picked.options.get(index))
+                            .cloned()
+                    })
+                    .unwrap_or_else(|| value.trim().to_string());
+                match self
+                    .ops
+                    .resolve_question(&context, &picked.request_id, Some(&answer))
+                    .await
+                {
+                    Ok(()) => format!("已作答：{answer}"),
+                    Err(error) => format!("提交回答失败：{error}"),
+                }
+            }
+            BotCommand::QuestionCancel => {
+                let Some(context) = self.conversation_context(&conversation_key) else {
+                    return "还没有会话，无法作答提问。".to_string();
+                };
+                let prompts = match self.ops.pending_questions(&context).await {
+                    Ok(prompts) => prompts,
+                    Err(error) => return format!("读取提问失败：{error}"),
+                };
+                if prompts.is_empty() {
+                    return "当前没有待回答的提问。".to_string();
+                }
+                match self
+                    .ops
+                    .resolve_question(&context, &prompts[0].request_id, None)
+                    .await
+                {
+                    Ok(()) => "已取消提问。".to_string(),
+                    Err(error) => format!("取消提问失败：{error}"),
+                }
+            }
             BotCommand::Send { value } => self.handle_send_media(message, &value).await,
             BotCommand::Unknown { .. } => self.help_text(),
             _ => "该命令暂未接入 GPUI 版，请在桌面端处理。".to_string(),
@@ -2346,6 +2521,7 @@ fn command_name(command: &BotCommand) -> &'static str {
         BotCommand::Stop => "stop",
         BotCommand::WorkspaceSet { .. } | BotCommand::WorkspaceList => "workspace",
         BotCommand::PermissionRespond { .. } => "permission",
+        BotCommand::QuestionRespond { .. } | BotCommand::QuestionCancel => "question",
         BotCommand::Deny { .. } => "deny",
         BotCommand::SelectionCancel => "selection-cancel",
         _ => "other",

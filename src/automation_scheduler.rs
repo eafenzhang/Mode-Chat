@@ -74,8 +74,14 @@ impl DispatchPort for RpiDispatchPort {
             let engine_model = crate::rpi_engine::resolve_model(&spec)?;
             let (approval_level, allowlist) =
                 crate::rpi_engine::approval_policy(&identity, &request.workspace_path);
-            let system_prompt =
-                crate::rpi_engine::system_prompt_for(Path::new(&request.workspace_path));
+            let sched_bot_id = crate::rpi_engine::bot_id_from_identity(&identity);
+            let sched_limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
+            let (sched_window, _) = crate::model_limits::resolve(&sched_limits);
+            let system_prompt = crate::rpi_engine::system_prompt_for_bot(
+                Path::new(&request.workspace_path),
+                sched_bot_id.as_deref(),
+                sched_window,
+            );
             let (tx, mut rx) =
                 tokio::sync::mpsc::unbounded_channel::<crate::backend::BackendEvent>();
             let mcp_tools = crate::mcp_host::for_workspace(&request.workspace_path)
@@ -92,7 +98,8 @@ impl DispatchPort for RpiDispatchPort {
                 member: None,
                 approval_level,
                 allowlist,
-                bot_id: crate::rpi_engine::bot_id_from_identity(&identity),
+                bot_id: sched_bot_id.clone(),
+                bot_name: sched_bot_id.as_deref().and_then(crate::backend::bot_name_of),
                 extra_tools: mcp_tools,
                 private_bot: crate::rpi_engine::private_bot_id(&identity),
             };

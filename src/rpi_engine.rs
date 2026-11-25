@@ -41,7 +41,7 @@ use crate::backend::{
 use crate::data::ModelSpec;
 
 /// 内置 provider 模板目录（与 Mode 桌面端同一份；用于解析 templateId 的 api/baseUrl）。
-const BUILTIN_CATALOG: &str = include_str!("../assets/provider/mode-builtin.json");
+pub(crate) const BUILTIN_CATALOG: &str = include_str!("../assets/provider/mode-builtin.json");
 
 const IMAGE_MAX_BYTES: usize = 262_144;
 const IMAGE_MAX_COUNT: usize = 4;
@@ -140,8 +140,11 @@ pub fn resolve_model(spec: &ModelSpec) -> Result<EngineModel, String> {
         base_url,
     );
     model.input = vec![InputModality::Text, InputModality::Image];
-    model.context_window = 128_000;
-    model.max_tokens = 16_384;
+    // 窗口/输出上限：用户显式值 > 内置模板 > 命名兜底常量（见 `src/model_limits.rs`）。
+    let limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
+    let (context_window, max_tokens) = crate::model_limits::resolve(&limits);
+    model.context_window = context_window.max(1) as u64;
+    model.max_tokens = max_tokens.max(1) as u64;
     model.reasoning = spec.reasoning_level.is_some();
 
     let http = reqwest012::Client::builder()
@@ -243,6 +246,11 @@ fn safe_segment(value: &str) -> String {
         .collect()
 }
 
+/// 目录/文件名用的安全片段（浏览器 profile、私有目录等共用一套规则）。
+pub fn safe_segment_pub(value: &str) -> String {
+    safe_segment(value)
+}
+
 pub fn approval_policy(identity: &str, workspace: &str) -> (bot_team::approval::ApprovalLevel, Vec<String>) {
     use bot_team::approval::{parse_level, ApprovalLevel};
 
@@ -310,7 +318,19 @@ fn sessions_root() -> PathBuf {
 }
 
 /// 会话系统提示：工作目录 AGENTS.md（身份/团队约定）+ 团队记忆。
+///
+/// 不带 Bot 身份的老入口（自动化/隐藏任务仍是它）；带 Bot 的调用方用
+/// [`system_prompt_for_bot`]，会额外注入该 Bot 自己的记忆。
+#[allow(dead_code)]
 pub fn system_prompt_for(workspace: &Path) -> String {
+    system_prompt_for_bot(workspace, None, crate::model_limits::FALLBACK_CONTEXT_WINDOW)
+}
+
+/// 带 Bot 身份的系统提示（v0.5.0 W1）：在团队记忆之后再注入**自己的**记忆。
+///
+/// 预算按模型窗口算（`data::memory_budget`），不再写死 4000 字符；
+/// `bot_id` 为空（IM/自动化/隐藏任务）时行为与旧版完全一致。
+pub fn system_prompt_for_bot(workspace: &Path, bot_id: Option<&str>, context_window: i64) -> String {
     let mut prompt = String::from(
         "你是 Mode Chat 的 Bot 助手。用中文回答，遵守工作目录里的约定。",
     );
@@ -325,6 +345,14 @@ pub fn system_prompt_for(workspace: &Path) -> String {
     if !memory.trim().is_empty() {
         prompt.push_str("\n\n团队记忆：\n");
         prompt.push_str(memory.trim());
+    }
+    if let Some(bot_id) = bot_id.map(str::trim).filter(|value| !value.is_empty()) {
+        let budget = crate::data::memory_budget(context_window);
+        let own = crate::data::bot_memory_context(bot_id, budget);
+        if !own.is_empty() {
+            prompt.push_str("\n\n我的记忆（跨会话保留，可用 forget 删除）：\n");
+            prompt.push_str(&own);
+        }
     }
     prompt
 }
@@ -404,6 +432,27 @@ impl ApprovalGate {
         if std::env::var("BOT_PILOT_AUTO_APPROVE").ok().as_deref() == Some("1") {
             return None;
         }
+        // 隐私守卫（W3）：路径类工具访问别人的/已归档的目录时，不管档位一律弹卡。
+        // 放在档位判定之前，所以 `full` 档也拦得住（越界不是「信任范围内」）。
+        let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref());
+        if let Some(owner) = cross_dir {
+            let lowered = tool_name.to_ascii_lowercase();
+            let risk = if matches!(lowered.as_str(), "bash" | "powershell") {
+                "exec"
+            } else {
+                "write"
+            };
+            return self
+                .ask_permission(
+                    &tool_name,
+                    &request_id,
+                    crate::privacy::reason_text(&tool_name, &args, &owner),
+                    risk,
+                    false,
+                    signal,
+                )
+                .await;
+        }
         let allowlist = self
             .allowlist
             .lock()
@@ -413,17 +462,6 @@ impl ApprovalGate {
             ApprovalDecision::Allow => None,
             ApprovalDecision::Deny => Some(blocked("已拒绝（审批策略）")),
             ApprovalDecision::Ask => {
-                let (tx, rx) = oneshot::channel();
-                self.pending
-                    .lock()
-                    .expect("approval pending poisoned")
-                    .insert(
-                        request_id.clone(),
-                        PendingApproval {
-                            tool_name: tool_name.clone(),
-                            sender: tx,
-                        },
-                    );
                 // 风险档位按「实际副作用」分：本地执行/浏览器/电脑控制是 exec，写文件、
                 // 定时任务与 MCP 外部工具是 write，其余（读文件、提问）是 read。
                 // 自定义工具以前一律落到 read，审批卡上会把「建定时任务」标成只读。
@@ -445,7 +483,16 @@ impl ApprovalGate {
                     || lowered.starts_with("automation_")
                     || matches!(
                         lowered.as_str(),
-                        "team_assign" | "team_goal_create" | "team_goal_stage"
+                        "team_assign"
+                            | "team_goal_create"
+                            | "team_goal_stage"
+                            | "team_goal_pass"
+                            | "team_goal_rework"
+                            | "team_goal_acceptance"
+                            | "message_bot"
+                            | "post_to_group"
+                            | "remember"
+                            | "forget"
                     )
                     || lowered.starts_with("mcp__")
                 {
@@ -453,62 +500,94 @@ impl ApprovalGate {
                 } else {
                     "read"
                 };
+                self.ask_permission(
+                    &tool_name,
+                    &request_id,
+                    summarize_args(&args),
+                    risk,
+                    rememberable,
+                    signal,
+                )
+                .await
+            }
+        }
+    }
+
+    /// 弹一张审批卡并等作答；越界访问与常规审批共用同一条路径。
+    async fn ask_permission(
+        &self,
+        tool_name: &str,
+        request_id: &str,
+        reason: String,
+        risk: &str,
+        rememberable: bool,
+        signal: tokio_util::sync::CancellationToken,
+    ) -> Option<BeforeToolCallResult> {
+        let (tx, rx) = oneshot::channel();
+        self.pending
+            .lock()
+            .expect("approval pending poisoned")
+            .insert(
+                request_id.to_string(),
+                PendingApproval {
+                    tool_name: tool_name.to_string(),
+                    sender: tx,
+                },
+            );
+        let _ = self.events.send(BackendEvent::Session {
+            key: self.key.clone(),
+            event: SessionEvent::Permission(PermissionPrompt {
+                request_id: request_id.to_string(),
+                tool_name: tool_name.to_string(),
+                reason,
+                risk: risk.to_string(),
+                options: {
+                    let mut options = vec![PromptOption {
+                        option_id: "allow_once".to_string(),
+                        label: "允许一次".to_string(),
+                        kind: "allow_once".to_string(),
+                    }];
+                    if rememberable {
+                        options.push(PromptOption {
+                            option_id: "allow_always".to_string(),
+                            label: "始终允许".to_string(),
+                            kind: "allow_always".to_string(),
+                        });
+                    }
+                    options.push(PromptOption {
+                        option_id: "deny".to_string(),
+                        label: "拒绝".to_string(),
+                        kind: "deny".to_string(),
+                    });
+                    options
+                },
+                member: self.member.clone(),
+            }),
+        });
+        tokio::select! {
+            answer = rx => {
+                self.pending
+                    .lock()
+                    .expect("approval pending poisoned")
+                    .remove(request_id);
                 let _ = self.events.send(BackendEvent::Session {
                     key: self.key.clone(),
-                    event: SessionEvent::Permission(PermissionPrompt {
-                        request_id: request_id.clone(),
-                        tool_name: tool_name.clone(),
-                        reason: summarize_args(&args),
-                        risk: risk.to_string(),
-                        options: {
-                            let mut options = vec![PromptOption {
-                                option_id: "allow_once".to_string(),
-                                label: "允许一次".to_string(),
-                                kind: "allow_once".to_string(),
-                            }];
-                            if rememberable {
-                                options.push(PromptOption {
-                                    option_id: "allow_always".to_string(),
-                                    label: "始终允许".to_string(),
-                                    kind: "allow_always".to_string(),
-                                });
-                            }
-                            options.push(PromptOption {
-                                option_id: "deny".to_string(),
-                                label: "拒绝".to_string(),
-                                kind: "deny".to_string(),
-                            });
-                            options
-                        },
-                        member: self.member.clone(),
-                    }),
+                    event: SessionEvent::PermissionResolved {
+                        request_id: request_id.to_string(),
+                    },
                 });
-                tokio::select! {
-                    answer = rx => {
-                        self.pending
-                            .lock()
-                            .expect("approval pending poisoned")
-                            .remove(&request_id);
-                        let _ = self.events.send(BackendEvent::Session {
-                            key: self.key.clone(),
-                            event: SessionEvent::PermissionResolved {
-                                request_id: request_id.clone(),
-                            },
-                        });
-                        if answer.unwrap_or(false) {
-                            None
-                        } else {
-                            Some(blocked("用户拒绝"))
-                        }
-                    }
-                    _ = signal.cancelled() => {
-                        self.pending
-                            .lock()
-                            .expect("approval pending poisoned")
-                            .remove(&request_id);
-                        Some(blocked("已取消"))
-                    }
+                if answer.unwrap_or(false) {
+                    None
+                } else {
+                    Some(blocked("用户拒绝"))
                 }
+            }
+            _ = signal.cancelled() => {
+                self.pending
+                    .lock()
+                    .expect("approval pending poisoned")
+                    .remove(request_id);
+                Some(blocked("已取消"))
             }
         }
     }
@@ -874,6 +953,8 @@ pub struct OpenOptions {
     pub allowlist: Vec<String>,
     /// 「始终允许」的白名单落盘目标（Bot id；IM/自动化会话可为空）。
     pub bot_id: Option<String>,
+    /// Bot 名字（写进会话 header 的 `metadata.botName`，用量分组显示用）。
+    pub bot_name: Option<String>,
     /// 额外工具（MCP / 浏览器 / 电脑控制等宿主能力）。
     pub extra_tools: Vec<HarnessTool>,
     /// 隐私 Bot id：非空时会话落到 `.private/<id>/`，全局搜索会跳过。
@@ -886,6 +967,8 @@ pub struct RpiSession {
     pub path: String,
     pub gate: Arc<ApprovalGate>,
     pub questions: Arc<QuestionGate>,
+    /// 压缩进度订阅（`HarnessEvent::CompactionProgress`）；随会话 drop 停止。
+    _compaction_watch: rpi_harness::events::WatchHandle<()>,
 }
 
 impl RpiSession {
@@ -937,12 +1020,28 @@ impl RpiSession {
                 (storage, path.to_string())
             }
             None => {
+                // 会话 header 带 botId/botName（W9）：用量按 Bot 分组要用。
+                // 老会话没有这个键 → UI 归「未归属」，不需要重写老文件。
+                let metadata = options.bot_id.as_ref().map(|bot_id| {
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "botId".to_string(),
+                        serde_json::Value::String(bot_id.clone()),
+                    );
+                    if let Some(name) = options.bot_name.as_ref() {
+                        map.insert(
+                            "botName".to_string(),
+                            serde_json::Value::String(name.clone()),
+                        );
+                    }
+                    map
+                });
                 let storage = repo
                     .create_typed(&JsonlSessionCreateOptions {
                         id: None,
                         parent_session_id: None,
                         cwd: workspace.to_string_lossy().into_owned(),
-                        metadata: None,
+                        metadata,
                     })
                     .await
                     .map_err(|error| format!("会话创建失败：{error}"))?;
@@ -995,9 +1094,33 @@ impl RpiSession {
         harness_options.tool_execution = rpi_harness::types::HarnessToolExecution::Sequential;
 
         let tool_count = harness_options.active_tool_names.len();
+        let key_for_events = options.key.clone();
+        let member_for_events = options.member.clone();
         let harness = AgentHarness::create(harness_options)
             .await
             .map_err(|error| format!("Agent 会话初始化失败：{error}"))?;
+        // 压缩进度 → UI 状态行（W4）。`CompactionProgressEvent` 没有实现
+        // `HarnessEventOf`（pi-rust rev 29d8686），所以走 watch 拿原始事件再按标签过滤。
+        let mut compaction_watch = harness.events().watch(|| ());
+        {
+            let events = options.events.clone();
+            let key = key_for_events;
+            let member = member_for_events;
+            compaction_watch.start(Arc::new(move |event: &rpi_harness::events::HarnessEvent| {
+                if let rpi_harness::events::HarnessEvent::CompactionProgress(progress) = event
+                    && progress.lane == "main"
+                {
+                    let _ = events.send(BackendEvent::Session {
+                        key: key.clone(),
+                        event: SessionEvent::Compaction {
+                            active: progress.active,
+                            manual: progress.manual,
+                        },
+                    });
+                    let _ = &member;
+                }
+            }));
+        }
         if debug {
             eprintln!(
                 "[rpi] harness ok id={} tools={tool_count}",
@@ -1011,7 +1134,24 @@ impl RpiSession {
             path,
             gate,
             questions,
+            _compaction_watch: compaction_watch,
         })
+    }
+
+    /// 手动压缩上下文（命令面板「立即压缩」）。返回可直接展示的中文文案。
+    pub async fn compact(&self) -> String {
+        use rpi_harness::agent_harness::CompactionOutcome;
+        match self.lane.compact(None).await {
+            Ok(result) => match result.outcome {
+                CompactionOutcome::Completed { .. } => "✅ 上下文已压缩".to_string(),
+                CompactionOutcome::Declined { .. } => "未压缩：上下文还很短".to_string(),
+                CompactionOutcome::Aborted { .. } => "未压缩：已中止".to_string(),
+                CompactionOutcome::Failed { error, .. } => {
+                    format!("压缩失败：{}", error.message)
+                }
+            },
+            Err(error) => format!("压缩失败：{error}"),
+        }
     }
 
     pub async fn send(&self, text: String, images: Vec<ImageContent>) {
@@ -1475,6 +1615,10 @@ fn collect_search(
 }
 
 /// 最近 `days` 天（含今天）的用量分日聚合：`(day, input, output, cacheRead)`。
+///
+/// 用量页现在走 [`usage_grouped`]（一次扫描出按天/按 Bot/按模型三张表），
+/// 这个入口保留给旧调用方/测试，标 `dead_code` 不算债。
+#[allow(dead_code)]
 pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
     let mut buckets: std::collections::HashMap<String, (i64, i64, i64)> =
         std::collections::HashMap::new();
@@ -1491,6 +1635,217 @@ pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
         .collect()
 }
 
+/// 一次扫描产出的分组用量（W9 / 契约 §2.8）。
+///
+/// UI 侧（`settings_page_usage`）本期由前端接线，所以对未接线项放开 `dead_code`。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct GroupedUsage {
+    pub total: crate::session_db::UsageSummary,
+    /// `(day, input, output, cacheRead)`
+    pub by_day: Vec<(String, i64, i64, i64)>,
+    /// `(botName, turns, input, output)`；老会话没有 `metadata.botId` → 「未归属」。
+    pub by_bot: Vec<(String, i64, i64, i64)>,
+    /// `(provider, model, turns, input, output)`
+    pub by_model: Vec<(String, String, i64, i64, i64)>,
+    /// 扫描范围内的会话数（UI 用来判断"有没有数据"）。
+    pub sessions: usize,
+}
+
+/// 按天 / 按 Bot / 按模型一次性聚合最近 `days` 天的用量。
+///
+/// 只扫一遍盘：每个 JSONL 文件读 header（拿 `metadata.botId/botName`）+
+/// 逐条 assistant usage。会话所属 Bot 优先用 header，缺失时按 `cwd` 反查名册目录
+/// （老会话没有 botId，这条兜底能让大部分历史会话归到正确的 Bot 上）。
+#[allow(dead_code)]
+pub fn usage_grouped(days: usize) -> GroupedUsage {
+    let now = crate::time::now_ms();
+    let days = days.max(1);
+    let since = now.saturating_sub((days as u64).saturating_sub(1) * 86_400_000);
+    let cutoff_day = crate::time::format_day(since);
+    let roster = crate::data::Roster::load();
+    let mut out = GroupedUsage::default();
+    let mut by_day: std::collections::BTreeMap<String, (i64, i64, i64)> =
+        std::collections::BTreeMap::new();
+    let mut by_bot: std::collections::HashMap<String, (i64, i64, i64)> =
+        std::collections::HashMap::new();
+    let mut by_model: std::collections::HashMap<(String, String), (i64, i64, i64)> =
+        std::collections::HashMap::new();
+    collect_grouped(
+        &sessions_root(),
+        &cutoff_day,
+        &roster,
+        &mut out,
+        &mut by_day,
+        &mut by_bot,
+        &mut by_model,
+    );
+    out.by_day = by_day
+        .into_iter()
+        .map(|(day, (input, output, cache))| (day, input, output, cache))
+        .collect();
+    out.by_bot = {
+        let mut rows: Vec<(String, i64, i64, i64)> = by_bot
+            .into_iter()
+            .map(|(name, (turns, input, output))| (name, turns, input, output))
+            .collect();
+        rows.sort_by(|left, right| right.3.cmp(&left.3).then_with(|| left.0.cmp(&right.0)));
+        rows
+    };
+    out.by_model = {
+        let mut rows: Vec<(String, String, i64, i64, i64)> = by_model
+            .into_iter()
+            .map(|((provider, model), (turns, input, output))| {
+                (provider, model, turns, input, output)
+            })
+            .collect();
+        rows.sort_by(|left, right| right.4.cmp(&left.4).then_with(|| left.1.cmp(&right.1)));
+        rows
+    };
+    out
+}
+
+#[allow(dead_code)]
+fn collect_grouped(
+    dir: &std::path::Path,
+    cutoff_day: &str,
+    roster: &crate::data::Roster,
+    out: &mut GroupedUsage,
+    by_day: &mut std::collections::BTreeMap<String, (i64, i64, i64)>,
+    by_bot: &mut std::collections::HashMap<String, (i64, i64, i64)>,
+    by_model: &mut std::collections::HashMap<(String, String), (i64, i64, i64)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_grouped(&path, cutoff_day, roster, out, by_day, by_bot, by_model);
+            continue;
+        }
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        if !name.ends_with(".jsonl") || name.ends_with(".progress.jsonl") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut bot_label: Option<String> = None;
+        let mut cwd = String::new();
+        let mut touched = false;
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            match value.get("kind").and_then(|item| item.as_str()) {
+                Some("header") => {
+                    cwd = value
+                        .get("cwd")
+                        .and_then(|item| item.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    bot_label = value
+                        .get("metadata")
+                        .and_then(|metadata| {
+                            metadata
+                                .get("botName")
+                                .and_then(|item| item.as_str())
+                                .or_else(|| {
+                                    metadata.get("botId").and_then(|item| item.as_str())
+                                })
+                        })
+                        .map(str::to_string);
+                    continue;
+                }
+                Some("entry") => {}
+                _ => continue,
+            }
+            let Some(message) = value.get("message") else {
+                continue;
+            };
+            if message.get("kind").and_then(|item| item.as_str()) != Some("assistant") {
+                continue;
+            }
+            let Some(usage) = message.get("usage") else {
+                continue;
+            };
+            let at = value
+                .get("timestamp")
+                .and_then(|item| item.as_u64())
+                .or_else(|| message.get("timestamp").and_then(|item| item.as_u64()))
+                .unwrap_or(0);
+            if at == 0 {
+                continue;
+            }
+            let day = crate::time::format_day(at);
+            if day.as_str() < cutoff_day {
+                continue;
+            }
+            touched = true;
+            let input = usage.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
+            let output = usage.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
+            let cache = usage
+                .get("cacheRead")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let total = usage
+                .get("totalTokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(input + output);
+            out.total.turns += 1;
+            out.total.input_tokens += input;
+            out.total.output_tokens += output;
+            out.total.total_tokens += total;
+            let slot = by_day.entry(day).or_insert((0, 0, 0));
+            slot.0 += input;
+            slot.1 += output;
+            slot.2 += cache;
+            let bot_key = bot_label
+                .clone()
+                .or_else(|| bot_name_from_cwd(&cwd, roster))
+                .unwrap_or_else(|| "未归属".to_string());
+            let bot_slot = by_bot.entry(bot_key).or_insert((0, 0, 0));
+            bot_slot.0 += 1;
+            bot_slot.1 += input;
+            bot_slot.2 += output;
+            let provider = message
+                .get("provider")
+                .and_then(|item| item.as_str())
+                .unwrap_or("未知")
+                .to_string();
+            let model = message
+                .get("model")
+                .and_then(|item| item.as_str())
+                .unwrap_or("未知")
+                .to_string();
+            let model_slot = by_model.entry((provider, model)).or_insert((0, 0, 0));
+            model_slot.0 += 1;
+            model_slot.1 += input;
+            model_slot.2 += output;
+        }
+        if touched {
+            out.sessions += 1;
+        }
+    }
+}
+
+/// 老会话没有 `metadata.botId`：按 header 的 `cwd` 反查名册目录做 best-effort 归属。
+#[allow(dead_code)]
+fn bot_name_from_cwd(cwd: &str, roster: &crate::data::Roster) -> Option<String> {
+    let cwd = cwd.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+    roster
+        .bots
+        .iter()
+        .chain(roster.hidden_bots.iter())
+        .find(|bot| !bot.directory.trim().is_empty() && bot.directory.eq_ignore_ascii_case(cwd))
+        .map(|bot| bot.name.clone())
+}
+
+#[allow(dead_code)]
 fn collect_daily(
     dir: &std::path::Path,
     buckets: &mut std::collections::HashMap<String, (i64, i64, i64)>,
@@ -1561,6 +1916,10 @@ pub fn session_usage(path: &str) -> Option<crate::session_db::UsageSummary> {
 }
 
 /// 全库累计：扫本机所有 JSONL 会话（进度文件不含用量，跳过）。
+///
+/// 用量页已改用 `usage_grouped(days).total`（同一份快照跟范围走），
+/// 这个全库入口暂时没有调用方；保留给旧调用方/测试，标 `dead_code` 不算债。
+#[allow(dead_code)]
 pub fn usage_totals() -> Option<crate::session_db::UsageSummary> {
     let mut summary = crate::session_db::UsageSummary::default();
     collect_usage(&sessions_root(), &mut summary);
@@ -1597,6 +1956,7 @@ fn accumulate_usage(text: &str, summary: &mut crate::session_db::UsageSummary) {
     }
 }
 
+#[allow(dead_code)]
 fn collect_usage(dir: &std::path::Path, summary: &mut crate::session_db::UsageSummary) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
