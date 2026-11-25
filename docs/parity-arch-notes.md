@@ -41,7 +41,7 @@
 ### 1.2 上下文压缩（compaction）— 半成品（隐式已有，UI 无感知）
 - rpi 侧默认开启：`rpi-harness/src/types.rs:325`（`DEFAULT_COMPACTION_SETTINGS { enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000 }`）
 - MC 没有覆盖该配置：`src/rpi_engine.rs:1137`（`AgentHarnessOptions::default()`）到 `:1158` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
-- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:20125`，与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
+- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:21779`（`compact_tokens`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
 - 也没有 `/compact` 手动触发入口
 - 分类：**补实现**。接一个事件 + 一个命令项即可，1～2 小时。
 
@@ -88,7 +88,7 @@
 
 ### 2.4 Bot 私有记忆面板 — 半成品（缺页面）
 - DS：`ds-bot/src/client/memory-panel.js:325`（`MemoryDialog`，文件 449 行）
-- MC：只有团队记忆页 `src/main.rs:14761`（`settings_page_team_memory`）和群记忆区 `src/main.rs:14536`
+- MC：只有团队记忆页 `src/main.rs:14761`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16167`（`group_memory_section`）
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
@@ -302,7 +302,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 托盘 / 自启 / 自动更新 | 已有：`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs`(215) | 已有 | — |
 | 头像 / Bot 图标 | 已有：`src/avatar.rs`(262)、`bot_icon.rs`(120)、`agent_icons.rs`(70)、`brand_icons.rs`(307) | `client/avatar-library.js`(149)、`agent-logos.js`(52) | 已有 | — |
 | 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1030`（`FindState`）+ `:2859`（`find_dialog`）、隐私过滤 `:6527`、`src/rpi_engine.rs:1536`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
-| 旁路会话（side chat） | 已有：`src/main.rs:7005`（`PaletteCmd::SideChat` → `:7231` `open_side`） | `ds-bot/src/client/side-chat.js`(155)、`host/side.js`(377) | 已有 | — |
+| 旁路会话（side chat） | 已有：`src/main.rs:7411`（`PaletteCmd::SideChat` 定义 → `:7567` 派发 / `:7802` `open_side`） | `ds-bot/src/client/side-chat.js`(155)、`host/side.js`(377) | 已有 | — |
 | 队列可视化 | 有上限 5 条但无独立 UI：`src/main.rs:4730` | `ds-bot/src/client/queue-dock.js:99`（`QueueDock`） | 半成品 | 补实现 |
 
 ---
