@@ -84,7 +84,7 @@ Select-String -Path src\theme.rs -Pattern 'fn shadow_2|fn shadow_3|fn shadow_4|f
 
 **① A12「主卡位」：判定从 ✅ 降为 🟡，矩阵汇总 89/20/27 → 88/21/27。**
 
-实测依据：`main_bot_card`（`:19086`）只被 `sidebar@19012` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`:21754`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
+实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`:19120`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
 
 所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `:26251`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
 
@@ -179,7 +179,7 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 - 浅色主题：同上。
 - 群聊会话不出现欢迎区（微信壳无「当前 Bot」语义）。
 
-**本条属 D3，不属于 D-CUT 的验收**。classic `transcript` 删除后，「0 条消息且 `ready=true`」这条分支在微信壳里返回裸 `div()`（删除前位于 `src/main.rs:24727`，微信壳自身代码，与 classic 无关），屏幕上就是一片空白。**D-CUT 提交时这块空白是预期状态，按空白判阶段 2 失败是误判；D3 做完仍空白才算失败。** 两个阶段的判据分开：
+**本条属 D3，不属于 D-CUT 的验收**。classic `transcript` 删除后，「0 条消息且 `ready=true`」这条分支在微信壳里返回裸 `div()`（删除前位于 `src/main.rs:21589`，微信壳自身代码，与 classic 无关），屏幕上就是一片空白。**D-CUT 提交时这块空白是预期状态，按空白判阶段 2 失败是误判；D3 做完仍空白才算失败。** 两个阶段的判据分开：
 
 | 阶段 | 判据 | 空会话截图 |
 | --- | --- | --- |

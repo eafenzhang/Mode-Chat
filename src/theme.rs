@@ -139,13 +139,6 @@ pub fn set_light_runtime(light: bool) {
     LIGHT.store(light, Ordering::Relaxed);
 }
 
-/// 切换主题（同时落盘，下次启动沿用）。返回切换后的模式。
-pub fn set_light(light: bool) -> bool {
-    LIGHT.store(light, Ordering::Relaxed);
-    persist(light);
-    light
-}
-
 /// 启动时读偏好（文件缺失/损坏按深色）。
 ///
 /// 偏好统一存 `prefs.json`（`{"theme":"light"}`，以后加字段直接加键、不清旧值）；
@@ -224,9 +217,6 @@ pub fn inset() -> Rgba {
 pub fn control() -> Rgba {
     pick(DARK_CONTROL, LIGHT_CONTROL)
 }
-pub fn hairline() -> Rgba {
-    pick(DARK_HAIRLINE, LIGHT_HAIRLINE)
-}
 /// 输入卡底：原版 `panel 80% + blur` 的实色近似（D1）。
 pub fn composer_card() -> Rgba {
     mix(panel(), app(), 0.2)
@@ -255,16 +245,6 @@ pub fn edge() -> Rgba {
         if is_light() { 0.06 } else { 0.08 },
     )
 }
-/// 输入卡聚焦/悬停描边（DS `[data-composer-card]:focus-within`：ink 30%）。
-pub fn ink_line() -> Rgba {
-    let ink = ink();
-    rgba_a(
-        (ink.r * 255.0) as u8,
-        (ink.g * 255.0) as u8,
-        (ink.b * 255.0) as u8,
-        0.30,
-    )
-}
 /// 悬停底色（原版 `--bot-hover`）。
 pub fn hover() -> Rgba {
     if is_light() {
@@ -287,11 +267,6 @@ fn ink_alpha(alpha: f32) -> Rgba {
 /// 圆形小按钮的静态底色（原版 composer 的 ink 5%）。
 pub fn subtle() -> Rgba {
     ink_alpha(0.05)
-}
-
-/// 圆形小按钮悬停底色（原版 ink 10%）。
-pub fn subtle_hover() -> Rgba {
-    ink_alpha(0.10)
 }
 
 /// 占位文字（原版 `ink 36%`）。
@@ -335,9 +310,6 @@ pub fn set_accent(value: Option<Rgba>) {
 
 pub fn accent() -> Rgba {
     accent_override().unwrap_or_else(|| pick(DARK_ACCENT, LIGHT_ACCENT))
-}
-pub fn accent_border() -> Rgba {
-    accent_override().unwrap_or_else(|| pick(DARK_ACCENT_BORDER, LIGHT_ACCENT_BORDER))
 }
 pub fn accent_text() -> Rgba {
     if let Some(accent) = accent_override() {
@@ -402,20 +374,11 @@ pub fn danger_soft() -> Rgba {
 pub fn warning() -> Rgba {
     pick(DARK_WARNING, LIGHT_WARNING)
 }
-pub fn chief() -> Rgba {
-    pick(DARK_CHIEF, LIGHT_CHIEF)
-}
 
 // ---- 代码高亮 ----
 // ---- 气泡 ----
-pub fn bubble_user() -> Rgba {
-    pick(DARK_BUBBLE_USER, LIGHT_BUBBLE_USER)
-}
 pub fn bubble_user_ink() -> Rgba {
     pick(DARK_BUBBLE_USER_INK, LIGHT_BUBBLE_USER_INK)
-}
-pub fn bubble_assistant() -> Rgba {
-    pick(DARK_BUBBLE_ASSISTANT, LIGHT_BUBBLE_ASSISTANT)
 }
 /// 骨架占位块底色（加载态专用）。
 pub fn skeleton() -> Rgba {
@@ -438,11 +401,6 @@ pub fn member_color_index(id: &str) -> usize {
     (low % 12) as usize
 }
 
-pub fn member_color(id: &str) -> Rgba {
-    let index = member_color_index(id);
-    pick(MEMBER_DARK[index], MEMBER_LIGHT[index])
-}
-
 // ---- 阴影 ----
 fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: Rgba) -> BoxShadow {
     BoxShadow::new(px(x), px(y), Hsla::from(color))
@@ -461,14 +419,6 @@ fn shadow_color(alpha: f32) -> Rgba {
         (base.b * 255.0) as u8,
         alpha,
     )
-}
-
-/// 1 档：浮起（顶部胶囊、输入卡）。
-pub fn shadow_1() -> Vec<BoxShadow> {
-    vec![
-        shadow(0., 2., 8., -1., shadow_color(if is_light() { 0.08 } else { 0.06 })),
-        shadow(0., 1., 2., 0., shadow_color(if is_light() { 0.05 } else { 0.04 })),
-    ]
 }
 
 /// 2 档：弹出（备用，当前无消费方）。
@@ -547,9 +497,6 @@ pub const RADIUS_CARD: f32 = 14.0;
 pub const RADIUS_DIALOG: f32 = 16.0;
 /// 气泡（DS：18）。
 pub const RADIUS_BUBBLE: f32 = 18.0;
-/// 输入卡（DS：22；多行/带附件 18）。
-pub const RADIUS_COMPOSER: f32 = 22.0;
-pub const RADIUS_COMPOSER_MULTI: f32 = 18.0;
 /// 分段控件里的项（DS：8；保留旧名）。
 pub const RADIUS_SEGMENT: f32 = 8.0;
 
@@ -633,7 +580,6 @@ mod tests {
 
     #[test]
     fn shadow_ladders_have_expected_stops() {
-        assert_eq!(shadow_1().len(), 2);
         assert_eq!(shadow_2().len(), 2);
         assert_eq!(shadow_3().len(), 1);
         assert_eq!(shadow_4().len(), 1);

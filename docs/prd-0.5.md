@@ -59,7 +59,7 @@ v0.5.0 的目标不是“再抄一个 DS Bot”，而是**把已承诺的能力�
 | 编号 | 需求 | 矩阵项 | 负责人 |
 | --- | --- | --- | --- |
 | P1-1 | Bot 指令（instructions）编辑入口 + 生效 | A05 | 前端 + 架构 |
-| P1-2 | 换工作目录后在新目录续会话（群目录已生效于新成员，见 `src/main.rs:4267`） | A06 | 架构 |
+| P1-2 | 换工作目录后在新目录续会话（群目录已生效于新成员，见 `src/main.rs:4243`） | A06 | 架构 |
 | P1-3 | 群公告 notice + “+ → 引用某段对话” | C11/C12 | 架构 + 前端 |
 | P1-4 | 群目标阶段 `acceptance` + pass/rework 打回（带 `goal.json` 迁移） | C08 + 架构注 3.2 | 架构 |
 | P1-5 | 浏览器每 Bot 独立 profile（重启保留）+ Cookie 导入 | G02/G03 + 架构注 4(浏览器单例) | 架构 |
@@ -104,11 +104,11 @@ v0.5.0 的目标不是“再抄一个 DS Bot”，而是**把已承诺的能力�
 ### P0-2 上下文可见与可配
 
 > **状态更正（2026-11-25，据测试 0.5.1 补测实测）**：
-> 压缩本身、`chat.compacting` 状态、`compaction_status_row()`（`src/main.rs:24722`）与命令面板里的「立即压缩」都已实现，但**v0.5.0 只接进了 classic 外壳**。默认外壳是 `wecom_mode`（`src/main.rs:3830`，取 `BOT_PILOT_CLASSIC_UI != "1"`），走 `wecom_transcript()`（`src/main.rs:27740`）和 `wecom_composer()`（`:28599` 起），v0.5.0 时这两处都没有接线：
+> 压缩本身、`chat.compacting` 状态、`compaction_status_row()`（`src/main.rs:21584`）与命令面板里的「立即压缩」都已实现，但**v0.5.0 只接进了 classic 外壳**。默认外壳是 `wecom_mode`（`src/main.rs:3806`，取 `BOT_PILOT_CLASSIC_UI != "1"`），走 `wecom_transcript()`（`src/main.rs:24495`）和 `wecom_composer()`（`:25354` 起），v0.5.0 时这两处都没有接线：
 > - 压缩状态行：v0.5.0 全文只有 main.rs 的 19411 / 19694 两处调用（v0.5.0 tag 版本行号，非当前 HEAD；当前 HEAD 对应 `:19403` / `:19686`），均在 classic transcript 内；`wecom_transcript` 区间内 0 命中。
 > - 命令面板入口：`composer-plus`（v0.5.0 为 main.rs 的 20343，v0.5.0 tag 行号，非当前 HEAD）只在 classic composer；`wecom_composer` 的工具栏 id 仅 `wechat-tool-permission/folder/scissors/mic` + `wechat-send`，无 plus。
 >
-> 所以 P0-2 的 AC1/AC2 在 **v0.5.0 默认外壳下不成立**；**v0.5.1 已由 Q-01/Q-02 修复**：默认壳压缩行 `src/main.rs:22261`（`WecomRow::Compacting`）、`composer-plus` `:28692` + `on_palette_shortcut` `:28699`/`:28710`。AC 仍按「默认外壳 + classic」双份判据保留，供复验。
+> 所以 P0-2 的 AC1/AC2 在 **v0.5.0 默认外壳下不成立**；**v0.5.1 已由 Q-01/Q-02 修复**：默认壳压缩行 `src/main.rs:19517`（`WecomRow::Compacting`）、`composer-plus` `:25447` + `on_palette_shortcut` `:25454`/`:25465`。AC 仍按「默认外壳 + classic」双份判据保留，供复验。
 
 - **AC1（默认外壳）**：默认形态下构造一次越过阈值的回合，聊天区出现压缩状态行（`id="chat-compaction-status"`），压缩结束后消失；全程至少一帧可见。
 - **AC1b（classic 外壳）**：`BOT_PILOT_CLASSIC_UI=1` 下同一场景表现一致——两个外壳都必须有，不允许只有一边。

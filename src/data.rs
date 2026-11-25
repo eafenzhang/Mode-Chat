@@ -31,7 +31,7 @@ pub struct Bot {
     pub id: String,
     pub name: String,
     pub role: String,
-    pub description: String,
+    #[allow(dead_code)] pub description: String,
     pub directory: String,
     pub is_chief: bool,
     pub is_main: bool,
@@ -39,7 +39,7 @@ pub struct Bot {
     pub is_private: bool,
     pub pinned: bool,
     pub model: Option<ModelSpec>,
-    pub last_session_id: Option<String>,
+    #[allow(dead_code)] pub last_session_id: Option<String>,
     /// AGENTS.md 受管块 + persona.json 是否开启（编辑对话框切换）。
     pub identity_sync: bool,
     /// 审批策略（bot-team 矩阵的输入；非法/缺省落回 ask）。
@@ -81,7 +81,7 @@ pub struct Roster {
     /// archived=true 的群聊：同样不在侧栏，设置面板可恢复。
     pub archived_groups: Vec<Group>,
     pub data_root: PathBuf,
-    pub error: Option<String>,
+    #[allow(dead_code)] pub error: Option<String>,
 }
 
 /// 隐私 Bot 与 Chief 互斥：私有 Bot 不能进群、不能当管理员（与 `bot_team` 口径一致）。

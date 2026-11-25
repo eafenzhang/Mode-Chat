@@ -7,11 +7,8 @@
 //! `svg().data()` 渲染管线。
 
 use gpui::{
-    div, hsla, linear_color_stop, linear_gradient, px, svg, AnyElement, BoxShadow, Hsla,
-    IntoElement, ParentElement, Rgba, Styled,
+    div, px, svg, AnyElement, IntoElement, ParentElement, Rgba, Styled,
 };
-
-use crate::theme;
 
 /// 头像色相哈希：照原版 `avatarHash`（`hash = hash*31 + charCode`，取绝对值）。
 /// 用 UTF-16 码元与 JS 的 `charCodeAt` 对齐。
@@ -32,48 +29,6 @@ pub fn avatar_hue(id: &str) -> f32 {
 #[cfg(test)]
 pub fn avatar_variant(id: &str) -> usize {
     (avatar_hash(id) % 4) as usize
-}
-
-fn deg(h: f32, s: f32, l: f32, a: f32) -> Hsla {
-    hsla(h / 360.0, s, l, a)
-}
-
-/// 头像外壳：色相渐变 + 内描边 + 外阴影。
-fn shell(hue: f32, width: f32, height: f32, radius: f32) -> gpui::Div {
-    let light = theme::is_light();
-    let (top, bottom) = if light {
-        (deg(hue, 0.72, 0.96, 1.), deg(hue, 0.62, 0.91, 1.))
-    } else {
-        (deg(hue, 0.44, 0.34, 1.), deg(hue, 0.48, 0.24, 1.))
-    };
-    let ring = if light {
-        deg(hue, 0.55, 0.82, 1.)
-    } else {
-        deg(hue, 0.55, 0.70, 0.24)
-    };
-    let outer = if light {
-        deg(hue, 0.30, 0.40, 0.10)
-    } else {
-        hsla(0., 0., 0., 0.24)
-    };
-    let inset = BoxShadow::new(px(0.), px(0.), ring)
-        .spread_radius(px(1.))
-        .inset();
-    let drop = BoxShadow::new(px(0.), px(1.), outer).blur_radius(px(2.));
-    div()
-        .w(px(width))
-        .h(px(height))
-        .flex_shrink_0()
-        .rounded(px(radius))
-        .bg(linear_gradient(
-            145.0,
-            linear_color_stop(top, 0.0),
-            linear_color_stop(bottom, 1.0),
-        ))
-        .shadow(vec![inset, drop])
-        .flex()
-        .items_center()
-        .justify_center()
 }
 
 /// 自定义图标头像：近黑圆角底 + 染色面罩机器人（与 App 图标同族）。
@@ -193,25 +148,6 @@ pub fn bot_icon_tile_rect(
         .into_any_element()
 }
 
-/// Bot 头像：有自定义表情/颜色时用图标卡，否则沿用 id 色相头像。
-pub fn bot_avatar(id: &str, size: f32) -> AnyElement {
-    if let Some(appearance) = crate::bot_icon::get(id) {
-        return bot_icon_tile(
-            &appearance.icon,
-            &appearance.color,
-            size,
-            (size * 0.24).max(4.),
-        );
-    }
-    // 没有自定义外观的旧 Bot 也统一用新应用图标（默认绿底）。
-    bot_icon_tile(
-        crate::bot_icon::DEFAULT_ICON,
-        crate::bot_icon::DEFAULT_COLOR,
-        size,
-        (size * 0.24).max(4.),
-    )
-}
-
 /// 本机用户头像：与 App 图标同构的矢量版，任意尺寸都清晰。
 pub fn app_avatar(size: f32, radius: f32) -> AnyElement {
     app_icon(size, radius)
@@ -235,33 +171,6 @@ pub fn bot_avatar_rect(id: &str, width: f32, height: f32, radius: f32) -> AnyEle
         height,
         radius,
     )
-}
-
-/// 群聊头像（同一套色相，前景 `#`）。
-pub fn channel_avatar(id: &str, size: f32) -> impl IntoElement {
-    let hue = avatar_hue(id);
-    let fg = if theme::is_light() {
-        deg(hue, 0.52, 0.30, 1.)
-    } else {
-        deg(hue, 0.65, 0.88, 1.)
-    };
-    shell(hue, size, size, size / 2.0).child(
-        svg()
-            .data(include_bytes!("../assets/icons/hash.svg"))
-            .size(px((size * 0.48).max(10.0)))
-            .text_color(fg),
-    )
-}
-
-/// 未读圆点（8px，原版 `--bot-accent`；`ring` 用外扩 1.5px 的阴影模拟）。
-pub fn unread_dot(size: f32) -> impl IntoElement {
-    let ring = BoxShadow::new(px(0.), px(0.), Hsla::from(theme::panel())).spread_radius(px(1.5));
-    div()
-        .size(px(size))
-        .flex_shrink_0()
-        .rounded_full()
-        .bg(theme::accent())
-        .shadow(vec![ring])
 }
 
 #[cfg(test)]

@@ -135,13 +135,13 @@ src/connectors.rs:38|pub fn missing_secrets(spec: &ConnectorSpec, configured: &[
 src/cua_tree.rs:272|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/cua_tree.rs:320|
 src/data.rs:114|pub fn create_bot(
-src/data.rs:1165|pub fn set_provider_api_key(provider_id: &str, api_key: &str) -> Result<(), Stri
-src/data.rs:1249|pub fn set_provider_base_url(provider_id: &str, base_url: &str) -> Result<(), St
-src/data.rs:1356|pub fn add_model(provider_id: &str, model_id: &str) -> Result<(), String> {
+src/data.rs:1168|.map_err(|error| format!("provider_config.json 读取失败（{error}）"))?;
+src/data.rs:1252|return Err("API 地址必须以 http:// 或 https:// 开头".to_string());
+src/data.rs:1359|write_provider_value(&value)
 src/data.rs:1363|pub fn remove_model(provider_id: &str, model_id: &str) -> Result<(), String> {
-src/data.rs:1545|pub fn provider_templates() -> Vec<ProviderTemplate> {
+src/data.rs:1548|.and_then(|path| std::fs::read(&path).ok())
 src/data.rs:160|instructions: String::new()
-src/data.rs:1611|pub fn add_provider_from_template(
+src/data.rs:1614|provider_name: &str
 src/data.rs:17|pub struct ModelSpec {
 src/data.rs:175|demote_other_chiefs(&mut file, &new_id);
 src/data.rs:1824|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
@@ -167,7 +167,7 @@ src/data.rs:6|//! - 否则 `{home}/.mode-bot/.mode`（产品默认）。
 src/data.rs:602|pub fn undo_bot_memory(bot_id: &str) -> Result<String, String> {
 src/data.rs:608|pub fn bot_memory_context(bot_id: &str, budget: usize) -> String {
 src/data.rs:62|pub directory: Option<String>
-src/data.rs:646|pub fn update_bot(
+src/data.rs:649|role: &str
 src/data.rs:682|demote_other_chiefs(&mut file, id);
 src/data.rs:701|pub fn delete_bot(id: &str) -> Result<(), String> {
 src/data.rs:712|if let Err(error) = crate::privacy::archive_private_bot(id, &name, &directory) {
@@ -208,150 +208,143 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10059|SettingsDetail::ConnectorSecret { connector_id } => {
-src/main.rs:10183|let once_hours = self
-src/main.rs:10200|"schedule-when-{}"
-src/main.rs:10245|SharedString::from(format!("schedule-day-{index}"))
-src/main.rs:1050|/// 立即压缩当前会话上下文（W4）。
-src/main.rs:10596|SettingsDetail::AddModel {
-src/main.rs:10671|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
-src/main.rs:1070|enum GoalStageEdit {
-src/main.rs:10972|SettingsDetail::AutomationHistory { title, runs } => {
-src/main.rs:1102|match group_goal::apply(&data::data_root(), &self.group_id, action) {
-src/main.rs:11165|SettingsDetail::Allowlist { bot_id } => {
-src/main.rs:11590|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
-src/main.rs:11688|.filter(|bot| !bot.is_private)
-src/main.rs:11794|let draft = data::GroupDraft {
-src/main.rs:11975|let scope_close = current_scope.clone();
-src/main.rs:12073|.child(settings_group(vec![
-src/main.rs:12258|let archives = crate::privacy::archived_private_bots();
-src/main.rs:12304|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12308|match crate::privacy::release_archive(&id) {
-src/main.rs:13146|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
-src/main.rs:13502|"暂未接入插件宿主；MCP 连接器见「连接器」。"
-src/main.rs:13581|let bot = self.selected_bot().cloned();
-src/main.rs:13715|fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-src/main.rs:13757|SharedString::from(format!("section-up-{}", id_up))
-src/main.rs:13809|SharedString::from(format!("section-delete-{}", id_delete))
-src/main.rs:13977|body = body.child(settings_section(i18n::t("已隐藏")));
-src/main.rs:14076|i18n::t("恢复显示")
-src/main.rs:1422|.id("goal-acceptance-save")
-src/main.rs:14376|.flex()
-src/main.rs:14560|.h(px(84.))
-src/main.rs:14868|let button_id = SharedString::from(format!("im-group-activation-{label}"));
-src/main.rs:15308|settings_row(
-src/main.rs:1607|format!("goal-stage-pass-{index}")
-src/main.rs:16077|SharedString::from(format!("usage-range-{days}"))
-src/main.rs:16081|.on_click(cx.listener(move |this, _event, _window, cx| {
-src/main.rs:16100|SharedString::from(format!("usage-group-{mode}"))
-src/main.rs:16111|body = body.child(
-src/main.rs:16133|))
-src/main.rs:1633|format!("goal-stage-rework-{index}")
-src/main.rs:16480|i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据")
-src/main.rs:16482|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
-src/main.rs:1654|format!("goal-stage-acceptance-{index}")
-src/main.rs:16710|fn group_memory_section(&self, group_id: &str, cx: &mut Context<Self>) -> gpui::
-src/main.rs:16938|fn open_delete_bot_dialog(
-src/main.rs:1698|"goal-stage-error-{index}"
-src/main.rs:16995|(i18n::t("隐藏").to_string(), false, DetailMenuAction::HideBot(bot.id.clone()))
-src/main.rs:18367|fn find_dialog_overlay(
-src/main.rs:18588|if let Err(message) = data::delete_group(group_id) {
-src/main.rs:19086|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-src/main.rs:19237|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:19403|column = column.child(compaction_status_row());
-src/main.rs:19446|.child(kit_markdown_el(
-src/main.rs:19480|Some(message_actions(
-src/main.rs:19686|column = column.child(compaction_status_row());
-src/main.rs:19729|.child(kit_markdown_el(
-src/main.rs:19755|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
-src/main.rs:19759|SharedString::from(format!("msg-p-{}", index))
-src/main.rs:19827|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
-src/main.rs:19975|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:2069|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:20975|fn bot_details(
-src/main.rs:21050|rows = rows.child(section_label(i18n::t("审批策略")));
-src/main.rs:21081|this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
-src/main.rs:2114|fn retry_or_reassign(
-src/main.rs:21144|.id("bot-details-memory-row")
-src/main.rs:21159|this.settings_detail = Some(SettingsDetail::BotMemory {
-src/main.rs:21198|// 历史会话列表：点行切换 resume 到对应会话（当前主会话不重复出现）。
-src/main.rs:21330|rows = rows.child(section_label(i18n::t("待办")));
-src/main.rs:21331|const TODO_ROWS: usize = 4;
-src/main.rs:21613|WecomRow::ToolGroup {
-src/main.rs:21754|fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
-src/main.rs:21969|fn wechat_row_el(
-src/main.rs:22004|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
-src/main.rs:22066|.child(wechat_message_actions(
-src/main.rs:22111|.child(kit_markdown_el(
-src/main.rs:22130|.child(wechat_message_actions(
-src/main.rs:22260|} => wechat_tool_group_card(key, *family, messages, *expanded, weak).into_any_el
-src/main.rs:22261|WecomRow::Compacting => compaction_status_row().into_any_element()
-src/main.rs:22397|.any(|needle| message.contains(needle))
-src/main.rs:2278|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:22930|fn wechat_message_actions(
-src/main.rs:22958|.id(SharedString::from(format!("wecom-copy-{index}")))
-src/main.rs:22968|cx.write_to_clipboard(ClipboardItem::new_string(text));
-src/main.rs:22976|if let Some(code) = fenced_code(text) {
-src/main.rs:22990|cx.write_to_clipboard(ClipboardItem::new_string(code));
-src/main.rs:23003|fn message_actions(
-src/main.rs:23359|const SETTINGS_PAGES: [&str; 17] = [
-src/main.rs:23383|enum SettingsDetail {
-src/main.rs:23434|AddModel {
-src/main.rs:23455|AutomationHistory {
-src/main.rs:2358|"task-reassign-{}"
-src/main.rs:2401|"task-reassign-{}-{}"
-src/main.rs:246|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:24722|fn compaction_status_row() -> impl IntoElement {
-src/main.rs:24724|.id("chat-compaction-status")
-src/main.rs:2477|for (id, bot_name, role) in &self.bots {
-src/main.rs:24842|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:24844|.selectable(true)
-src/main.rs:26251|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-src/main.rs:27397|rows.push(
-src/main.rs:27740|fn wechat_transcript(
-src/main.rs:2818|fn push_member_delta(&mut self, member: &str, delta: &str) {
-src/main.rs:2840|message.streaming = false;
-src/main.rs:28599|fn wechat_composer(
-src/main.rs:2866|struct BotFormState {
-src/main.rs:28692|.id("composer-plus")
-src/main.rs:28699|this.on_palette_shortcut(&PaletteShortcut, window, cx);
-src/main.rs:28710|this.on_palette_shortcut(&PaletteShortcut, window, cx);
-src/main.rs:2901|for (key, _label) in bot_icon::ICONS {
-src/main.rs:2931|for (hex, label) in bot_icon::COLORS {
-src/main.rs:3266|schedule_when: usize
-src/main.rs:3632|ToolGroup {
-src/main.rs:3830|wecom_mode: std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1")
-src/main.rs:4265|.filter(|bot| !bot.is_private)
-src/main.rs:4267|let workspace = match &group.directory {
-src/main.rs:4557|.filter(|bot| !bot.is_private)
-src/main.rs:4673|chat.compacting = Some(active);
-src/main.rs:5228|if let Some(rest) = text.strip_prefix("/side")
-src/main.rs:5320|fn queue_current(
-src/main.rs:5327|const MAX_QUEUED: usize = 5;
-src/main.rs:5366|fn flush_queue(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:5478|.filter(|bot| !bot.is_private)
-src/main.rs:5823|fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-src/main.rs:5836|fn question_card_el(
-src/main.rs:6042|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-src/main.rs:6055|fn elicitation_card_el(
-src/main.rs:6395|fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
-src/main.rs:6549|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-src/main.rs:6562|fn approval_card_el(
-src/main.rs:703|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7090|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
-src/main.rs:7122|results.extend(crate::rpi_engine::search_sessions(&query, remaining));
-src/main.rs:753|enum MsgKind {
-src/main.rs:755|Reasoning
-src/main.rs:7620|PaletteCmd::Compact => {
-src/main.rs:7830|fn open_side(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>)
-src/main.rs:7928|fn apply_side_event(
-src/main.rs:8374|.flex()
-src/main.rs:8606|.filter(|bot| !bot.is_private)
-src/main.rs:866|queued: Vec<QueuedSend>
-src/main.rs:9536|} => {
-src/main.rs:9776|SettingsDetail::BotMemory { bot_id } => {
-src/main.rs:9780|.bot_by_id(&bot_id)
-src/main.rs:9823|this.settings_detail_error = None;
+src/main.rs:10115|} => {
+src/main.rs:10187|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:1028|EditAllowlist
+src/main.rs:1048|#[derive(Clone, PartialEq, Eq)]
+src/main.rs:10491|"Run history · {title}"
+src/main.rs:10684|&& self.settings_detail_input.is_none()
+src/main.rs:1080|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
+src/main.rs:11106|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
+src/main.rs:11207|let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id
+src/main.rs:11313|member_ids
+src/main.rs:11494|.child(settings_group(vec![
+src/main.rs:11592|.child(
+src/main.rs:11774|} else {
+src/main.rs:11820|match crate::privacy::release_archive(&id) {
+src/main.rs:11824|Err(message) => this.toast(message, cx)
+src/main.rs:12350|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:12603|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
+src/main.rs:12963|.into_any_element()
+src/main.rs:13042|.as_ref()
+src/main.rs:13176|body = body.child(settings_empty(i18n::t(
+src/main.rs:13218|this.move_sidebar_section(&id_up, -1);
+src/main.rs:13270|this.delete_sidebar_section(&id_delete);
+src/main.rs:13438|let label = if bot.role.trim().is_empty() {
+src/main.rs:13537|if let Err(message) =
+src/main.rs:13837|.bg(ui_accent())
+src/main.rs:1400|div()
+src/main.rs:14021|wechat_theme::panel_divider()
+src/main.rs:14329|match im::set_group_activation(&group_root, &group_bot, activation) {
+src/main.rs:14769|.to_string()
+src/main.rs:15538|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:15542|this.usage_grouped_view = None;
+src/main.rs:15561|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:15572|.gap(px(ui::S2))
+src/main.rs:15594|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
+src/main.rs:1585|strip = strip.child(stage_action_chip(
+src/main.rs:15939|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
+src/main.rs:15941|i18n::t("电脑操控远程桌面")
+src/main.rs:1611|strip = strip.child(stage_action_chip(
+src/main.rs:16171|div()
+src/main.rs:1632|strip = strip.child(stage_action_chip(
+src/main.rs:16399|bot_id: String
+src/main.rs:16456|i18n::t("创建副本").to_string()
+src/main.rs:1676|.id(SharedString::from(format!(
+src/main.rs:17828|cx: &mut Context<Self>
+src/main.rs:18049|self.chats.remove(&group_key(group_id));
+src/main.rs:18161|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
+src/main.rs:18234|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
+src/main.rs:18382|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+src/main.rs:18691|fn approval_note(level: &str) -> &'static str {
+src/main.rs:18869|hash = hash
+src/main.rs:19010|let day = time::day_label(entry.at);
+src/main.rs:19218|fn wechat_row_el(
+src/main.rs:19253|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
+src/main.rs:19315|.child(wechat_message_actions(
+src/main.rs:19379|.child(wechat_message_actions(
+src/main.rs:19510|WecomRow::Compacting => compaction_status_row().into_any_element()
+src/main.rs:19516|text: &str
+src/main.rs:19517|members: &[(String, String)]
+src/main.rs:19653|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+src/main.rs:19949|fn wechat_message_actions(
+src/main.rs:19977|.id(SharedString::from(format!("wecom-copy-{index}")))
+src/main.rs:19987|cx.write_to_clipboard(ClipboardItem::new_string(text));
+src/main.rs:19995|if let Some(code) = fenced_code(text) {
+src/main.rs:20009|cx.write_to_clipboard(ClipboardItem::new_string(code));
+src/main.rs:20230|"Bot团队"
+src/main.rs:20249|enum SettingsDetail {
+src/main.rs:20254|ProviderUrl {
+src/main.rs:20305|/// 某个模型的上下文窗口 / 输出上限（W4）。
+src/main.rs:20326|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
+src/main.rs:2048|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
+src/main.rs:2092|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
+src/main.rs:21198|let wechat = wechat_theme::active();
+src/main.rs:21579|fn compaction_status_row() -> impl IntoElement {
+src/main.rs:21581|.id("chat-compaction-status")
+src/main.rs:21584|.items_center()
+src/main.rs:21699|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:21701|.selectable(true)
+src/main.rs:2257|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
+src/main.rs:23000|.map(|chat| chat.unread)
+src/main.rs:2337|"task-reassign-{}"
+src/main.rs:23713|fn chat_info_panel(&mut self, window: &Window, cx: &mut Context<Self>) -> impl I
+src/main.rs:2380|"task-reassign-{}-{}"
+src/main.rs:23929|body = body.child(ui::section(i18n::t("待办"))).child(card);
+src/main.rs:24146|.w_full()
+src/main.rs:24203|.id("chat-info-memory-row")
+src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
+src/main.rs:24495|let key = self.active_key();
+src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
+src/main.rs:24689|if chat.compacting == Some(true) {
+src/main.rs:25354|let chat = self.active_key().and_then(|key| self.chats.get(&key));
+src/main.rs:25442|.id("composer-plus")
+src/main.rs:25447|.when(plus_focused, |el| el.bg(wechat_theme::nav_item_hover_bg()))
+src/main.rs:25454|.items_center()
+src/main.rs:25465|let color = if level == "ask" {
+src/main.rs:2797|fn push_member_delta(&mut self, member: &str, delta: &str) {
+src/main.rs:2815|fn finish_member(&mut self, member: &str) {
+src/main.rs:2845|struct BotFormState {
+src/main.rs:2879|let mut icon_tiles: Vec<gpui::AnyElement> = Vec::new();
+src/main.rs:2909|let mut color_swatches: Vec<gpui::AnyElement> = Vec::new();
+src/main.rs:3244|usage_group: usize
+src/main.rs:3608|/// 连续同类工具调用折叠成一组（WebView 的 execute/edit/explore/cua 组）。
+src/main.rs:3806|first_frame_logged: false
+src/main.rs:4241|Some(directory) => directory.clone()
+src/main.rs:4243|None => backend::fallback_workspace()
+src/main.rs:4533|let chosen = route_group_members(
+src/main.rs:4649|let _ = manual;
+src/main.rs:5204|self.input.update(cx, |input, cx| input.clear(window, cx));
+src/main.rs:5293|fn queue_current(
+src/main.rs:5300|const MAX_QUEUED: usize = 5;
+src/main.rs:5339|fn flush_queue(&mut self, key: &str, cx: &mut Context<Self>) {
+src/main.rs:5454|// 新的用户回合：重置 Bot 交接预算。
+src/main.rs:5796|fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:5809|fn question_card_el(
+src/main.rs:6015|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:6028|fn elicitation_card_el(
+src/main.rs:6368|fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
+src/main.rs:6522|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:6535|fn approval_card_el(
+src/main.rs:701|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
+src/main.rs:7066|return;
+src/main.rs:7098|results.truncate(8);
+src/main.rs:751|enum MsgKind {
+src/main.rs:753|Reasoning
+src/main.rs:7592|PaletteCmd::Compact => {
+src/main.rs:7806|let Some(bot) = self.roster.bots.get(index).cloned() else {
+src/main.rs:7904|cx: &mut Context<Self>
+src/main.rs:8350|div()
+src/main.rs:8582|if ALL_MENTION.to_lowercase().contains(&needle) {
+src/main.rs:864|queued: Vec<QueuedSend>
+src/main.rs:9055|crate::model_limits::placeholder(&limits);
+src/main.rs:9295|.roster
+src/main.rs:9299|let entries = data::bot_memory_entries(&bot_id);
+src/main.rs:9342|.child(
+src/main.rs:9578|let specs: Vec<(&'static str, String)> = spec
+src/main.rs:9702|.cloned()
+src/main.rs:9719|label
+src/main.rs:9761|SharedString::from(format!("schedule-day-{index}"))
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
@@ -409,7 +402,7 @@ src/team_tools.rs:208|"team_goal_pass"
 src/team_tools.rs:223|"team_goal_rework"
 src/team_tools.rs:246|"team_assign"
 src/theme.rs:133|pub fn is_light() -> bool {
-src/theme.rs:143|pub fn set_light(light: bool) -> bool {
+src/theme.rs:143|///
 src/tool_scope.rs:1|//! 浏览器 / 电脑控制的「使用范围」。
 src/tool_scope.rs:9|//! 因此设置页关掉后立即生效，不必重开会话。
 src/ui_kit.rs:128|fn pointer(mut self) -> Self {

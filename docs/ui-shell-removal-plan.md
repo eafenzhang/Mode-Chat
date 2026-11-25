@@ -204,7 +204,7 @@ if std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1") {
 
 ⚠️ `PANEL_WIDTH` **不能删**：`chat_info_panel@27525` 和 `set_right_panel@11837/11842` 还在用（微信壳详情栏宽度）。
 
-⚠️ `BUBBLE_MAX_WIDTH` **确实要删**（`:244`，三处引用 `19347`/`19546`/`25874` 全在删除集），连带 `:243` 那行文档注释一起删。而 `theme::RADIUS_BUBBLE`（`theme.rs:549`）**必须留**：`skeleton_rows`（`:24764`）在用，微信壳空态走它。
+⚠️ `BUBBLE_MAX_WIDTH` **确实要删**（三处引用全在删除集），连带它的文档注释一起删。而 `theme::RADIUS_BUBBLE`（`theme.rs:549`）**必须留**：`skeleton_rows`（`:24764`）在用，微信壳空态走它。
 
 ### 6.2 `chat_detail_panel`（109 行）——Chief 已拍板：保留并接回微信壳
 
@@ -335,7 +335,7 @@ docs/testing/0.5.1-anchor-label-proposals.md :33 :60
 | --- | --- | --- | --- |
 | `parity-matrix.md:28` A07 Bot 详情页 | `:20975` `bot_details` | `:26969`（`fn chat_info_panel`，main.rs） | 微信壳的详情栏就是它 |
 | `:29` A08 记忆行 | `:21144`、`:21159` | `:27459`（`.id("chat-info-memory-row")`）、`:27469`（`SettingsDetail::BotMemory`） | 已实测同意 |
-| `:33` A12 主卡位 | `:19086` `main_bot_card` | **无等价**。Chief 已确认：A12 从 ✅ 降为 🟡，锚点挂 `:26251`（`wechat_nav`），矩阵汇总 89/20/27 → **88/21/27** | 微信壳侧栏没有「谁是主 Bot」的视觉位，是真实功能损失 |
+| `:33` A12 主卡位 | `main_bot_card`（已删） | **无等价**。Chief 已确认：A12 从 ✅ 降为 🟡，锚点挂 `:26251`（`wechat_nav`），矩阵汇总 89/20/27 → **88/21/27** | 微信壳侧栏没有「谁是主 Bot」的视觉位，是真实功能损失 |
 | `:34` A13 待办 | `:21330` | `:27185`（`ui::section("待办")`） | 等价 |
 | `:42` / `:210` B03 / O04 审批档位 | `:21050`、`:21081` | `:12894`（三档循环）；说明里保留 `approval_note:20933` | 微信壳用弹层实现 |
 | `:43` B04 | `:19759`、`:11165` | 保留 `:11165`（`SettingsDetail::Allowlist`）；`19759` 换成 `:21792`（`wechat-row-{}-{}` 行 id）**或**产品另选一个有符号的行 | 这处我倾向由产品按 B04 原文重挑 |
