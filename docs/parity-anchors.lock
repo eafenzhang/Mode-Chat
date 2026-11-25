@@ -220,7 +220,7 @@ src/main.rs:10964|SettingsDetail::AutomationHistory { title, runs } => {
 src/main.rs:1102|match group_goal::apply(&data::data_root(), &self.group_id, action) {
 src/main.rs:11157|SettingsDetail::Allowlist { bot_id } => {
 src/main.rs:11582|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
-src/main.rs:11678|.bots
+src/main.rs:11680|.filter(|bot| !bot.is_private)
 src/main.rs:11786|let draft = data::GroupDraft {
 src/main.rs:11967|let scope_close = current_scope.clone();
 src/main.rs:12065|.child(settings_group(vec![
@@ -238,14 +238,14 @@ src/main.rs:14068|i18n::t("恢复显示")
 src/main.rs:1422|.id("goal-acceptance-save")
 src/main.rs:14368|.flex()
 src/main.rs:14552|.h(px(84.))
-src/main.rs:14745|.heartbeat
-src/main.rs:14764|return body
 src/main.rs:14860|let button_id = SharedString::from(format!("im-group-activation-{label}"));
 src/main.rs:15300|settings_row(
 src/main.rs:16069|SharedString::from(format!("usage-range-{days}"))
 src/main.rs:1607|format!("goal-stage-pass-{index}")
 src/main.rs:16073|.on_click(cx.listener(move |this, _event, _window, cx| {
 src/main.rs:16092|SharedString::from(format!("usage-group-{mode}"))
+src/main.rs:16103|body = body.child(
+src/main.rs:16125|))
 src/main.rs:1633|format!("goal-stage-rework-{index}")
 src/main.rs:16472|i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据")
 src/main.rs:16474|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
@@ -298,6 +298,7 @@ src/main.rs:24639|fn compaction_status_row() -> impl IntoElement {
 src/main.rs:24641|.id("chat-compaction-status")
 src/main.rs:24759|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
 src/main.rs:24761|.selectable(true)
+src/main.rs:2477|for (id, bot_name, role) in &self.bots {
 src/main.rs:26886|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
 src/main.rs:27314|rows.push(
 src/main.rs:27636|fn wecom_transcript(
@@ -313,14 +314,15 @@ src/main.rs:2931|for (hex, label) in bot_icon::COLORS {
 src/main.rs:3266|schedule_when: usize
 src/main.rs:3632|ToolGroup {
 src/main.rs:3830|wecom_mode: std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1")
+src/main.rs:4265|.filter(|bot| !bot.is_private)
 src/main.rs:4267|let workspace = match &group.directory {
-src/main.rs:4269|None if !bot.directory.trim().is_empty() => bot.directory.clone()
-src/main.rs:4555|.iter()
+src/main.rs:4557|.filter(|bot| !bot.is_private)
 src/main.rs:4673|chat.compacting = Some(active);
+src/main.rs:5228|if let Some(rest) = text.strip_prefix("/side")
 src/main.rs:5320|fn queue_current(
 src/main.rs:5327|const MAX_QUEUED: usize = 5;
 src/main.rs:5366|fn flush_queue(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:5476|.iter()
+src/main.rs:5478|.filter(|bot| !bot.is_private)
 src/main.rs:5823|fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
 src/main.rs:5836|fn question_card_el(
 src/main.rs:6042|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
@@ -330,15 +332,15 @@ src/main.rs:6840|fn on_new_session_shortcut(
 src/main.rs:6872|.new_session(
 src/main.rs:703|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
 src/main.rs:7082|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
-src/main.rs:7330|let found = self.find_owner_of_session(&session_id);
-src/main.rs:7419|}
 src/main.rs:753|enum MsgKind {
 src/main.rs:755|Reasoning
 src/main.rs:7559|PaletteCmd::NewSession => {
 src/main.rs:7576|self.backend.new_session(
 src/main.rs:7612|PaletteCmd::Compact => {
+src/main.rs:7822|fn open_side(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>)
+src/main.rs:7920|fn apply_side_event(
 src/main.rs:8366|.flex()
-src/main.rs:8596|.iter()
+src/main.rs:8598|.filter(|bot| !bot.is_private)
 src/main.rs:866|queued: Vec<QueuedSend>
 src/main.rs:9528|} => {
 src/main.rs:9768|SettingsDetail::BotMemory { bot_id } => {
@@ -373,9 +375,7 @@ src/rpi_engine.rs:147|model.max_tokens = max_tokens.max(1) as u64;
 src/rpi_engine.rs:1536|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
 src/rpi_engine.rs:1575|collect_search(&path, needle, limit, private_workspaces, out);
 src/rpi_engine.rs:1589|if !private_workspaces.is_empty()
-src/rpi_engine.rs:1692|pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
 src/rpi_engine.rs:1731|pub fn usage_grouped(days: usize) -> GroupedUsage {
-src/rpi_engine.rs:1776|}
 src/rpi_engine.rs:188|pub fn thinking_level_for(spec: &ModelSpec) -> ThinkingLevel {
 src/rpi_engine.rs:1914|.find(|bot| !bot.directory.trim().is_empty() && bot.directory.eq_ignore_ascii_ca
 src/rpi_engine.rs:2051|pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageCo
@@ -392,6 +392,7 @@ src/rpi_engine.rs:435|async fn decide(
 src/rpi_engine.rs:450|let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref
 src/rpi_engine.rs:501|async fn ask_permission(
 src/rpi_engine.rs:529|options: {
+src/rpi_engine.rs:967|let mut input_tokens = 0i64;
 src/schedule_builder.rs:179|pub fn describe(when: &When) -> String {
 src/schedule_builder.rs:19|pub enum When {
 src/schedule_builder.rs:56|pub fn to_request(when: &When, now_ms: i64, offset_secs: i32) -> Result<Schedule

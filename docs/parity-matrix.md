@@ -66,7 +66,7 @@
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
 | D01 | 会话独立落盘、不进全局搜索 | `ds-bot/src/host/privacy.js:29-32` | ✅ | `src/rpi_engine.rs:239`（`private_bot_id`）、`src/backend.rs:335-353`、`src/rpi_engine.rs:1589`（`private_workspaces`：搜索跳过 `.private`） | 无 |
-| D02 | 不能进群 | `README.zh.md:82` | ✅ | `src/main.rs:4269/4555/5476/8596/11678`（`!bot.is_private` 过滤五处）、表单 :2479` | 无 |
+| D02 | 不能进群 | `README.zh.md:82` | ✅ | `src/main.rs:4265/4557/5478/8598/11680`（`!bot.is_private` 过滤五处，均 `.filter(|bot| !bot.is_private)`；`:11680` 在 `build_group_form` 里喂群表单成员表）、群表单渲染 `:2477` | 无 |
 | D03 | 不能当 Main bot / Chief | `README.zh.md:82` | ✅ | `src/data.rs:88`（check_chief_private）、`:96` | 无 |
 | D04 | 删除后内容继续受保护（kept-private 登记） | `ds-bot/src/client/kept-private.js`、`ds-bot/src/host/privacy.js:31-32` | ✅ | `src/privacy.rs:80`（archive_private_bot）、`:51`（archived_private_bots）、`:98`（release_archive）、`src/data.rs:712`（`archive_private_bot`，删隐私 Bot 前登记）、UI `src/main.rs:12250`（`archived_private_bots` 读归档列表）、`:12296`（`private-archive-row-*` 行）、`:12300`（`release_archive` 解除保护） | 无 |
 | D05 | 出站共享需审批（写外部文件、给其他 Bot 发消息） | `ds-bot/src/host/privacy.js:172`（guardTeam）、`:242`（guardFiles） | ✅ | `src/privacy.rs:201`（`privacy::precheck`：路径归属最长前缀判定）、`src/rpi_engine.rs:450`（`cross_dir`：审批闸门先跑 precheck，`full` 档也拦） | 只覆盖 `read/write/edit/bash/powershell/mcp__*`；`computer_*`/`browser_*` 不在路径范围（见 §5 风险表 R-07） |
@@ -97,7 +97,7 @@
 | F02 | 新会话 | 同上 | 🟡 | 能力有：`src/main.rs:6840`（Ctrl+N → `on_new_session_shortcut`，落地 `:6872`）、`:7559`（`PaletteCmd::NewSession` 分支，落地 `:7576`）、`:20531`（`.id("detail-new-session")`，classic 右栏，落地 `:20564`）。但默认壳（`wecom_mode`，`src/main.rs:3830`）的 `chat_info_panel`（`:26886`）内 `new_session`/`detail-new-session` **0 命中**，`detail-new-session` 全仓只有 `:20531` 一处 | 默认壳**没有 UI 入口**，只剩两条 `KeyBinding` 路径（Ctrl+N / Ctrl+P），而 Ctrl+P 实测三种注入通道都进不来 → 等价于无入口 〔降级 v0.6：与 R6 同一根因〕 |
 | F03 | 回合中插话（steer，不打断） | `ds-bot/src/host/steer.js` | ✅ | `src/composer_input.rs:16`（SendSecondary）、`src/rpi_engine.rs:1244-1267` | 无 |
 | F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | 🟡 | `src/main.rs:5320`（`queue_current`）/`:5366`（`flush_queue`）、`:866`（`queued: Vec<QueuedSend>`）、`:5327`（`MAX_QUEUED = 5`）；上限 5 条 | 逻辑有，但无排队条 UI（DS 有独立 dock），用户看不到排了几条 〔降级 v0.6〕 |
-| F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `src/main.rs:7330-7419`、:7348`（事件不进主 chat） | 无 |
+| F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `src/main.rs:5228`（`strip_prefix("/side")` 命令入口）、`:7822`（`fn open_side`）、`:7920`（`fn apply_side_event`，旁路事件不进主 chat） | 无 |
 | F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`src/rpi_engine.rs:1170`（`harness.events().watch` 监听）、`:1181`（`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs:4673`（`chat.compacting`）、`:19395`/`:19678`（classic 两处调用）、`:22258`（默认壳 `WecomRow::Compacting`）、行定义 `:24639`（`id="chat-compaction-status"` `:24641`）、`:1050`（`PaletteCmd` 定义）→ `:7612`（`PaletteCmd::Compact` 派发）、默认壳入口 `:28588`（`composer-plus`）+ `:28595`/`:28606`（`on_palette_shortcut`） | checkpoint/handoff 语义未做（明确降级 v0.6）。v0.5.0 曾只有 classic 外壳接上这两处（默认壳 0 命中，实测 93 帧无一帧出现状态行），v0.5.1 已由 Q-01/Q-02 补齐默认壳 `:22258` + `:28588` | 〔降级 v0.6：checkpoint/handoff 语义〕 |
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1536-1575`、`src/main.rs:7082`（`on_find_shortcut`）/:7107`（`search_sessions` 汇总）/:18352`（`find_dialog_overlay`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1536` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
@@ -182,12 +182,12 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1692-1776`、`src/main.rs:14745-14764` | 无 |
+| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:967`（`AgentEnd` 聚合 `input_tokens`/`output_tokens`/`cache_read`/`reasoning_tokens`）、`src/main.rs:16103-16125`（四张 `ui::stat_card`：回合 / 总 tokens / 输入 / 输出） | 无 |
 | M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:16069`（`usage-range-{days}` chip）、`src/rpi_engine.rs:1731`（`usage_grouped(days)` 的 `by_day`） | 无 |
 | M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `src/main.rs:16092`（`usage-group-{mode}` chip）、`src/rpi_engine.rs:1731`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1914`（老会话按 header `cwd` 反查名册兜底） | 无 |
 | M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16073` 四档（1/7/30/90 天）、`src/main.rs:3266`（`usage_range`） | 四档够用；无日历选日、无 12 个月（明确降级，v0.6 再加） 〔降级 v0.6〕 |
 
-## N. 定时任务（5 项）
+## N. 定时任务（6 项）
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
@@ -237,7 +237,7 @@
 | R02 | 会话落盘格式 + 迁移 | `ds-bot/src/host/parts.js` | 🟡 | `src/rpi_engine.rs:327`（`sessions_root`）、`examples` 内迁移工具 | 自有 JSONL 格式，跨版本迁移靠脚本 〔降级 v0.6〕 |
 | R03 | 应用内检查更新 + 自替换 | `ds-bot/src/host/update.js` | ✅ | `src/update.rs:69/209/322`（SHA-256 + 替换/回滚） | 未接签名（minisign） |
 | R04 | CI：test + clippy + NSIS + Release | `ds-bot` CI | ✅ | `.github/workflows/release.yml:54-79`（Test/Clippy + ui-lint/parity/arch 三道门禁）、`:121`（Package） | 无 |
-| R05 | 自动化测试规模 | `ds-bot/test/` | ✅ | `src/*.rs` 175 个 `#[test]`、`crates/**` 331 个，合计 506；`cargo test --workspace --locked` 20 个测试目标全绿（183 passed / 2 ignored=需真实浏览器） | 无 |
+| R05 | 自动化测试规模 | `ds-bot/test/` | ✅ | `src/*.rs` 186 个 `#[test]` + 12 个 `#[tokio::test]`、`crates/**` 331 个 `#[test]` + 50 个 `#[tokio::test]`，合计 579 个测试属性；`cargo test --workspace --locked` 实测 37 个测试目标全绿（576 passed / 0 failed / 2 ignored=需真实浏览器）。579 − 1 个 `#[cfg(unix)]` 关闭 = 578 = 576 + 2，对得上 | 无 |
 
 ---
 
