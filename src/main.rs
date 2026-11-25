@@ -16023,6 +16023,8 @@ impl PilotApp {
         let grouped = self.get_or_load_usage_grouped();
         let daily = grouped.by_day.clone();
         // 扫描范围内一回合都没有时给 `None`，卡片显示「—」而不是一排 0。
+        // 判定用 `turns`（柱状空态也用同一个），否则「3 回合 / 0 tokens」配上
+        // 「最近 1 天还没有用量」会自相矛盾——模型报 0 usage、失败回合都会这样。
         let summary = (grouped.total.turns > 0).then_some(grouped.total);
 
         let token = |value: Option<i64>| {
@@ -16110,14 +16112,26 @@ impl PilotApp {
 
         // ---- 最近 N 天堆叠柱 ----
         body = body.child(ui::section(tri!("最近 {range} 天", "Last {range} days")));
-        if daily
+        // 空态判定必须和上面四张卡同源：都按「有没有回合」，
+        // 否则会出现「卡片 3 回合 / 0 tokens」+「还没有用量」自相矛盾。
+        let no_turns = grouped.total.turns == 0;
+        let zero_tokens = daily
             .iter()
-            .all(|(_, input, output, cache)| input + output + cache == 0)
-        {
-            body = body.child(ui::empty(tri!(
-                "最近 {range} 天还没有用量。",
-                "No usage in the last {range} days."
-            )));
+            .all(|(_, input, output, cache)| input + output + cache == 0);
+        if no_turns || zero_tokens {
+            // 有回合但 token 全 0（模型报 0 usage / 失败回合）：说明这不是「没有用量」，
+            // 而是「这几个回合没有计量」，别写成「还没有用量」。
+            body = body.child(ui::empty(if no_turns {
+                tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+            } else {
+                // tri! 只吃位置参数，这里先把回合数拼进字符串再交给它。
+                let turns = grouped.total.turns;
+                if i18n::is_en() {
+                    format!("The last {range} days have {turns} turns but no token counts.")
+                } else {
+                    format!("最近 {range} 天有 {turns} 回合，但这几回合没有计量 token。")
+                }
+            }));
         } else {
             let max = daily
                 .iter()
