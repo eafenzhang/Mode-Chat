@@ -24551,7 +24551,7 @@ impl PilotApp {
                     .child(skeleton_rows())
                     .into_any_element();
             }
-            return self.wechat_welcome(bot.as_ref(), cx);
+            return self.wechat_welcome(bot.as_ref(), group.as_ref(), cx);
         }
         let start = chat.messages.len().saturating_sub(chat.transcript_limit);
         let chat_key = key.clone().unwrap_or_default();
@@ -24865,16 +24865,21 @@ impl PilotApp {
         container.into_any_element()
     }
 
-    /// 空会话欢迎区（O-1）：头像 + 欢迎语 + 三条建议 chip。
+    /// 空会话欢迎区（O-1）：头像 + 欢迎语 + 三条建议 chip（单聊）／群欢迎区（群聊）。
     ///
     /// 交互照 classic `transcript` 的欢迎区做（点 chip 把文案填进输入框并聚焦），
     /// 但令牌全部换成 `wechat_theme` 的，chip 的 id 前缀用 `wechat-welcome-`。
-    /// 群聊不显示：微信壳没有「当前 Bot」这层语义。
+    /// 群聊分支照 classic `group_placeholder` 重写：九宫格成员头像 + 「群名 · 人数」+
+    /// 成员名单。它是 D-CUT 删掉 `group_placeholder` 后的补齐，不是新增功能。
     fn wechat_welcome(
         &mut self,
         bot: Option<&Bot>,
+        group: Option<&Group>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if let Some(group) = group {
+            return self.wechat_group_welcome(group, cx);
+        }
         let Some(bot) = bot else {
             return div().flex_1().min_h(px(0.)).into_any_element();
         };
@@ -24975,6 +24980,77 @@ impl PilotApp {
                     .child(i18n::t("今天想先推进哪件事？")),
             )
             .child(chips)
+            .into_any_element()
+    }
+
+    /// 群聊空会话欢迎区：九宫格成员头像 + 「群名 · 人数」+ 成员名单。
+    ///
+    /// classic 的 `group_placeholder` 随 D-CUT 一起删掉了，微信壳在群聊 + 0 条消息时
+    /// 只剩裸 `div()`。这里按原函数重写，头像换 `wechat_group_avatar`（微信壳自己那套），
+    /// 不再用已被删除的 `avatar::channel_avatar`。
+    fn wechat_group_welcome(
+        &mut self,
+        group: &Group,
+        _cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let visible = visible_group_members(group, &self.roster);
+        let members = if visible.is_empty() {
+            group
+                .member_ids
+                .iter()
+                .map(|id| short_id(id))
+                .collect::<Vec<_>>()
+                .join("、")
+        } else {
+            visible
+                .iter()
+                .map(|bot| bot.name.clone())
+                .collect::<Vec<_>>()
+                .join("、")
+        };
+        let ids: Vec<String> = group.member_ids.clone();
+        div()
+            .id("wechat-group-welcome")
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(ui_kit::S4))
+            .px(px(ui_kit::S6))
+            .child(if ids.is_empty() {
+                // 群聊还没加成员：画不出九宫格，退回首字色块。
+                Self::wechat_channel_avatar(&group.id, 56.).into_any_element()
+            } else {
+                Self::wechat_group_avatar(&ids, 56.).into_any_element()
+            })
+            .child(
+                div()
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_PAGE))
+                    .line_height(px(ui_kit::T_PAGE_LH))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(wechat_theme::chat_title())
+                    .child(SharedString::from(format!(
+                        "{} · {}",
+                        group.name,
+                        count_members(visible.len())
+                    ))),
+            )
+            .child(
+                div()
+                    .max_w(px(460.))
+                    .text_center()
+                    .font_family(wechat_theme::FONT_FAMILY)
+                    .text_size(px(ui_kit::T_BODY))
+                    .line_height(px(ui_kit::T_BODY_LH + 4.))
+                    .text_color(wechat_theme::chat_subtitle())
+                    .child(SharedString::from(tri!(
+                        "成员：{members}。发消息开始群聊对话；用 @成员名 点名。",
+                        "Members: {members}. Send a message to start the group chat; @mention someone to call on them."
+                    ))),
+            )
             .into_any_element()
     }
 

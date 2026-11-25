@@ -298,10 +298,10 @@ src/main.rs:24454|this.new_session_for_selected(cx);
 src/main.rs:24495|.children(self.queue_panel(cx))
 src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:24698|if chat.compacting == Some(true) {
-src/main.rs:25354|rows = rows.child(
-src/main.rs:25564|.id("composer-plus")
-src/main.rs:25571|this.on_palette_shortcut(&PaletteShortcut, window, cx);
-src/main.rs:25582|this.on_palette_shortcut(&PaletteShortcut, window, cx);
+src/main.rs:25354|div()
+src/main.rs:25564|let plus_focus = self.tab_focus["composer-plus"].clone();
+src/main.rs:25571|&& !pending_approval
+src/main.rs:25582|} else {
 src/main.rs:2797|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2815|fn finish_member(&mut self, member: &str) {
 src/main.rs:2845|struct BotFormState {
