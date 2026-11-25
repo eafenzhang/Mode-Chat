@@ -826,6 +826,38 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "飞书" => Some("Feishu"),
         "验收线不能为空" => Some("Acceptance cannot be empty"),
         "高级：自定义 cron" => Some("Advanced: custom cron"),
+        "青" => Some("Cyan"),
+        "粉" => Some("Pink"),
+        "红" => Some("Red"),
+        "黄" => Some("Yellow"),
+        "分组" => Some("Sections"),
+        "只影响显示名（存在 state.json）；留空保存 = 恢复默认短名。" => {
+            Some("Only changes the display name (stored in state.json); save an empty value to restore the default short name.")
+        }
+        "这个 Bot 自己记下的事；下一轮对话起按内容注入。可撤销最近一次修改。" => {
+            Some("What this bot noted for itself, injected by content from the next turn on; the latest change can be undone.")
+        }
+        "这个 Bot 还没有记忆。聊几次它就会记住你。" => {
+            Some("This bot has no memories yet. It will start remembering after a few chats.")
+        }
+        "保存后会重建记忆索引并记一条可撤销的历史；下一次对话即按新内容注入。" => {
+            Some("Saving rebuilds the memory index and records one undoable revision; the next turn injects the new content.")
+        }
+        "只校验格式；模型是否真实存在请用「测试」按钮验证。" => {
+            Some("Format is validated only; use Test to verify the model actually exists.")
+        }
+        "每个 Bot 使用独立浏览器配置，登录状态互不影响；配置文件保留在 runtime/browser-profiles/<bot>。" => {
+            Some("Each bot uses its own browser profile, so sign-ins do not affect each other; profiles stay in runtime/browser-profiles/<bot>.")
+        }
+        "删除隐私 Bot 后目录继续受保护；解除后其他 Bot 可读。" => {
+            Some("Deleting a private bot keeps its directory protected; other bots can read it only after you unprotect it.")
+        }
+        "创建后请在对应聊天里给 Bot 发一条消息激活。" => {
+            Some("After creating it, send the bot a message in its chat to activate it.")
+        }
+        "从左侧列表选择 Bot 或群聊，或点右上角 + 新建。" => {
+            Some("Pick a bot or group chat from the list on the left, or click + at the top right to create one.")
+        }
         _ => None,
     }
 }

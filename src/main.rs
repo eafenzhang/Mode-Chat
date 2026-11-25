@@ -1557,6 +1557,8 @@ impl Render for GroupGoalState {
                 };
                 let failure = if stage.evidence.trim().is_empty() {
                     String::new()
+                } else if i18n::is_en() {
+                    format!(" · Evidence: {}", stage.evidence)
                 } else {
                     format!(" · 证据：{}", stage.evidence)
                 };
@@ -1581,9 +1583,11 @@ impl Render for GroupGoalState {
                                         .text_size(px(ui_kit::T_LABEL))
                                         .line_height(px(ui_kit::T_LABEL_LH))
                                         .text_color(theme::ink_tertiary())
-                                        .child(SharedString::from(format!(
-                                            "验收：{acceptance_text}{failure}"
-                                        ))),
+                                        .child(SharedString::from(if i18n::is_en() {
+                                            format!("Acceptance: {acceptance_text}{failure}")
+                                        } else {
+                                            format!("验收：{acceptance_text}{failure}")
+                                        })),
                                 )
                                 .children(passed_at.map(|at| {
                                     div()
@@ -2985,11 +2989,11 @@ impl Render for BotFormState {
                             .child(SharedString::from(format!(
                                 "{} · {}",
                                 i18n::t("头像背景色"),
-                                bot_icon::COLORS
+                                i18n::t(bot_icon::COLORS
                                     .iter()
                                     .find(|(hex, _)| self.color.eq_ignore_ascii_case(hex))
                                     .map(|(_, label)| *label)
-                                    .unwrap_or("绿")
+                                    .unwrap_or("绿"))
                             ))),
                     )
                     .child(div().flex().gap(px(8.)).children(color_swatches)),
@@ -3633,6 +3637,8 @@ enum WecomRow {
         messages: Vec<(Message, bool)>,
         expanded: bool,
     },
+    /// Q-01：上下文压缩中的状态行（classic 壳挂在消息列顶部，虚拟列表挂行尾）。
+    Compacting,
 }
 
 /// 侧栏底栏齿轮菜单动作（原版 `BotSidebar` 的 7 项）。
@@ -13721,7 +13727,7 @@ impl PilotApp {
                         SIDEBAR_SECTION_COLORS
                             .iter()
                             .find(|(value, _)| *value == id)
-                            .map(|(_, label)| *label)
+                            .map(|(_, label)| i18n::t(label))
                     })
                     .unwrap_or(i18n::t("无"));
                 let mut row = settings_row(
@@ -15993,8 +15999,10 @@ impl PilotApp {
                             .flex()
                             .flex_col()
                             .gap(px(2.))
-                            .child(ui::body(row.title.to_string()))
-                            .child(ui::body_muted(row.hint.to_string())),
+                            // Q-03：这两行原来直接渲染 &'static str，绕过了 i18n；
+                            // 字典里早有译文，只是没查。
+                            .child(ui::body(i18n::t(row.title)))
+                            .child(ui::body_muted(i18n::t(row.hint))),
                     )
                     .child(badge)
                     .into_any_element(),
@@ -21653,6 +21661,7 @@ fn wecom_row_fingerprint(row: &WecomRow) -> u64 {
                 .wrapping_add(u64::from(*streaming).wrapping_mul(7))
                 + 50
         }
+        WecomRow::Compacting => 70,
     }
 }
 
@@ -21968,6 +21977,7 @@ fn wecom_rows_fingerprint(rows: &[WecomRow]) -> u64 {
                 mix(usize::from(*expanded));
                 mix(usize::from(*streaming));
             }
+            WecomRow::Compacting => mix(1),
         }
     }
     hash
@@ -22245,6 +22255,7 @@ fn wecom_row_el(
             messages,
             expanded,
         } => wecom_tool_group_card(key, *family, messages, *expanded, weak).into_any_element(),
+        WecomRow::Compacting => compaction_status_row().into_any_element(),
     }
 }
 
@@ -24352,9 +24363,12 @@ fn settings_row_inner(
     if let Some(leading) = leading {
         row = row.child(leading);
     }
+    // Q-03：130 是中文标签的宽度；英文标签更长（最宽 "Default model for new bots"
+    // 约 182px），固定 130 会截成 "Background notific…"。按语言给两档宽度。
+    let title_width = if i18n::is_en() { 184. } else { 130. };
     row = row.child(
         div()
-            .w(px(130.))
+            .w(px(title_width))
             .flex_shrink_0()
             .truncate()
             .font_family(if wechat {
@@ -27071,7 +27085,11 @@ impl PilotApp {
                                     .font_family(wecom_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
-                                    .child(SharedString::from(format!("还有 {overflow} 条"))),
+                                    .child(SharedString::from(if i18n::is_en() {
+                                        format!("{} more", overflow)
+                                    } else {
+                                        format!("还有 {overflow} 条")
+                                    })),
                             )
                             .into_any_element(),
                     );
@@ -27217,7 +27235,11 @@ impl PilotApp {
                                     .font_family(wecom_theme::FONT_FAMILY)
                                     .text_size(px(ui_kit::T_LABEL))
                                     .text_color(wecom_theme::time_label())
-                                    .child(SharedString::from(format!("还有 {overflow} 个文件"))),
+                                    .child(SharedString::from(if i18n::is_en() {
+                                        format!("{} more files", overflow)
+                                    } else {
+                                        format!("还有 {overflow} 个文件")
+                                    })),
                             )
                             .into_any_element(),
                     );
@@ -27650,7 +27672,7 @@ impl PilotApp {
                 .justify_center()
                 .child(empty_state(
                     i18n::t("选择会话"),
-                    "从左侧列表选择 Bot 或群聊，或点右上角 + 新建。",
+                    i18n::t("从左侧列表选择 Bot 或群聊，或点右上角 + 新建。"),
                 ))
                 .into_any_element();
         };
@@ -27809,6 +27831,11 @@ impl PilotApp {
                 find_hit: find_hit_message == Some(index),
             });
             message_rows.insert(index, rows.len() - 1);
+        }
+        if chat.compacting == Some(true) {
+            // Q-01：压缩状态行。classic 壳挂消息列顶部，但虚拟列表的顶部是历史区
+            // （滚上去才看得到），这里挂行尾——用户视线所在的位置。
+            rows.push(WecomRow::Compacting);
         }
         self.wecom_message_rows = message_rows;
         let count = rows.len();
@@ -28467,7 +28494,7 @@ impl PilotApp {
 
     fn wecom_composer(
         &mut self,
-        _window: &Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let chat = self.active_key().and_then(|key| self.chats.get(&key));
@@ -28480,6 +28507,10 @@ impl PilotApp {
         let is_bot = self.selected_bot().is_some();
         let is_group = self.selected_group().is_some();
         let has_text = !self.input.read(cx).content().trim().is_empty();
+        // 命令面板入口的焦点句柄：与 classic 共用同一个 tab stop 键（两套壳互斥，
+        // 不会同时存在），这样 Tab 顺序表不用为默认壳再登记一份。
+        let plus_focus = self.tab_focus["composer-plus"].clone();
+        let plus_focused = plus_focus.is_focused(window);
         // 只有内嵌引擎支持 lane steering；外部 ACP 引擎没有插话通道。
         let can_interject = streaming && has_text && self.current_engine_is_mode();
         let send_enabled = (is_bot || is_group)
@@ -28550,6 +28581,32 @@ impl PilotApp {
                     .flex()
                     .items_center()
                     .gap(px(8.))
+                    // Q-02：命令面板入口。classic 壳在胶囊左侧有「+」，默认壳之前
+                    // 只有 Ctrl+P 一条路——而 GPUI 收不到注入的组合键，等于没有入口。
+                    .child(
+                        div()
+                            .id("composer-plus")
+                            // 与 classic 的同类按钮一致：可 Tab 聚焦、Enter 触发，
+                            // 不只靠鼠标（否则键盘可达性只修了一半）。
+                            .track_focus(&plus_focus)
+                            .key_context("TabStop")
+                            .when(plus_focused, |el| el.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
+                                this.on_palette_shortcut(&PaletteShortcut, window, cx);
+                            }))
+                            .size(px(28.))
+                            .rounded(px(theme::RADIUS_TAG))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .pointer()
+                            .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                // 与 Ctrl+P 同一条路径：开命令面板。
+                                this.on_palette_shortcut(&PaletteShortcut, window, cx);
+                            }))
+                            .child(icons::icon_light(icons::Icon::Plus, 18., wecom_theme::icon())),
+                    )
                     .children(permission.map(|level| {
                         let color = if level == "ask" {
                             wecom_theme::icon()
