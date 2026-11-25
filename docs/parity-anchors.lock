@@ -208,109 +208,108 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10051|SettingsDetail::ConnectorSecret { connector_id } => {
-src/main.rs:10175|let once_hours = self
-src/main.rs:10192|"schedule-when-{}"
-src/main.rs:10237|SharedString::from(format!("schedule-day-{index}"))
+src/main.rs:10059|SettingsDetail::ConnectorSecret { connector_id } => {
+src/main.rs:10183|let once_hours = self
+src/main.rs:10200|"schedule-when-{}"
+src/main.rs:10245|SharedString::from(format!("schedule-day-{index}"))
 src/main.rs:1050|/// 立即压缩当前会话上下文（W4）。
-src/main.rs:10588|SettingsDetail::AddModel {
-src/main.rs:10663|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:10596|SettingsDetail::AddModel {
+src/main.rs:10671|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
 src/main.rs:1070|enum GoalStageEdit {
-src/main.rs:10964|SettingsDetail::AutomationHistory { title, runs } => {
+src/main.rs:10972|SettingsDetail::AutomationHistory { title, runs } => {
 src/main.rs:1102|match group_goal::apply(&data::data_root(), &self.group_id, action) {
-src/main.rs:11157|SettingsDetail::Allowlist { bot_id } => {
-src/main.rs:11582|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
-src/main.rs:11680|.filter(|bot| !bot.is_private)
-src/main.rs:11786|let draft = data::GroupDraft {
-src/main.rs:11967|let scope_close = current_scope.clone();
-src/main.rs:12065|.child(settings_group(vec![
-src/main.rs:12250|let archives = crate::privacy::archived_private_bots();
-src/main.rs:12296|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12300|match crate::privacy::release_archive(&id) {
-src/main.rs:13138|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
-src/main.rs:13494|"暂未接入插件宿主；MCP 连接器见「连接器」。"
-src/main.rs:13573|let bot = self.selected_bot().cloned();
-src/main.rs:13707|fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-src/main.rs:13749|SharedString::from(format!("section-up-{}", id_up))
-src/main.rs:13801|SharedString::from(format!("section-delete-{}", id_delete))
-src/main.rs:13969|body = body.child(settings_section(i18n::t("已隐藏")));
-src/main.rs:14068|i18n::t("恢复显示")
+src/main.rs:11165|SettingsDetail::Allowlist { bot_id } => {
+src/main.rs:11590|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
+src/main.rs:11688|.filter(|bot| !bot.is_private)
+src/main.rs:11794|let draft = data::GroupDraft {
+src/main.rs:11975|let scope_close = current_scope.clone();
+src/main.rs:12073|.child(settings_group(vec![
+src/main.rs:12258|let archives = crate::privacy::archived_private_bots();
+src/main.rs:12304|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12308|match crate::privacy::release_archive(&id) {
+src/main.rs:13146|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
+src/main.rs:13502|"暂未接入插件宿主；MCP 连接器见「连接器」。"
+src/main.rs:13581|let bot = self.selected_bot().cloned();
+src/main.rs:13715|fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+src/main.rs:13757|SharedString::from(format!("section-up-{}", id_up))
+src/main.rs:13809|SharedString::from(format!("section-delete-{}", id_delete))
+src/main.rs:13977|body = body.child(settings_section(i18n::t("已隐藏")));
+src/main.rs:14076|i18n::t("恢复显示")
 src/main.rs:1422|.id("goal-acceptance-save")
-src/main.rs:14368|.flex()
-src/main.rs:14552|.h(px(84.))
-src/main.rs:14860|let button_id = SharedString::from(format!("im-group-activation-{label}"));
-src/main.rs:15300|settings_row(
-src/main.rs:16069|SharedString::from(format!("usage-range-{days}"))
+src/main.rs:14376|.flex()
+src/main.rs:14560|.h(px(84.))
+src/main.rs:14868|let button_id = SharedString::from(format!("im-group-activation-{label}"));
+src/main.rs:15308|settings_row(
 src/main.rs:1607|format!("goal-stage-pass-{index}")
-src/main.rs:16073|.on_click(cx.listener(move |this, _event, _window, cx| {
-src/main.rs:16092|SharedString::from(format!("usage-group-{mode}"))
-src/main.rs:16103|body = body.child(
-src/main.rs:16125|))
+src/main.rs:16077|SharedString::from(format!("usage-range-{days}"))
+src/main.rs:16081|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:16100|SharedString::from(format!("usage-group-{mode}"))
+src/main.rs:16111|body = body.child(
+src/main.rs:16133|))
 src/main.rs:1633|format!("goal-stage-rework-{index}")
-src/main.rs:16472|i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据")
-src/main.rs:16474|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
+src/main.rs:16480|i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据")
+src/main.rs:16482|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
 src/main.rs:1654|format!("goal-stage-acceptance-{index}")
-src/main.rs:16702|fn group_memory_section(&self, group_id: &str, cx: &mut Context<Self>) -> gpui::
-src/main.rs:16930|fn open_delete_bot_dialog(
+src/main.rs:16710|fn group_memory_section(&self, group_id: &str, cx: &mut Context<Self>) -> gpui::
+src/main.rs:16938|fn open_delete_bot_dialog(
 src/main.rs:1698|"goal-stage-error-{index}"
-src/main.rs:16987|(i18n::t("隐藏").to_string(), false, DetailMenuAction::HideBot(bot.id.clone()))
-src/main.rs:18359|fn find_dialog_overlay(
-src/main.rs:18580|if let Err(message) = data::delete_group(group_id) {
-src/main.rs:19078|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-src/main.rs:19229|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:19395|column = column.child(compaction_status_row());
-src/main.rs:19438|.child(kit_markdown_el(
-src/main.rs:19472|Some(message_actions(
-src/main.rs:19678|column = column.child(compaction_status_row());
-src/main.rs:19721|.child(kit_markdown_el(
-src/main.rs:19747|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
-src/main.rs:19751|SharedString::from(format!("msg-p-{}", index))
-src/main.rs:19819|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
-src/main.rs:19967|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:20327|.id("composer-plus")
-src/main.rs:20531|.id("detail-new-session")
-src/main.rs:20564|this.backend.new_session(
+src/main.rs:16995|(i18n::t("隐藏").to_string(), false, DetailMenuAction::HideBot(bot.id.clone()))
+src/main.rs:18367|fn find_dialog_overlay(
+src/main.rs:18588|if let Err(message) = data::delete_group(group_id) {
+src/main.rs:19086|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:19237|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
+src/main.rs:19403|column = column.child(compaction_status_row());
+src/main.rs:19411|if message.kind == MsgKind::Reasoning {
+src/main.rs:19446|.child(kit_markdown_el(
+src/main.rs:19480|Some(message_actions(
+src/main.rs:19686|column = column.child(compaction_status_row());
+src/main.rs:19694|if message.kind == MsgKind::Reasoning {
+src/main.rs:19729|.child(kit_markdown_el(
+src/main.rs:19755|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
+src/main.rs:19759|SharedString::from(format!("msg-p-{}", index))
+src/main.rs:19827|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
+src/main.rs:19975|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+src/main.rs:20343|.mb(px(8.))
 src/main.rs:2069|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:20994|fn bot_details(
-src/main.rs:21069|rows = rows.child(section_label(i18n::t("审批策略")));
-src/main.rs:21100|this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+src/main.rs:20975|fn bot_details(
+src/main.rs:21050|rows = rows.child(section_label(i18n::t("审批策略")));
+src/main.rs:21081|this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
 src/main.rs:2114|fn retry_or_reassign(
-src/main.rs:21163|.id("bot-details-memory-row")
-src/main.rs:21178|this.settings_detail = Some(SettingsDetail::BotMemory {
-src/main.rs:21217|// 历史会话列表：点行切换 resume 到对应会话（当前主会话不重复出现）。
-src/main.rs:21349|rows = rows.child(section_label(i18n::t("待办")));
-src/main.rs:21350|const TODO_ROWS: usize = 4;
-src/main.rs:21632|WecomRow::ToolGroup {
-src/main.rs:21988|fn wecom_row_el(
-src/main.rs:22021|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
-src/main.rs:22118|.child(kit_markdown_el(
-src/main.rs:22257|} => wecom_tool_group_card(key, *family, messages, *expanded, weak).into_any_ele
-src/main.rs:22258|WecomRow::Compacting => compaction_status_row().into_any_element()
-src/main.rs:22394|.any(|needle| message.contains(needle))
+src/main.rs:21144|.id("bot-details-memory-row")
+src/main.rs:21159|this.settings_detail = Some(SettingsDetail::BotMemory {
+src/main.rs:21198|// 历史会话列表：点行切换 resume 到对应会话（当前主会话不重复出现）。
+src/main.rs:21330|rows = rows.child(section_label(i18n::t("待办")));
+src/main.rs:21331|const TODO_ROWS: usize = 4;
+src/main.rs:21613|WecomRow::ToolGroup {
+src/main.rs:21969|fn wecom_row_el(
+src/main.rs:22004|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
+src/main.rs:22111|.child(kit_markdown_el(
+src/main.rs:22260|} => wecom_tool_group_card(key, *family, messages, *expanded, weak).into_any_ele
+src/main.rs:22261|WecomRow::Compacting => compaction_status_row().into_any_element()
+src/main.rs:22397|.any(|needle| message.contains(needle))
 src/main.rs:2278|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:22920|fn message_actions(
-src/main.rs:23276|const SETTINGS_PAGES: [&str; 17] = [
-src/main.rs:23300|enum SettingsDetail {
-src/main.rs:23351|AddModel {
-src/main.rs:23372|AutomationHistory {
+src/main.rs:23003|fn message_actions(
+src/main.rs:23359|const SETTINGS_PAGES: [&str; 17] = [
+src/main.rs:23383|enum SettingsDetail {
+src/main.rs:23434|AddModel {
+src/main.rs:23455|AutomationHistory {
 src/main.rs:2358|"task-reassign-{}"
 src/main.rs:2401|"task-reassign-{}-{}"
 src/main.rs:246|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:24639|fn compaction_status_row() -> impl IntoElement {
-src/main.rs:24641|.id("chat-compaction-status")
-src/main.rs:24759|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:24761|.selectable(true)
+src/main.rs:24722|fn compaction_status_row() -> impl IntoElement {
+src/main.rs:24724|.id("chat-compaction-status")
 src/main.rs:2477|for (id, bot_name, role) in &self.bots {
-src/main.rs:26886|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
-src/main.rs:27314|rows.push(
-src/main.rs:27636|fn wecom_transcript(
+src/main.rs:24842|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:24844|.selectable(true)
+src/main.rs:27397|rows.push(
+src/main.rs:27740|fn wecom_transcript(
 src/main.rs:2818|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2840|message.streaming = false;
-src/main.rs:28512|let plus_focus = self.tab_focus["composer-plus"].clone();
-src/main.rs:28588|.id("composer-plus")
-src/main.rs:28595|this.on_palette_shortcut(&PaletteShortcut, window, cx);
-src/main.rs:28606|this.on_palette_shortcut(&PaletteShortcut, window, cx);
+src/main.rs:28599|fn wecom_composer(
 src/main.rs:2866|struct BotFormState {
+src/main.rs:28692|.id("composer-plus")
+src/main.rs:28699|this.on_palette_shortcut(&PaletteShortcut, window, cx);
+src/main.rs:28710|this.on_palette_shortcut(&PaletteShortcut, window, cx);
 src/main.rs:2901|for (key, _label) in bot_icon::ICONS {
 src/main.rs:2931|for (hex, label) in bot_icon::COLORS {
 src/main.rs:3266|schedule_when: usize
@@ -332,25 +331,21 @@ src/main.rs:6055|fn elicitation_card_el(
 src/main.rs:6395|fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
 src/main.rs:6549|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
 src/main.rs:6562|fn approval_card_el(
-src/main.rs:6840|fn on_new_session_shortcut(
-src/main.rs:6872|.new_session(
 src/main.rs:703|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7082|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
-src/main.rs:7114|results.extend(crate::rpi_engine::search_sessions(&query, remaining));
+src/main.rs:7090|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
+src/main.rs:7122|results.extend(crate::rpi_engine::search_sessions(&query, remaining));
 src/main.rs:753|enum MsgKind {
 src/main.rs:755|Reasoning
-src/main.rs:7559|PaletteCmd::NewSession => {
-src/main.rs:7576|self.backend.new_session(
-src/main.rs:7612|PaletteCmd::Compact => {
-src/main.rs:7822|fn open_side(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>)
-src/main.rs:7920|fn apply_side_event(
-src/main.rs:8366|.flex()
-src/main.rs:8598|.filter(|bot| !bot.is_private)
+src/main.rs:7620|PaletteCmd::Compact => {
+src/main.rs:7830|fn open_side(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>)
+src/main.rs:7928|fn apply_side_event(
+src/main.rs:8374|.flex()
+src/main.rs:8606|.filter(|bot| !bot.is_private)
 src/main.rs:866|queued: Vec<QueuedSend>
-src/main.rs:9528|} => {
-src/main.rs:9768|SettingsDetail::BotMemory { bot_id } => {
-src/main.rs:9772|.bot_by_id(&bot_id)
-src/main.rs:9815|this.settings_detail_error = None;
+src/main.rs:9536|} => {
+src/main.rs:9776|SettingsDetail::BotMemory { bot_id } => {
+src/main.rs:9780|.bot_by_id(&bot_id)
+src/main.rs:9823|this.settings_detail_error = None;
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {

@@ -102,11 +102,11 @@ v0.5.0 的目标不是“再抄一个 DS Bot”，而是**把已承诺的能力�
 ### P0-2 上下文可见与可配
 
 > **状态更正（2026-11-25，据测试 0.5.1 补测实测）**：
-> 压缩本身、`chat.compacting` 状态、`compaction_status_row()`（`src/main.rs:24639`）与命令面板里的「立即压缩」都已实现，但**v0.5.0 只接进了 classic 外壳**。默认外壳是 `wecom_mode`（`src/main.rs:3830`，取 `BOT_PILOT_CLASSIC_UI != "1"`），走 `wecom_transcript()`（`src/main.rs:27636`）和 `wecom_composer()`（`:28512` 起），v0.5.0 时这两处都没有接线：
-> - 压缩状态行：v0.5.0 全文只有 `src/main.rs:19395` / `:19678` 两处调用，均在 classic transcript 内；`wecom_transcript` 区间内 0 命中。
-> - 命令面板入口：`composer-plus`（v0.5.0 为 `src/main.rs:20327`）只在 classic composer；`wecom_composer` 的工具栏 id 仅 `wechat-tool-permission/folder/scissors/mic` + `wechat-send`，无 plus。
+> 压缩本身、`chat.compacting` 状态、`compaction_status_row()`（`src/main.rs:24722`）与命令面板里的「立即压缩」都已实现，但**v0.5.0 只接进了 classic 外壳**。默认外壳是 `wecom_mode`（`src/main.rs:3830`，取 `BOT_PILOT_CLASSIC_UI != "1"`），走 `wecom_transcript()`（`src/main.rs:27740`）和 `wecom_composer()`（`:28599` 起），v0.5.0 时这两处都没有接线：
+> - 压缩状态行：v0.5.0 全文只有 `src/main.rs:19411` / `:19694` 两处调用，均在 classic transcript 内；`wecom_transcript` 区间内 0 命中。
+> - 命令面板入口：`composer-plus`（v0.5.0 为 `src/main.rs:20343`）只在 classic composer；`wecom_composer` 的工具栏 id 仅 `wechat-tool-permission/folder/scissors/mic` + `wechat-send`，无 plus。
 >
-> 所以 P0-2 的 AC1/AC2 在 **v0.5.0 默认外壳下不成立**；**v0.5.1 已由 Q-01/Q-02 修复**：默认壳压缩行 `src/main.rs:22258`（`WecomRow::Compacting`）、`composer-plus` `:28588` + `on_palette_shortcut` `:28595`/`:28606`。AC 仍按「默认外壳 + classic」双份判据保留，供复验。
+> 所以 P0-2 的 AC1/AC2 在 **v0.5.0 默认外壳下不成立**；**v0.5.1 已由 Q-01/Q-02 修复**：默认壳压缩行 `src/main.rs:22261`（`WecomRow::Compacting`）、`composer-plus` `:28692` + `on_palette_shortcut` `:28699`/`:28710`。AC 仍按「默认外壳 + classic」双份判据保留，供复验。
 
 - **AC1（默认外壳）**：默认形态下构造一次越过阈值的回合，聊天区出现压缩状态行（`id="chat-compaction-status"`），压缩结束后消失；全程至少一帧可见。
 - **AC1b（classic 外壳）**：`BOT_PILOT_CLASSIC_UI=1` 下同一场景表现一致——两个外壳都必须有，不允许只有一边。

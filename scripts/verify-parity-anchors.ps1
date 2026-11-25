@@ -56,6 +56,18 @@ if ($Baseline -eq 'Head') {
       & git -C $root show "HEAD:$rel" 2>$null | Set-Content -LiteralPath $dst -Encoding UTF8
     }
   }
+  # 文档也必须一起取 HEAD 版本，否则「-Baseline Head」只对了一半：
+  # 源码是 HEAD 的，矩阵/PRD/锁却是工作区的。别人正在改 docs/ 时，同一 HEAD
+  # 连跑三次会给出三种结果（实测 5 problem / 5 problem / 3 problem），
+  # 这种门禁比没有门禁更糟——你没法判断红的是代码还是别人未提交的文档。
+  foreach ($rel in @('docs/parity-matrix.md', 'docs/prd-0.5.md', 'docs/parity-anchors.lock')) {
+    $blob = & git -C $root show "HEAD:$rel" 2>$null
+    if (-not $blob) { continue }
+    $dst = Join-Path $baselineDir $rel
+    $dir = Split-Path -Parent $dst
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $blob | Set-Content -LiteralPath $dst -Encoding UTF8
+  }
   Write-Output "baseline: git HEAD ($baselineDir)"
 } else {
   Write-Output 'baseline: working tree'
@@ -72,6 +84,16 @@ function Remove-BaselineDir {
 }
 $rootOrder = if ($baselineDir) { @($baselineDir) + $roots } else { $roots }
 
+# 文档/锁的读取必须和源码走同一套基线解析。
+# 写死 `Join-Path $root $doc` 会让 `-Baseline Head` 只对一半：源码 HEAD、文档工作区。
+function Resolve-DocPath([string]$rel) {
+  foreach ($r in $rootOrder) {
+    $full = Join-Path $r $rel
+    if (Test-Path $full) { return $full }
+  }
+  return (Join-Path $root $rel)
+}
+
 # Anchors look like `path/file.ext:12` or `path/file.ext:12-34`.
 # 锚点有三种写法，全都要覆盖：
 #   1) `path:12`  2) `path:12-34`  3) `path:12/34/56`（同一文件的多个位置）
@@ -82,7 +104,7 @@ $bad = New-Object System.Collections.Generic.List[string]
 $checked = 0
 
 foreach ($doc in $docs) {
-  $text = [System.IO.File]::ReadAllText((Join-Path $root $doc))
+  $text = [System.IO.File]::ReadAllText((Resolve-DocPath $doc))
   foreach ($m in $rx.Matches($text)) {
     $rel = $m.Groups[1].Value.Trim()
     # Skip prose fragments that are not paths.
@@ -129,7 +151,7 @@ foreach ($doc in $docs) {
 $nearRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs)):(\d+)(?:-\d+)?`\s*[（(]\s*`([^`]+)`'
 $nearChecked = 0
 foreach ($doc in $docs) {
-  $text = [System.IO.File]::ReadAllText((Join-Path $root $doc))
+  $text = [System.IO.File]::ReadAllText((Resolve-DocPath $doc))
   foreach ($m in $nearRx.Matches($text)) {
     $rel = $m.Groups[1].Value.Trim()
     $start = [int]$m.Groups[2].Value
@@ -169,7 +191,7 @@ $ideRx = [regex]':(\d+(?:/\d+)*)'
 $fileRefRx = [regex]'`[A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml):\d'
 $malformed = 0
 foreach ($doc in $docs) {
-  $docPath = Join-Path $root $doc
+  $docPath = Resolve-DocPath $doc
   if (-not (Test-Path $docPath)) { continue }
   $ln = 0
   foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
@@ -195,7 +217,7 @@ $combinedRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):(\d+
 $bareChecked = 0
 $bareUnresolved = 0
 foreach ($doc in $docs) {
-  $docPath = Join-Path $root $doc
+  $docPath = Resolve-DocPath $doc
   foreach ($line in [System.IO.File]::ReadAllLines($docPath)) {
     if ($line -notmatch '`:') { continue }
     $currentFile = $null
@@ -356,7 +378,7 @@ $bareAnyRx = [regex]'`:(\d+(?:/\d+)*)(?:-\d+)?`'
 $fileOnLineRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):'
 
 foreach ($doc in $docs) {
-  $docPath = Join-Path $root $doc
+  $docPath = Resolve-DocPath $doc
   foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
     # 1) 完整锚点：`path:N`（label）
     foreach ($m in $labelRx.Matches($line)) {
@@ -402,7 +424,7 @@ if ($skipList.Count -gt 0) {
 # 现在两头都要校验：
 #   - 文档里有、锁里没有 → UNLOCKED（锚点没纳入比对，等于没防漂移）
 #   - 锁里有、文档里没有 → STALE（锁过期，说明没跟上文档，需要重跑 -UpdateAnchors）
-$lockPath = Join-Path $root 'docs/parity-anchors.lock'
+$lockPath = Resolve-DocPath 'docs/parity-anchors.lock'
 $lockLines = New-Object System.Collections.Generic.List[string]
 
 # 与校验阶段完全相同的锚点扫描（含裸行号），保证「锁的键集合」== 「文档锚点集合」。
@@ -422,7 +444,7 @@ function Add-LockEntry([string]$rel, [int]$start) {
 }
 
 foreach ($doc in $docs) {
-  $docPath = Join-Path $root $doc
+  $docPath = Resolve-DocPath $doc
   foreach ($line in [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)) {
     # 1) 完整锚点：`path:N`（含 1-9 区间与 1/2/3 多位置写法）
     foreach ($m in $rx.Matches($line)) {
@@ -477,7 +499,12 @@ if ($UpdateAnchors) {
     }
     $lockLines = @($merged.Keys | Sort-Object | ForEach-Object { "$_|$($merged[$_])" })
   }
-  [System.IO.File]::WriteAllLines($lockPath, $lockLines, (New-Object System.Text.UTF8Encoding($false)))
+  # 写回**工作区**，不是基线目录。
+  # $lockPath 现在走 Resolve-DocPath，在 -Baseline Head 下会指向临时目录，
+  # 写到那里等于写完就被 Remove-BaselineDir 删掉，还报一句「已重建」——比不写更坏。
+  # 锁是要提交的产物，只能落在仓库里。
+  $lockOut = Join-Path $root 'docs/parity-anchors.lock'
+  [System.IO.File]::WriteAllLines($lockOut, $lockLines, (New-Object System.Text.UTF8Encoding($false)))
   Write-Output "anchor lock rewritten: $($lockLines.Count) entries (本次可达 $($lockLines.Count - $kept)，保留 $kept 条够不到的) -> docs/parity-anchors.lock"
 } elseif (Test-Path $lockPath) {
   $locked = @{}
@@ -515,7 +542,7 @@ if ($UpdateAnchors) {
   Write-Output 'anchor-fingerprint: no lock file yet (run with -UpdateAnchors once)'
 }# --- 状态计数一致性：汇总表数字必须等于明细行实际计数 -------------------------
 # 明细行形如 `| A01 | ... | ✅ | ... |`；按行首 ID 归组，DOMAIN 表同样核对。
-$matrix = [System.IO.File]::ReadAllLines((Join-Path $root 'docs/parity-matrix.md'), [System.Text.Encoding]::UTF8)
+$matrix = [System.IO.File]::ReadAllLines((Resolve-DocPath 'docs/parity-matrix.md'), [System.Text.Encoding]::UTF8)
 $rowRx = [regex]'^\|\s*([A-R])(\d{2})\s*\|'
 $domains = @{}
 $rowTotal = 0
