@@ -67,6 +67,17 @@ text_block    def=24666  ← group_details@21430/21434                    8 行
 
 **行数预期改成区间**：删完 `main.rs` 落在 **26,850–27,350 行**（含 `theme.rs` 的清理与运行状态接回 +10）。拿 `27,327` 当精确值会对不上，因为统计口径（含不含注释行）差 12 行以上。
 
+**`theme.rs` 不按行数验收，改按两向 grep**（删除方案 §6.4 的 609 是「只算函数体 42 行」的口径；实际切割会把每个死函数上方的 `///` 文档注释一并收走，边执行边核必然对不上）。判据改为：
+
+```powershell
+# 该删的全部为 0
+Select-String -Path src\theme.rs -Pattern 'fn set_light\(|fn hairline|fn ink_line|fn subtle_hover|fn accent_border|fn chief|fn bubble_user\(|fn bubble_assistant|fn member_color\(|fn shadow_1\(|RADIUS_COMPOSER|shadow_1\(\)\.len\(\)'
+# 该留的全部 ≥1
+Select-String -Path src\theme.rs -Pattern 'fn shadow_2|fn shadow_3|fn shadow_4|fn ring_4|fn member_color_index|fn bubble_user_ink|fn set_light_runtime|RADIUS_BUBBLE'
+```
+
+实测（D-CUT 工作区）：该删 12 个模式 **全 0**，该留 8 个符号 **全 1**，`theme.rs` 从 651 降到 **597**（删 54 行 = 42 行函数体 + 5 行文档注释 + 7 行空行）。**597 就是通过，不再要求 609。**
+
 **必须保留**（被微信壳 / 设置页 / 弹层共用，删一个就编译失败或静默丢功能）：`kv_row`、`short_id`、`count_members`、`visible_group_members`、`count_bots`、`is_group_prompt`、`model_label`、`notify_background`、`close_or_hide`、`approval_reason_view`、`approval_note`、`member_label`、`selected_ids`、`overlay_center`、`dialog_card`、`switch`、`dialog_field`、`compose_with_quote`、`user_text_with_mentions`、`fenced_code`、`history_attachment_view`、`attachment_chips`、`error_bar`、`current_engine_is_mode`、`attachments_allowed`、`stage_attachment_paths`、`stage_image_bytes`、`start_screenshot_capture`、`toggle_voice_typing`、`remove_attachment`、`empty_state`、`skeleton_rows`、`kit_markdown_el`、`compaction_status_row`、`tool_copy_button`、`tool_actions_row`、`group_memory_section`。完整表 + 微信壳侧调用点见**删除方案 §4**。
 
 ### 2.2 两处必须由本文拍板的判定
