@@ -292,7 +292,9 @@ src/main.rs:22397|.any(|needle| message.contains(needle))
 src/main.rs:2278|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:22930|fn wecom_message_actions(
 src/main.rs:22958|.id(SharedString::from(format!("wecom-copy-{index}")))
-src/main.rs:22980|.id(SharedString::from(format!("wecom-copy-code-{index}")))
+src/main.rs:22968|cx.write_to_clipboard(ClipboardItem::new_string(text));
+src/main.rs:22976|if let Some(code) = fenced_code(text) {
+src/main.rs:22990|cx.write_to_clipboard(ClipboardItem::new_string(code));
 src/main.rs:23003|fn message_actions(
 src/main.rs:23359|const SETTINGS_PAGES: [&str; 17] = [
 src/main.rs:23383|enum SettingsDetail {

@@ -124,7 +124,9 @@ v0.5.0 的目标不是“再抄一个 DS Bot”，而是**把已承诺的能力�
 
 - **AC5（Q-04 动作条出现）**：默认外壳下鼠标悬停任一消息气泡，动作条出现；用户气泡挂右上、助手气泡挂左上，不遮挡正文。
 - **AC6（Q-04 复制生效）**：点「复制」，系统剪贴板内容与消息正文**逐字相等**（含换行）；点「复制代码」时剪贴板等于围栏内代码。
-- **AC7（Q-05 新会话入口）**：默认外壳下三条入口都能开新会话——Ctrl+N、标题栏「+」（`wechat-new-session`）、classic 右栏按钮（`detail-new-session`）；三者共用 `new_session_for_selected`，落盘后重启仍在。
+- **AC7（Q-05 新会话入口）**：**默认外壳三条**都能开新会话——① Ctrl+N（`:6840` `on_new_session_shortcut` → `:6847` 直通 `new_session_for_selected`）；② 标题栏「+」（`:27686` `wechat-new-session` → `:27695` 调同一函数）；③ **命令面板「新会话」**（`:7435` `PaletteCmd::NewSession` → `:7567` 派发；默认壳先点 `composer-plus`（`:28692`）开面板再选它）。三条都落盘（`sessions.save()`），重启后新会话仍在。
+  > **第四条（仅 classic）**：右栏 `detail-new-session`（`:20539`）位于 `fn right_panel`（`:20493`），只有 `classic_shell`（`:25956`）调用 `right_panel`；默认壳走 `chat_info_panel`（`:25992`），里面没有这个按钮。**故它不作为默认壳的判据，只在 `BOT_PILOT_CLASSIC_UI=1` 下验。**
+  > **口径更正（2026-11-25，据源码复核）**：原写法「三者共用 `new_session_for_selected`」对命令面板不成立——`:7567` 是一份**行为等价但独立**的实现（自带 streaming 守卫、`push_history`、`sessions.save()`），未调用 `new_session_for_selected`。功能上三条都能用，但代码是两份，存在漂移风险，去重记 v0.6（与 R6 同源）。
 - **AC8（明确不做）**：默认外壳**不做「引用」**——引用需写回 composer 的引用条，`wecom_composer` 无该 UI，属交互层改动，转 v0.6（矩阵 F10 记 🟡）。
 
 ### P0-3 模型配置
