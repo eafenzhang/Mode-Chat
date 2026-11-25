@@ -24267,7 +24267,16 @@ impl PilotApp {
         // 「⋯ → 运行状态」的只读明细：原先只在 classic 右栏渲染，classic 删除后
         // 接回到这里，否则菜单项点了没有任何反馈（既有缺陷，随 D-CUT 顺手修好）。
         if let Some(detail) = self.chat_detail_panel(window, cx) {
-            body = body.child(ui::section(i18n::t("运行状态"))).child(detail);
+            body = body.child(
+                div()
+                    .id("chat-detail-run")
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(ui::S2))
+                    .child(ui::section(i18n::t("运行状态")))
+                    .child(detail),
+            );
         }
 
         div()

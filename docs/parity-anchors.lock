@@ -294,14 +294,14 @@ src/main.rs:23929|body = body.child(ui::section(i18n::t("待办"))).child(card);
 src/main.rs:24146|.w_full()
 src/main.rs:24203|.id("chat-info-memory-row")
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:24495|let key = self.active_key();
+src/main.rs:24495|.children(self.queue_panel(cx))
 src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24689|if chat.compacting == Some(true) {
-src/main.rs:25354|let chat = self.active_key().and_then(|key| self.chats.get(&key));
-src/main.rs:25442|.id("composer-plus")
-src/main.rs:25447|.when(plus_focused, |el| el.bg(wechat_theme::nav_item_hover_bg()))
-src/main.rs:25454|.items_center()
-src/main.rs:25465|let color = if level == "ask" {
+src/main.rs:24689|.unwrap_or_else(|| author.clone());
+src/main.rs:25354|.into_any_element()
+src/main.rs:25442|.flex_shrink_0()
+src/main.rs:25447|// Q-02：命令面板入口。classic 壳在胶囊左侧有「+」，默认壳之前
+src/main.rs:25454|.track_focus(&plus_focus)
+src/main.rs:25465|.pointer()
 src/main.rs:2797|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2815|fn finish_member(&mut self, member: &str) {
 src/main.rs:2845|struct BotFormState {
