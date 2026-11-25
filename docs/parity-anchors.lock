@@ -257,7 +257,6 @@ src/main.rs:16995|(i18n::t("隐藏").to_string(), false, DetailMenuAction::HideB
 src/main.rs:18367|fn find_dialog_overlay(
 src/main.rs:18588|if let Err(message) = data::delete_group(group_id) {
 src/main.rs:19086|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-src/main.rs:19144|.child("?")
 src/main.rs:19237|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
 src/main.rs:19403|column = column.child(compaction_status_row());
 src/main.rs:19411|if message.kind == MsgKind::Reasoning {
