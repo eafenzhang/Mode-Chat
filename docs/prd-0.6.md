@@ -182,19 +182,24 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 # 期望：命中 1 处（生成 id 的 format!），三条 chip 由它循环产出
 ```
 
-截图（两张，均需在隔离根下拍）：
-- 深色主题：新开一个 Bot 会话，0 条消息 → 有头像、欢迎语、三条建议 chip，点 chip 后文字进输入框且聚焦。
-- 浅色主题：同上。
-- 群聊会话不出现欢迎区（微信壳无「当前 Bot」语义）。
+截图（四张，均需在隔离根下拍）：
+- 深色主题 · 单 Bot：新开一个 Bot 会话，0 条消息 → 有头像、欢迎语、三条建议 chip，点 chip 后文字进输入框且聚焦。
+- 浅色主题 · 单 Bot：同上。
+- 深色主题 · 群聊：新开一个群，0 条消息 → 九宫格成员头像 + 「群名 · N 人」+ 成员名单 + 「成员：…。发消息开始群聊对话；用 @成员名 点名。」
+- 浅色主题 · 群聊：同上。
+
+**群聊空态是 D-CUT 引出的功能回退，不是「本来就没有」**：classic 的 `group_placeholder`（`c93ef4a~1` 的 `main.rs:21439-21460`）随 classic 一起被删了，它调用 `empty_state_badged(Some(channel_avatar(...)), "{group.name} · {count_members}", "成员：…。发消息开始群聊对话；用 @成员名 点名。")`。删掉后微信壳群聊 0 条消息就只剩裸 `div()`。现在（`0f9b4b5`）单 Bot 已修好，**群聊仍白屏**：`wechat_welcome` 的 `bot: Option<&Bot>` 在 `selected_bot()` 返回 `None`（`Selection::Group`）时直接返回空 div。所以 O-1 的验收**单聊、群聊分开记**，只拍单聊会把这个缺口一路带到发版。
 
 **本条属 D3，不属于 D-CUT 的验收**。classic `transcript` 删除后，「0 条消息且 `ready=true`」这条分支在微信壳里返回裸 `div()`（微信壳自身代码，与 classic 无关），屏幕上就是一片空白。**D-CUT 提交时这块空白是预期状态，按空白判阶段 2 失败是误判；D3 做完仍空白才算失败。** 两个阶段的判据分开：
 
 > 行号口径：`if chat.messages.is_empty()` 在 D-CUT 前是第 27783 行、裸 `return div()` 在 27795；D-CUT 后分别是第 24542 行与第 24554 行（`c93ef4a` 起）。**这几个是历史/现状描述，不写成「文件:行号」的锚点形式**——那样会被 parity 当成当前 HEAD 的锚点去校验，而 27783 在 HEAD 上已不存在。
+>
+> **`0f9b4b5` 之后 `:24554` 已不是裸 div**，而是 `return self.wechat_welcome(bot.as_ref(), cx);`，欢迎区实现在 `:24873`、chip id 在 `:24893`。所以本节上面那段「D-CUT 后是裸 div」描述的是 `c93ef4a`~`0f9b4b4` 这段时间的状态。
 
 | 阶段 | 判据 | 空会话截图 |
 | --- | --- | --- |
 | D-CUT（阶段 2） | §3.1 / §3.2 / §3.3 的 grep + §3.6 行数 + §3.7 六道门禁 + 测试数 ≥575 | 不拍；拍了必然是空白，不作判据 |
-| D3（阶段 3） | 本节 grep（`wechat-welcome-suggestion-` ≥1）+ 上面三张截图 | 必拍；空白即失败 |
+| D3（阶段 3） | 本节 grep（`wechat-welcome-suggestion-` ≥1）+ 上面四张截图（单聊深浅 ×2、群聊深浅 ×2） | 必拍；任一路径空白即失败 |
 
 ### 3.5 运行状态面板接回（grep + 截图）
 
@@ -293,7 +298,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
-| **O-1** | 空会话欢迎区 + 三条建议 chip | classic `transcript:19535-19664`（头像 / 欢迎语 / `welcome-suggestion-{i}`）；微信壳 `src/main.rs:24554` 现在是裸 `return div()`，**一片空白**（D-CUT 后行号；删除前为 `:24727`） | 复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` 的 assistant 气泡色；chip 28px 高、`RADIUS_TAG`、hover 用 `wechat_theme::nav_item_hover_bg()`；id 用 `wechat-welcome-suggestion-{i}`；点击 `input.set_content` + 聚焦 | §3.4 的 grep + 深/浅两张截图 | P0（D3） |
+| **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript:19535-19664`（头像 / 欢迎语 / `welcome-suggestion-{i}`）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的 `:21439-21460`：九宫格头像 + 「群名 · N 人」+ 成员名单）。**单聊已完成（`0f9b4b5`）**，`wechat_welcome:24873`、chip id `:24893`；**群聊仍白屏**——`wechat_welcome` 收到 `bot=None` 直接返回空 div | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。**群聊：把 `wechat_welcome` 改成同时接 Bot / Group**（`wechat_transcript:24505-24506` 已取好两者），群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members` / `empty_state_badged`，文案走 `tri!` | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | P0（D3，群聊部分待补） |
 | **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：`src/main.rs:24272` 渲染点，grep `chat-detail-run` = 1 |
 | **O-3** | 工作中状态行的文案分档 | 现状 `:28181-28184` 只有「工作中 / 重试中」两种；DS Bot `cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
@@ -349,7 +354,7 @@ ui_kit.rs  总间距   5   在档   0  档外   5   ← gap(px(2.)) / py(px(1.))
 | 批 | 内容 | 负责 | 前置 | 验证 |
 | --- | --- | --- | --- | --- |
 | **D-CUT** | ① 删 §2.1 第一批（约 2,772 行含注释）+ 五处易漏项（`control_card` / `chat_status` / `status_color` / `two_line` / `text_block`）；② 删第二批（241 行）+ `shell()` 改单分支 + `BOT_PILOT_CLASSIC_UI` 移除；③ 清 `theme.rs` 10 函数 + 2 常量 + `shadow_1` 断言 | 前端 | 删除方案补完五处易漏项与 `theme.rs` 清单 | 每删一组 `cargo check`；本批结束时 §3.1 / §3.2 / §3.3 的 grep 全过，`clippy -D warnings` 0 告警 |
-| **D3** | 搬欢迎区（O-1）+ 接回会话改名入口（§2.4 ①） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（深浅 × 两功能）；O-2 已在 D-CUT 内完成，不再重做 |
+| **D3** | 搬欢迎区（O-1：单聊三 chip + **群聊九宫格/成员名单**）+ 接回会话改名入口（§2.4 ①） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（单聊深浅 ×2、群聊深浅 ×2）；O-2 已在 D-CUT 内完成，不再重做 |
 | **D4** | 文档锚点重指 + 锁重建 + 矩阵 A12 改判 | 产品（锚点语义）+ 架构（重排脚本） | D-CUT / D3 完成 | 删除方案 §7.4 五步；§3.8；矩阵 88/21/27 |
 | **O 批** | O-3 / O-4 / O-5 / O-6 / O-7 | 前端（O-5 先加规则再逐页，见 §5.2） | D4 六道门禁全绿 | §5 各行「验收怎么验」+ §5.2 四步 |
 | **V 批** | 回归验证 + 发布 v0.6.0 | 测试 | O 批完成 | 见目标验收 |
