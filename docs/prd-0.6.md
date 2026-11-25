@@ -162,10 +162,18 @@ Select-String -Path src\main.rs -Pattern 'fn kv_row|fn short_id|fn count_members
 
 ### 3.3 单分支（grep + 代码审读）
 
+**D-CUT 后 `fn shell(` 这个函数已整个删除**，`render` 直接调用 `self.wechat_shell(window, cx)`（`src/main.rs:25764`）。所以单分支的判据改为：
+
 ```powershell
-Select-String -Path src\main.rs -Pattern 'fn shell\(' -Context 0,3
-# 期望函数体只有一行 self.wechat_shell(window, cx)，没有 if/else
+# ① 不存在任何名为 shell 的分支函数
+Select-String -Path src\main.rs -Pattern '^\s+fn shell\('        # 期望 0
+# ② render 里直接进微信壳、没有 if/else 包一层
+Select-String -Path src\main.rs -Pattern 'self\.wechat_shell\(window, cx\)'   # 期望 ≥1
+# ③ 壳名唯一
+Select-String -Path src\*.rs -Pattern 'fn (classic_shell|wecom_shell)'      # 期望 0
 ```
+
+判据：①③ 为 0 且 ② ≥1。**不再要求 `fn shell(` 存在**——留一个空的转发函数反而是多余的间接层。
 
 ### 3.4 欢迎区搬进微信壳（grep + 截图，两条都要）
 
@@ -213,13 +221,13 @@ Select-String -Path src\main.rs -Pattern 'chat-detail-run'
 **D-CUT 实际结果（`c93ef4a`）**：
 
 ```
-src/main.rs    29,919 -> 26,653   (-3,266)
+src/main.rs    29,919 -> 26,662   (-3,257)   ← 含 f904043 补的 chat-detail-run 容器 +9
 src/theme.rs      651 ->    597   (-54)
 src/avatar.rs     281 ->    190   (-91)
-合计                               -3,411 行（另加 8 处 #[allow(dead_code)] 注释）
+合计                                        -3,402 行（另加 10 处 #[allow(dead_code)] 注释）
 ```
 
-`26,653` 比区间下限 `26,850` 低 197 行，原因两条，都不是漏算：
+`26,662` 比区间下限 `26,850` 低 188 行，原因两条，都不是漏算：
 
 1. **`avatar.rs` 不在原清单里**：`bot_avatar` / `channel_avatar` / `unread_dot` / `shell` / `deg` 整条色相头像栈只被 classic 的 `message_row` 使用，微信壳走 `wechat_avatar`（`:22870`）。这 91 行是删干净的结果，清单当时漏统计。
 2. 多处连续双空行合并成一个。
