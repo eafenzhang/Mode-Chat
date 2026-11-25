@@ -1,6 +1,6 @@
 /target
 # 并行编译用的独立 target 目录（主 target 被占用时临时用），不入库
-/target-verify
+/target-*
 /dist
 # 打包用本地工具缓存（NSIS 等），不入库；CI 用 choco install 装
 /.release-tools
