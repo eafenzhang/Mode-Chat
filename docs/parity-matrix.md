@@ -1,7 +1,7 @@
 # ModeChat v0.5.0 对标盘点矩阵（DS Bot v0.3.6 → ModeChat v0.5.0）
 
 > 基准：`D:\Mode Bot\DS-Bot`（v0.3.6，`README.zh.md` + `ds-bot/README.md` + `ds-bot/src/host|client|office`）与本机 DS Bot 实机界面。
-> 被盘点对象：`D:\ModeChat`（v0.5.0，`Cargo.toml:25`，`src/main.rs` 29,758 行）。
+> 被盘点对象：`D:\ModeChat`（v0.5.1，`Cargo.toml:25`，`src/main.rs` 29,919 行）。
 > 证据格式：`源文件:行号`；DS-Bot 侧证据同样给出行号，便于复核。
 > 状态图例：✅ 已有（可用且对得上）｜🟡 半成品（有代码/有界面，但不通、不完整或语义不同）｜❌ 缺失。
 >

@@ -1,7 +1,7 @@
 .github/workflows/release.yml:121|if [ -z "$latest" ]; then
 .github/workflows/release.yml:54|- name: Test
 .github/workflows/release.yml:79|if ($LASTEXITCODE -ne 0) { exit 1 }
-Cargo.toml:25|version = "0.5.0"
+Cargo.toml:25|version = "0.5.1"
 crates/automation-schedule/src/cron.rs:1|//! 五段/六段/七段 cron 解析与下次/上次触发计算。
 crates/automation-schedule/src/cron.rs:49|pub fn parse(pattern: &str) -> Result<Self, String> {
 crates/bots-service/src/lib.rs:59|pub const RETIRED_BOT_PROVIDERS: &[&str] = &["telegram", "webhook", "discord", "
