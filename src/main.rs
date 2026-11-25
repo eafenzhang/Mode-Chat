@@ -6844,6 +6844,14 @@ impl PilotApp {
         cx: &mut Context<Self>,
     ) {
         debug_action("NewSessionShortcut");
+        self.new_session_for_selected(cx);
+    }
+
+    /// Q-05：默认壳标题栏的「新会话」按钮与 Ctrl+N 共用这一份逻辑。
+    ///
+    /// 只在这里保留「生成中不换会话」的守卫（原 `on_new_session_shortcut` 有，
+    /// `detail-new-session` 的闭包版没有），并把旧会话入历史后立刻落盘。
+    fn new_session_for_selected(&mut self, cx: &mut Context<Self>) {
         let Some(bot) = self.selected_bot().cloned() else {
             return;
         };
@@ -21996,6 +22004,8 @@ fn wecom_row_el(
     weak: &gpui::WeakEntity<PilotApp>,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    // Q-04：动作条的悬停分组按行号取，跨渲染稳定。
+    let hover_group: gpui::SharedString = format!("wecom-msg-{index}").into();
     match row {
         WecomRow::LoadEarlier { key, hidden } => {
             let key = key.clone();
@@ -22043,6 +22053,8 @@ fn wecom_row_el(
             attachment_meta,
             find_hit,
         } => div()
+            .relative()
+            .group(hover_group.clone())
             .w_full()
             .flex()
             .justify_end()
@@ -22077,6 +22089,14 @@ fn wecom_row_el(
                         cx,
                     )),
             )
+            // 用户气泡靠右，空位在左侧 → 动作条挂左边。
+            .child(wecom_message_actions(
+                index,
+                text,
+                weak,
+                false,
+                &hover_group,
+            ))
             .into_any_element(),
         WecomRow::Assistant {
             text,
@@ -22124,6 +22144,8 @@ fn wecom_row_el(
             cell = cell.child(bubble);
             // 群聊不再显示头像，只保留气泡上方的成员名称。
             div()
+                .relative()
+                .group(hover_group.clone())
                 .w_full()
                 .flex()
                 .items_start()
@@ -22131,6 +22153,14 @@ fn wecom_row_el(
                     el.rounded(px(theme::RADIUS_CHIP)).bg(theme::accent_soft())
                 })
                 .child(cell)
+                // 助手气泡靠左，空位在右侧 → 动作条挂右边。
+                .child(wecom_message_actions(
+                    index,
+                    text,
+                    weak,
+                    true,
+                    &hover_group,
+                ))
                 .into_any_element()
         }
         WecomRow::Reasoning {
@@ -22914,6 +22944,84 @@ fn copy_button(index: usize, text: String, cx: &mut Context<PilotApp>) -> gpui::
         }))
         .child(i18n::t("复制"))
         .into_any_element()
+}
+
+/// Q-04：默认壳（微信风）的消息悬停动作条。
+///
+/// classic 的 `message_actions` 要构建期 `&mut Context<PilotApp>`，而 `wecom_row_el`
+/// 是虚拟列表的纯函数，只拿到 `&mut App`；这里照 `history_attachment_view` 的
+/// 已验证写法，用 `weak.update` 在点击回调里取 Context。
+///
+/// 只做「复制 / 复制代码」：默认壳的 composer 还没有引用条 UI，挂上「引用」
+/// 会让用户点了看不到任何反馈，属于新增 UI，归 v0.6。
+fn wecom_message_actions(
+    index: usize,
+    text: &str,
+    weak: &gpui::WeakEntity<PilotApp>,
+    align_right: bool,
+    hover_group: &gpui::SharedString,
+) -> gpui::AnyElement {
+    let mut bar = div()
+        .absolute()
+        .top(px(0.))
+        .when(align_right, |el| el.right(px(0.)))
+        .when(!align_right, |el| el.left(px(0.)))
+        .opacity(0.)
+        .group_hover(hover_group.clone(), |style| style.opacity(1.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(6.))
+        .py(px(2.))
+        .rounded(px(theme::RADIUS_TAG))
+        .bg(wecom_theme::chip_bg());
+
+    let copy_text = text.to_string();
+    let weak_copy = weak.clone();
+    bar = bar.child(
+        div()
+            .id(SharedString::from(format!("wecom-copy-{index}")))
+            .font_family(wecom_theme::FONT_FAMILY)
+            .text_size(px(ui_kit::T_LABEL))
+            .line_height(px(ui_kit::T_LABEL_LH))
+            .text_color(wecom_theme::time_label())
+            .pointer()
+            .hover(|style| style.text_color(wecom_theme::chat_title()))
+            .on_click(move |_event, _window, cx| {
+                let text = copy_text.clone();
+                let _ = weak_copy.update(cx, |this, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    this.toast(i18n::t("已复制消息"), cx);
+                    cx.notify();
+                });
+            })
+            .child(i18n::t("复制")),
+    );
+
+    if let Some(code) = fenced_code(text) {
+        let weak_code = weak.clone();
+        bar = bar.child(
+            div()
+                .id(SharedString::from(format!("wecom-copy-code-{index}")))
+                .font_family(wecom_theme::FONT_FAMILY)
+                .text_size(px(ui_kit::T_LABEL))
+                .line_height(px(ui_kit::T_LABEL_LH))
+                .text_color(wecom_theme::time_label())
+                .pointer()
+                .hover(|style| style.text_color(wecom_theme::chat_title()))
+                .on_click(move |_event, _window, cx| {
+                    let code = code.clone();
+                    let _ = weak_code.update(cx, |this, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(code));
+                        this.toast(i18n::t("已复制代码"), cx);
+                        cx.notify();
+                    });
+                })
+                .child(i18n::t("复制代码")),
+        );
+    }
+
+    bar.into_any_element()
 }
 
 /// 悬停动作组：引用 + 复制。
@@ -27596,6 +27704,27 @@ impl PilotApp {
                                         )),
                                 )
                             })
+                            // Q-05：默认壳（微信风）原先没有「新会话」入口，只剩 Ctrl+N；
+                            // 群聊没有「当前 Bot」语义，所以按 is_bot_chat 隐藏。
+                            .children(is_bot_chat.then(|| {
+                                div()
+                                    .id("wechat-new-session")
+                                    .size(px(28.))
+                                    .rounded(px(theme::RADIUS_TAG))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .pointer()
+                                    .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.new_session_for_selected(cx);
+                                    }))
+                                    .child(icons::icon(
+                                        icons::Icon::Plus,
+                                        18.,
+                                        wecom_theme::icon(),
+                                    ))
+                            }))
                             .child(
                                 div()
                                     .id("wechat-more")
