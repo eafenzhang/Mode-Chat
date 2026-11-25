@@ -422,7 +422,16 @@ if ($UpdateAnchors) {
       if ($i -le 0) { continue }
       $k = $l.Substring(0, $i)
       if ($merged.ContainsKey($k)) { continue }
-      if ($lockSeen.ContainsKey($k)) { continue }  # 文档里已删除 -> 真的作废，丢弃
+      if ($lockSeen.ContainsKey($k)) { continue }
+      # 到这里有两种可能，必须分开处理，否则锁会越滚越大：
+      #   (a) 文件在本机解析得到 -> 文档里这个锚点真的没了（被重排/删掉），作废丢弃；
+      #   (b) 文件解析不到 -> 外部对照树没配，够不到 ≠ 不存在，原样保留。
+      # 只按 "在不在 $lockSeen" 判断是不够的：$lockSeen 只记录**本次真扫到**的锚点，
+      # 外部树够不到时也不会进去，会被误当成 (a) 删掉；(a)(b) 混在一起又会让
+      # 重排后的旧行号永远赖在锁里（实测 451 条里有 39 条是这种死锚点）。
+      $j = $k.LastIndexOf(':')
+      $kf = if ($j -gt 0) { $k.Substring(0, $j) } else { $k }
+      if (Resolve-Path3 $kf) { continue }
       $merged[$k] = $l.Substring($i + 1)
       $kept++
     }
