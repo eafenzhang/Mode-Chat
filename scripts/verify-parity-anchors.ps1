@@ -60,6 +60,16 @@ if ($Baseline -eq 'Head') {
 } else {
   Write-Output 'baseline: working tree'
 }
+# 这个临时基线目录每次运行都会导出 src/ + crates/（约 3.5MB），跑完必须删。
+# 原来只在开头 New-Item、从不删：本机攒了 137 个目录 / 475MB 才发现。
+# 因为脚本末尾有 `exit 1` 分支，用 try/finally 包住整段不现实，
+# 改成在**两个出口**都调一次（正常结束、以及 exit 1 之前），并加一个退出钩子兜底。
+function Remove-BaselineDir {
+  if ($script:baselineDir -and (Test-Path $script:baselineDir)) {
+    Remove-Item -LiteralPath $script:baselineDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  $script:baselineDir = $null
+}
 $rootOrder = if ($baselineDir) { @($baselineDir) + $roots } else { $roots }
 
 # Anchors look like `path/file.ext:12` or `path/file.ext:12-34`.
@@ -581,9 +591,11 @@ foreach ($line in $matrix) {
 }
 
 if ($bad.Count -eq 0) {
+  Remove-BaselineDir
   Write-Output 'RESULT: all anchors resolve, summary counts consistent'
 } else {
   Write-Output "RESULT: $($bad.Count) problem(s)"
   $bad | ForEach-Object { Write-Output "  $_" }
+  Remove-BaselineDir
   exit 1
 }
