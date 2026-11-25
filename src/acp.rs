@@ -540,6 +540,8 @@ async fn handle_agent_request(
                 risk: String::new(),
                 options,
                 member: None,
+                // 外部 ACP 引擎自己管权限，隐私越界标记只对内置引擎有意义。
+                privacy: false,
             }));
         }
         "elicitation/create" => {

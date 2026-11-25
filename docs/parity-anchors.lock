@@ -83,22 +83,20 @@ src/automations.rs:101|
 src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
-src/backend.rs:1259|EngineChoice::Acp(command) => {
-src/backend.rs:1286|&workspace
-src/backend.rs:1370|if let SessionEngine::Rpi(session) = &ctx.engine
-src/backend.rs:1409|member: None
-src/backend.rs:1417|team_turns.insert(spec.group_key.clone(), Arc::clone(&team_turn));
-src/backend.rs:1428|})
-src/backend.rs:1601|memory: crate::data::group_memory_context(
-src/backend.rs:1911|mode: "continue".to_string()
-src/backend.rs:1919|session.send(prompt, Vec::new()).await;
-src/backend.rs:317|key: &str
-src/backend.rs:335|let (context_window, _) = crate::model_limits::resolve(&limits);
-src/backend.rs:353|extra_tools.extend(crate::bot_tools::tools(identity));
-src/backend.rs:441|std::io::stdout().flush().ok();
-src/backend.rs:442|}
-src/backend.rs:557|AskBot {
-src/backend.rs:565|PostGroup {
+src/backend.rs:1259|} => {
+src/backend.rs:1436|let internal = member_session_key(&spec.group_key, &member.member_id);
+src/backend.rs:1541|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
+src/backend.rs:1551|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
+src/backend.rs:1601|addressed_by_user
+src/backend.rs:1911|memory: spec.info.memory.clone()
+src/backend.rs:1919|let session = Arc::clone(session);
+src/backend.rs:320|async fn open_rpi_session(
+src/backend.rs:335|let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, w
+src/backend.rs:353|// 记忆回顾是隐藏的 JSON 任务，不给控制类工具，也不给记忆写入工具。
+src/backend.rs:441|pub(crate) fn v4_selftest_delta(text: &str) {
+src/backend.rs:442|if v4_selftest() {
+src/backend.rs:557|/// 立即压缩上下文（命令面板「立即压缩」，W4）。
+src/backend.rs:565|text: String
 src/bot_icon.rs:1|//! Bot 图标 + 颜色：面罩机器人 9 表情，全局按 Bot id 存一份外观。
 src/bot_tools.rs:103|"post_to_group"
 src/bot_tools.rs:58|pub fn tools(identity: &str) -> Vec<HarnessTool> {
@@ -163,59 +161,59 @@ src/im_service.rs:153|/// 扫码渠道：微信（iLink）或企业微信（智�
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10173|"schedule-when-{}"
-src/main.rs:10480|None => {
+src/main.rs:10186|"schedule-when-{}"
+src/main.rs:10493|None => {
 src/main.rs:1058|input: Entity<SimpleInput>
-src/main.rs:10945|SettingsDetail::AutomationHistory { title, runs } => {
-src/main.rs:11661|.filter(|bot| !bot.is_private)
-src/main.rs:11767|let draft = data::GroupDraft {
-src/main.rs:11944|.map(|bot| bot.identity())
-src/main.rs:12042|fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement
-src/main.rs:12231|let archives = crate::privacy::archived_private_bots();
-src/main.rs:12761|wecom_theme::send_enabled()
-src/main.rs:13475|"暂未接入插件宿主；MCP 连接器见「连接器」。"
-src/main.rs:13550|fn settings_page_local_agents(&self, cx: &mut Context<Self>) -> gpui::AnyElement
-src/main.rs:13688|fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-src/main.rs:14045|settings_row(tri!("{}（群聊）", "{} (group chat)", group.name), None)
-src/main.rs:14345|.id("im-create-submit")
-src/main.rs:14529|div()
-src/main.rs:14722|this.im_selected = Some(row_id.clone());
-src/main.rs:14747|.into_any_element();
-src/main.rs:14841|let button_id = SharedString::from(format!("im-group-activation-{label}"));
-src/main.rs:15072|Ok(()) => {
-src/main.rs:15277|fn settings_page_team_memory(&self, cx: &mut Context<Self>) -> gpui::AnyElement 
-src/main.rs:15507|let action_label = if on {
+src/main.rs:10958|SettingsDetail::AutomationHistory { title, runs } => {
+src/main.rs:11674|.filter(|bot| !bot.is_private)
+src/main.rs:11780|let draft = data::GroupDraft {
+src/main.rs:11957|.map(|bot| bot.identity())
+src/main.rs:12055|fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement
+src/main.rs:12244|let archives = crate::privacy::archived_private_bots();
+src/main.rs:12774|wecom_theme::send_enabled()
+src/main.rs:13488|"暂未接入插件宿主；MCP 连接器见「连接器」。"
+src/main.rs:13563|fn settings_page_local_agents(&self, cx: &mut Context<Self>) -> gpui::AnyElement
+src/main.rs:13701|fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+src/main.rs:14058|settings_row(tri!("{}（群聊）", "{} (group chat)", group.name), None)
+src/main.rs:14358|.id("im-create-submit")
+src/main.rs:14542|div()
+src/main.rs:14735|this.im_selected = Some(row_id.clone());
+src/main.rs:14760|.into_any_element();
+src/main.rs:14854|let button_id = SharedString::from(format!("im-group-activation-{label}"));
+src/main.rs:15085|Ok(()) => {
+src/main.rs:15290|fn settings_page_team_memory(&self, cx: &mut Context<Self>) -> gpui::AnyElement 
+src/main.rs:15520|let action_label = if on {
 src/main.rs:1603|format!("goal-stage-pass-{index}")
-src/main.rs:16048|SharedString::from(format!("usage-range-{days}"))
-src/main.rs:16071|SharedString::from(format!("usage-group-{mode}"))
-src/main.rs:16149|let mut columns = div().flex().items_end().gap(px(ui::S2)).h(px(132.));
-src/main.rs:17690|.child(i18n::t("本机 · Mode Bot"))
-src/main.rs:18488|bot_id: &str
-src/main.rs:18835|bot.role.clone()
-src/main.rs:19131|Some(
-src/main.rs:19208|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:19596|.text_color(theme::ink())
-src/main.rs:19599|.children((!role.is_empty()).then(|| {
-src/main.rs:19660|for (index, message) in messages.iter().enumerate().skip(start) {
-src/main.rs:19703|false
-src/main.rs:19726|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
-src/main.rs:19787|fn current_engine_is_acp(&self) -> bool {
-src/main.rs:19824|mime
-src/main.rs:19899|Ok(bytes) => {
-src/main.rs:19970|let Some(key) = self.active_key() else {
-src/main.rs:20973|fn bot_details(
-src/main.rs:21142|.id("bot-details-memory-row")
-src/main.rs:21157|this.settings_detail = Some(SettingsDetail::BotMemory {
-src/main.rs:21811|this.select_group(index, cx);
-src/main.rs:21829|.border_2()
-src/main.rs:21849|.children(status_dot_color(entry.status).map(|color| {
-src/main.rs:21871|.text_color(preview_color)
+src/main.rs:16061|SharedString::from(format!("usage-range-{days}"))
+src/main.rs:16084|SharedString::from(format!("usage-group-{mode}"))
+src/main.rs:16162|let mut columns = div().flex().items_end().gap(px(ui::S2)).h(px(132.));
+src/main.rs:17703|.child(i18n::t("本机 · Mode Bot"))
+src/main.rs:18501|bot_id: &str
+src/main.rs:18848|bot.role.clone()
+src/main.rs:19144|Some(
+src/main.rs:19221|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
+src/main.rs:19609|.text_color(theme::ink())
+src/main.rs:19612|.children((!role.is_empty()).then(|| {
+src/main.rs:19673|for (index, message) in messages.iter().enumerate().skip(start) {
+src/main.rs:19716|false
+src/main.rs:19739|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
+src/main.rs:19800|fn current_engine_is_acp(&self) -> bool {
+src/main.rs:19837|mime
+src/main.rs:19912|Ok(bytes) => {
+src/main.rs:19983|let Some(key) = self.active_key() else {
+src/main.rs:20986|fn bot_details(
+src/main.rs:21155|.id("bot-details-memory-row")
+src/main.rs:21170|this.settings_detail = Some(SettingsDetail::BotMemory {
+src/main.rs:21824|this.select_group(index, cx);
+src/main.rs:21842|.border_2()
+src/main.rs:21862|.children(status_dot_color(entry.status).map(|color| {
+src/main.rs:21884|.text_color(preview_color)
 src/main.rs:2274|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:23015|div()
-src/main.rs:23262|"密钥"
-src/main.rs:23273|///
-src/main.rs:23327|AddModel {
-src/main.rs:23362|/// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
+src/main.rs:23028|div()
+src/main.rs:23275|"密钥"
+src/main.rs:23286|///
+src/main.rs:23340|AddModel {
+src/main.rs:23375|/// 设置页在侧栏固定后的图标（与页面语义对应；`更多/未知` 用省略号兜底）。
 src/main.rs:2458|bots: Vec<(String, String, String)>
 src/main.rs:2488|if let Some(index) =
 src/main.rs:2522|.flex()
@@ -227,23 +225,23 @@ src/main.rs:3865|gpui::ListAlignment::Top
 src/main.rs:3871|update_checking: false
 src/main.rs:4259|.filter(|bot| !bot.is_private)
 src/main.rs:4450|&group_id
-src/main.rs:4538|.filter(|bot| !bot.is_private)
-src/main.rs:4654|chat.compacting = Some(active);
-src/main.rs:4671|SessionEvent::Ready {
-src/main.rs:5318|let attachments = std::mem::take(&mut chat.pending_attachments);
-src/main.rs:5459|.filter(|bot| !bot.is_private)
-src/main.rs:6023|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:4551|.filter(|bot| !bot.is_private)
+src/main.rs:4667|chat.compacting = Some(active);
+src/main.rs:4684|SessionEvent::Ready {
+src/main.rs:5331|let attachments = std::mem::take(&mut chat.pending_attachments);
+src/main.rs:5472|.filter(|bot| !bot.is_private)
+src/main.rs:6036|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
 src/main.rs:703|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7063|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
-src/main.rs:7307|fn jump_to_hit(&mut self, hit: &session_db::SearchHit, cx: &mut Context<Self>) {
-src/main.rs:7402|/// 命令面板的候选（静态动作 + 当前名册里的 Bot/群聊）。
+src/main.rs:7076|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut Window, cx: &mut C
+src/main.rs:7320|fn jump_to_hit(&mut self, hit: &session_db::SearchHit, cx: &mut Context<Self>) {
+src/main.rs:7415|/// 命令面板的候选（静态动作 + 当前名册里的 Bot/群聊）。
 src/main.rs:748|User
-src/main.rs:8343|.border_1()
-src/main.rs:8579|.filter(|bot| !bot.is_private)
+src/main.rs:8356|.border_1()
+src/main.rs:8592|.filter(|bot| !bot.is_private)
 src/main.rs:866|queued: Vec<QueuedSend>
-src/main.rs:9505|SettingsDetail::ModelLimits {
-src/main.rs:9749|SettingsDetail::BotMemory { bot_id } => {
-src/main.rs:9792|scope: MemoryScope::Bot(bot_id.clone())
+src/main.rs:9518|SettingsDetail::ModelLimits {
+src/main.rs:9762|SettingsDetail::BotMemory { bot_id } => {
+src/main.rs:9805|scope: MemoryScope::Bot(bot_id.clone())
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
@@ -255,20 +253,20 @@ src/model_limits.rs:20|pub const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 src/model_limits.rs:22|pub const FALLBACK_MAX_TOKENS: i64 = 16_384;
 src/privacy.rs:201|pub fn precheck(
 src/privacy.rs:80|pub fn archive_private_bot(id: &str, name: &str, directory: &str) -> Result<(), 
-src/rpi_engine.rs:1021|pub async fn open(options: OpenOptions) -> Result<Self, String> {
-src/rpi_engine.rs:1073|serde_json::Value::String(bot_id.clone())
-src/rpi_engine.rs:1090|.await
-src/rpi_engine.rs:1148|let mut compaction_watch = harness.events().watch(|| ());
-src/rpi_engine.rs:1350|pub fn history_entries(path: &str) -> Vec<crate::backend::HistoryEntry> {
+src/rpi_engine.rs:1021|_compaction_watch: rpi_harness::events::WatchHandle<()>
+src/rpi_engine.rs:1073|// 会话 header 带 botId/botName（W9）：用量按 Bot 分组要用。
+src/rpi_engine.rs:1090|.create_typed(&JsonlSessionCreateOptions {
+src/rpi_engine.rs:1148|let member_for_events = options.member.clone();
+src/rpi_engine.rs:1350|atomic_file::write_text_atomic(
 src/rpi_engine.rs:144|let limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
 src/rpi_engine.rs:147|model.max_tokens = max_tokens.max(1) as u64;
-src/rpi_engine.rs:1510|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
-src/rpi_engine.rs:1549|collect_search(&path, needle, limit, private_workspaces, out);
-src/rpi_engine.rs:1666|pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
-src/rpi_engine.rs:1705|pub fn usage_grouped(days: usize) -> GroupedUsage {
-src/rpi_engine.rs:1709|let cutoff_day = crate::time::format_day(since);
-src/rpi_engine.rs:1755|cutoff_day: &str
-src/rpi_engine.rs:1771|let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+src/rpi_engine.rs:1510|at
+src/rpi_engine.rs:1549|for entry in entries.flatten() {
+src/rpi_engine.rs:1676|pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
+src/rpi_engine.rs:1705|/// 扫描范围内的会话数（UI 用来判断"有没有数据"）。
+src/rpi_engine.rs:1709|/// 按天 / 按 Bot / 按模型一次性聚合最近 `days` 天的用量。
+src/rpi_engine.rs:1765|cutoff_day: &str
+src/rpi_engine.rs:1771|) {
 src/rpi_engine.rs:188|pub fn thinking_level_for(spec: &ModelSpec) -> ThinkingLevel {
 src/rpi_engine.rs:226|pub fn private_bot_id(identity: &str) -> Option<String> {
 src/rpi_engine.rs:314|fn sessions_root() -> PathBuf {
@@ -276,13 +274,11 @@ src/rpi_engine.rs:325|pub fn system_prompt_for(workspace: &Path) -> String {
 src/rpi_engine.rs:333|pub fn system_prompt_for_bot(workspace: &Path, bot_id: Option<&str>, context_win
 src/rpi_engine.rs:351|let own = crate::data::bot_memory_context(bot_id, budget);
 src/rpi_engine.rs:357|prompt
-src/rpi_engine.rs:381|pending: Mutex<HashMap<String, PendingApproval>>
+src/rpi_engine.rs:409|pub fn hook(self: &Arc<Self>) -> BeforeToolCall {
 src/rpi_engine.rs:433|return None;
 src/rpi_engine.rs:437|let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref
-src/rpi_engine.rs:446|.ask_permission(
-src/rpi_engine.rs:455|}
-src/rpi_engine.rs:485|lowered.as_str()
-src/rpi_engine.rs:503|self.ask_permission(
+src/rpi_engine.rs:485||| matches!(
+src/rpi_engine.rs:523|tool_name: &str
 src/schedule_builder.rs:19|pub enum When {
 src/schedule_builder.rs:56|pub fn to_request(when: &When, now_ms: i64, offset_secs: i32) -> Result<Schedule
 src/secrets.rs:28|pub fn path(data_root: &Path) -> PathBuf {

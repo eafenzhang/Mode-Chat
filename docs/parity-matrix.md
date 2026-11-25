@@ -45,10 +45,10 @@
 | --- | --- | --- | --- | --- | --- |
 | C01 | 群聊增删改（成员/目录/策略） | `README.zh.md:74` | ✅ | `src/data.rs:1824`（`create_group`）/`:1843`（`update_group`）/`:1876`（`delete_group`）、`src/main.rs:11780`（`GroupDraft` 构造）/`:18559`（`delete_group` 调用） | 无 |
 | C02 | 群聊共享工作目录生效于所有成员 | `ds-bot/README.md`（group folder） | ✅ | `src/data.rs:62`（`directory`）；建成员会话时群目录优先：`src/main.rs:3865-3871` | 无（改群目录后已建会话需重进，属可接受） |
-| C03 | 管理员先答 / 全员轮流（responder_policy） | `ds-bot/README.md`（admin-first / all-members） | ✅ | `src/backend.rs:1417-1428` | 无 |
-| C04 | @ 点名（含 @所有人、边界规则） | `ds-bot/src/shared/mentions.js` | ✅ | `src/backend.rs:1409`（bot_team::mentions::parse_mentions）、`crates/bot-team/src/mentions.rs:110` | 无 |
+| C03 | 管理员先答 / 全员轮流（responder_policy） | `ds-bot/README.md`（admin-first / all-members） | ✅ | `src/backend.rs:1551`（`responder_policy` 路由）/`:2001`（`choose_members`） | 无 |
+| C04 | @ 点名（含 @所有人、边界规则） | `ds-bot/src/shared/mentions.js` | ✅ | `src/backend.rs:1541`（bot_team::mentions::parse_mentions）、`crates/bot-team/src/mentions.rs:110` | 无 |
 | C05 | 成员无事可说时静默（`[PASS]`） | `ds-bot/src/host/groups.js`（[PASS]） | 🟡 | `crates/bot-team/src/mentions.rs:110`（is_pass_reply）、`crates/bot-team/src/orchestration.rs:85` | 判定函数存在，群回合是否吞掉回复未接（需实测确认） 〔降级 v0.5 保持现状〕 |
-| C06 | 每成员每群一个独立隐藏会话 | `ds-bot/README.md`（hidden Session per group） | ✅ | `src/backend.rs:1286-1370`、`:2094`（`member_session_key`） | 无 |
+| C06 | 每成员每群一个独立隐藏会话 | `ds-bot/README.md`（hidden Session per group） | ✅ | `src/backend.rs:1436`（`member_session_key` 首次调用）/`:2096`（函数定义） | 无 |
 | C07 | 群目标 Goal（对齐/阶段/验收） | `ds-bot/src/host/goals.js:670`（group_goal） | ✅ | `src/group_goal.rs:55`（`read`）/`:105`（`write`）/`:117`（`apply`）、`crates/bot-team/src/goal.rs:208`（`migrate_goal`）/`:577`（`render_goal_prompt`）、UI `src/main.rs:1058` | 无 |
 | C08 | 阶段“证据”校验后才推进 | `ds-bot/src/host/goals.js:19`（STAGE_ACCEPTANCE_MAX）、`:760/767`（pass/rework） | ✅ | `crates/bot-team/src/goal.rs:136/142/147`（SetAcceptance/PassStage/ReworkStage）、`:208`（migrate_goal）、`src/team_tools.rs:193/208/223`（三个工具）、UI `src/main.rs:1603`（`goal-stage-pass-<i>`）、`:1629`（`goal-stage-rework-<i>`）、`:1650`（`goal-stage-acceptance-<i>`）、`:1422`（`goal-acceptance-save`）、`:1694`（`goal-stage-error-<i>` 行内错误） | 无 |
 | C09 | 派活台账（子任务 + 负责人 + 期望结果） | `ds-bot/src/host/tools.js:167`、`groups.js` | ✅ | `src/group_tasks.rs:210/253`、`src/team_tools.rs:197`（team_assign） | 无 |
@@ -116,7 +116,7 @@
 | G02 | 每个 Bot 独立 profile（登录态互不干扰、重启保留） | `ds-bot/src/host/browser/session.js`（`bot:<id>` 分区） | ✅ | `src/browser_tools.rs:46`（`session_key`）、`:387`（`profile_dir` 用 `{data_root}/runtime/browser-profiles/<botId>`，去时间戳）、`:33`（`MAX_SESSIONS=4` LRU）、启动前清 `SingletonLock` | 无 |
 | G03 | Cookie 导入（文件 / 本机浏览器） | `ds-bot/src/client/browser-pane.js`（import） | ❌ | `src/browser_tools.rs` 无 cookie 相关代码 | 未入 v0.5 范围（profile 复用已能保留登录态，见 G02） 〔降级 v0.6〕 |
 | G04 | 内嵌浏览器面板（在右栏看页面） | `ds-bot/src/client/browser-pane.js` | ❌ | `src/main.rs:8356` 只有“用系统浏览器打开 URL + 最近 + 已装浏览器列表” | 未入 v0.5 范围 〔降级 v0.6〕 |
-| G05 | 敏感动作需批准（发布/上传/下载/删除） | `ds-bot/src/host/browser/refs.js`、`handoff-card.js` | 🟡 | 全部浏览器工具走统一审批闸门 `src/rpi_engine.rs:446/503` | 无“发布/付款”专项分级，无接管卡片（v0.6） 〔降级 v0.6〕 |
+| G05 | 敏感动作需批准（发布/上传/下载/删除） | `ds-bot/src/host/browser/refs.js`、`handoff-card.js` | 🟡 | 全部浏览器工具走统一审批闸门 `src/rpi_engine.rs:409`（`hook`）/`:504`（`ask_permission`） | 无“发布/付款”专项分级，无接管卡片（v0.6） 〔降级 v0.6〕 |
 | G06 | 浏览器插件（refs/script/task） | `ds-bot/src/host/browser-plugins.js` | ❌ | 无 | 未入 v0.5 范围 〔降级 v0.6〕 |
 
 ## H. 电脑操控（6 项）
@@ -160,7 +160,7 @@
 | --- | --- | --- | --- | --- | --- |
 | K01 | 连接器目录 | `ds-bot/src/host/connectors/catalog.js:20-`（37 个，多数 remote+OAuth） | 🟡 | `crates/connectors-service/src/lib.rs:174`（16 个 stdio 内置）、`:75`（`REMOTE_CATALOG` 8 个 HTTP 远程：huggingface/exa/deepwiki/context7/mslearn/cloudflare-docs/amap/github-copilot）、`:360`（`remote_spec`） | 总数 24（16+8），仍少于 DS 的 37；OAuth 型（GitHub/Gmail/Notion/Drive）不在内，见 K04 〔降级 v0.6（本轮已扩到 24）〕 |
 | K02 | 填连接器密钥 | `ds-bot/src/client/connectors-page.js` | ✅ | `src/main.rs:14058`、`src/main.rs:23286`（ConnectorSecret）、`src/connectors.rs:38` | 无 |
-| K03 | MCP stdio 工具接入（`mcp__<id>__*`） | `ds-bot/src/host/connectors/gateway.js` | ✅ | `src/mcp_host.rs:43/482`、`src/backend.rs:317` | 无 |
+| K03 | MCP stdio 工具接入（`mcp__<id>__*`） | `ds-bot/src/host/connectors/gateway.js` | ✅ | `src/mcp_host.rs:43/482`、`src/backend.rs:320`（`open_rpi_session`）/`:345`（`mcp_host::for_workspace`） | 无 |
 | K04 | OAuth 登录（GitHub / Gmail / Notion / Google Drive） | `ds-bot/src/host/connectors/oauth.js` | ❌ | `src/main.rs:15085` 自认“仍走外部凭据” | 需要 token 手填 〔降级 v0.6〕 |
 | K05 | 邮箱连接器（Gmail/QQ/163） | `ds-bot/src/host/connectors/mail/` | ❌ | 无 | 无 〔降级 v0.6〕 |
 | K06 | 从 Claude Desktop / Cursor / VS Code 导入配置 | `ds-bot/src/client/connectors-page.js`（import） | ❌ | 无 | 无 〔降级 v0.6〕 |
@@ -180,7 +180,7 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1666-1755`、`src/main.rs:14735-14760` | 无 |
+| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1676-1765`、`src/main.rs:14735-14760` | 无 |
 | M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:16061`（`usage-range-{1,7,30,90}` chip）、`src/rpi_engine.rs:1705`（`usage_grouped(days)` 的 `by_day`） | 无 |
 | M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `src/main.rs:16084`（`usage-group-{none,bot,model}` chip）、`src/rpi_engine.rs:1705`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1835`（老会话按 header `cwd` 反查名册兜底） | 无 |
 | M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16061` 四档（1/7/30/90 天）、`src/main.rs:3258`（`usage_range`） | 四档够用；无日历选日、无 12 个月（明确降级，v0.6 再加） 〔降级 v0.6〕 |

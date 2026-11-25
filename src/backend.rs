@@ -170,6 +170,10 @@ pub struct PermissionPrompt {
     pub options: Vec<PromptOption>,
     /// 群聊成员归属（私聊为 None）；卡头标注「来自 X」。
     pub member: Option<String>,
+    /// 隐私越界（访问别人/已归档的目录）。这类卡**不允许被审批档位自动放行**：
+    /// `full` 的语义是「信任这个 Bot 在它自己的范围内行动」，不是「允许它读别人的隐私目录」。
+    /// UI 侧（`main.rs::auto_permission`）见到 true 必须直接返回 None，把卡交给用户。
+    pub privacy: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1750,18 +1754,16 @@ async fn run_agent(
                 let session = Arc::clone(session);
                 let events = events.clone();
                 tokio::spawn(async move {
-                    let message = session.compact().await;
-                    let _ = events.send(BackendEvent::Session {
-                        key,
-                        event: if message.starts_with('✅') {
-                            SessionEvent::UserEcho(message.clone())
-                        } else {
-                            SessionEvent::Error {
-                                member: None,
-                                message: message.clone(),
-                            }
+                    // Ok = 有结论（含「上下文还很短」这种主动跳过），Err = 真失败。
+                    // 曾经这里按 `✅` 前缀判断，把正常的「未压缩」也当错误弹红条（D-08）。
+                    let event = match session.compact().await {
+                        Ok(message) => SessionEvent::UserEcho(message),
+                        Err(message) => SessionEvent::Error {
+                            member: None,
+                            message,
                         },
-                    });
+                    };
+                    let _ = events.send(BackendEvent::Session { key, event });
                 });
             }
             Command::ResetSession { key } => {

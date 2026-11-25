@@ -449,6 +449,7 @@ impl ApprovalGate {
                     crate::privacy::reason_text(&tool_name, &args, &owner),
                     risk,
                     false,
+                    true,
                     signal,
                 )
                 .await;
@@ -506,6 +507,7 @@ impl ApprovalGate {
                     summarize_args(&args),
                     risk,
                     rememberable,
+                    false,
                     signal,
                 )
                 .await
@@ -514,6 +516,8 @@ impl ApprovalGate {
     }
 
     /// 弹一张审批卡并等作答；越界访问与常规审批共用同一条路径。
+    /// `privacy=true` 表示隐私越界，UI 侧不得按档位自动放行（见 `PermissionPrompt::privacy`）。
+    #[allow(clippy::too_many_arguments)]
     async fn ask_permission(
         &self,
         tool_name: &str,
@@ -521,6 +525,7 @@ impl ApprovalGate {
         reason: String,
         risk: &str,
         rememberable: bool,
+        privacy: bool,
         signal: tokio_util::sync::CancellationToken,
     ) -> Option<BeforeToolCallResult> {
         let (tx, rx) = oneshot::channel();
@@ -562,6 +567,7 @@ impl ApprovalGate {
                     options
                 },
                 member: self.member.clone(),
+                privacy,
             }),
         });
         tokio::select! {
@@ -1182,19 +1188,23 @@ impl RpiSession {
         })
     }
 
-    /// 手动压缩上下文（命令面板「立即压缩」）。返回可直接展示的中文文案。
-    pub async fn compact(&self) -> String {
+    /// 手动压缩上下文（命令面板「立即压缩」）。
+    ///
+    /// 返回 `Ok(文案)` = 这一轮正常有了结论（压缩完成、或「上下文还很短」这类
+    /// 主动跳过），`Err(文案)` = 真失败。**别按文案前缀判断成败**：早前调用方
+    /// 只认 `✅` 开头，把「未压缩：上下文还很短」当成错误弹了红条（验收 D-08）。
+    pub async fn compact(&self) -> Result<String, String> {
         use rpi_harness::agent_harness::CompactionOutcome;
         match self.lane.compact(None).await {
             Ok(result) => match result.outcome {
-                CompactionOutcome::Completed { .. } => "✅ 上下文已压缩".to_string(),
-                CompactionOutcome::Declined { .. } => "未压缩：上下文还很短".to_string(),
-                CompactionOutcome::Aborted { .. } => "未压缩：已中止".to_string(),
+                CompactionOutcome::Completed { .. } => Ok("✅ 上下文已压缩".to_string()),
+                CompactionOutcome::Declined { .. } => Ok("未压缩：上下文还很短".to_string()),
+                CompactionOutcome::Aborted { .. } => Ok("未压缩：已中止".to_string()),
                 CompactionOutcome::Failed { error, .. } => {
-                    format!("压缩失败：{}", error.message)
+                    Err(format!("压缩失败：{}", error.message))
                 }
             },
-            Err(error) => format!("压缩失败：{error}"),
+            Err(error) => Err(format!("压缩失败：{error}")),
         }
     }
 
