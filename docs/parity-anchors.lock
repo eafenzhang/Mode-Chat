@@ -210,7 +210,7 @@ src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
 src/main.rs:10115|} => {
 src/main.rs:10187|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
-src/main.rs:1028|EditAllowlist
+src/main.rs:1030|Compact
 src/main.rs:1048|#[derive(Clone, PartialEq, Eq)]
 src/main.rs:10491|"Run history · {title}"
 src/main.rs:10684|&& self.settings_detail_input.is_none()
@@ -257,14 +257,14 @@ src/main.rs:18161|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>)
 src/main.rs:18234|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
 src/main.rs:18382|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
 src/main.rs:18691|fn approval_note(level: &str) -> &'static str {
-src/main.rs:18869|hash = hash
-src/main.rs:19010|let day = time::day_label(entry.at);
+src/main.rs:18862|WecomRow::ToolGroup {
+src/main.rs:19003|fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
 src/main.rs:19218|fn wechat_row_el(
 src/main.rs:19253|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
 src/main.rs:19315|.child(wechat_message_actions(
 src/main.rs:19379|.child(wechat_message_actions(
+src/main.rs:19504|WecomRow::ToolGroup {
 src/main.rs:19510|WecomRow::Compacting => compaction_status_row().into_any_element()
-src/main.rs:19516|text: &str
 src/main.rs:19517|members: &[(String, String)]
 src/main.rs:19653|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
 src/main.rs:19949|fn wechat_message_actions(
@@ -286,7 +286,7 @@ src/main.rs:21584|.items_center()
 src/main.rs:21699|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
 src/main.rs:21701|.selectable(true)
 src/main.rs:2257|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:23000|.map(|chat| chat.unread)
+src/main.rs:22995|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
 src/main.rs:2337|"task-reassign-{}"
 src/main.rs:23713|fn chat_info_panel(&mut self, window: &Window, cx: &mut Context<Self>) -> impl I
 src/main.rs:2380|"task-reassign-{}-{}"
@@ -294,12 +294,14 @@ src/main.rs:23929|body = body.child(ui::section(i18n::t("待办"))).child(card);
 src/main.rs:24146|.w_full()
 src/main.rs:24203|.id("chat-info-memory-row")
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
+src/main.rs:24445|.id("wechat-new-session")
+src/main.rs:24454|this.new_session_for_selected(cx);
 src/main.rs:24495|.children(self.queue_panel(cx))
 src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24689|.unwrap_or_else(|| author.clone());
+src/main.rs:24698|if chat.compacting == Some(true) {
 src/main.rs:25354|.into_any_element()
-src/main.rs:25442|.flex_shrink_0()
 src/main.rs:25447|// Q-02：命令面板入口。classic 壳在胶囊左侧有「+」，默认壳之前
+src/main.rs:25451|.id("composer-plus")
 src/main.rs:25454|.track_focus(&plus_focus)
 src/main.rs:25465|.pointer()
 src/main.rs:2797|fn push_member_delta(&mut self, member: &str, delta: &str) {
@@ -308,12 +310,12 @@ src/main.rs:2845|struct BotFormState {
 src/main.rs:2879|let mut icon_tiles: Vec<gpui::AnyElement> = Vec::new();
 src/main.rs:2909|let mut color_swatches: Vec<gpui::AnyElement> = Vec::new();
 src/main.rs:3244|usage_group: usize
-src/main.rs:3608|/// 连续同类工具调用折叠成一组（WebView 的 execute/edit/explore/cua 组）。
+src/main.rs:3609|ToolGroup {
 src/main.rs:3806|first_frame_logged: false
 src/main.rs:4241|Some(directory) => directory.clone()
 src/main.rs:4243|None => backend::fallback_workspace()
 src/main.rs:4533|let chosen = route_group_members(
-src/main.rs:4649|let _ = manual;
+src/main.rs:4646|chat.compacting = Some(active);
 src/main.rs:5204|self.input.update(cx, |input, cx| input.clear(window, cx));
 src/main.rs:5293|fn queue_current(
 src/main.rs:5300|const MAX_QUEUED: usize = 5;
@@ -326,11 +328,15 @@ src/main.rs:6028|fn elicitation_card_el(
 src/main.rs:6368|fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
 src/main.rs:6522|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
 src/main.rs:6535|fn approval_card_el(
+src/main.rs:6813|fn on_new_session_shortcut(
+src/main.rs:6827|fn new_session_for_selected(&mut self, cx: &mut Context<Self>) {
 src/main.rs:701|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
 src/main.rs:7066|return;
 src/main.rs:7098|results.truncate(8);
+src/main.rs:7407|(i18n::t("新会话").to_string(), "Ctrl+N".to_string(), PaletteCmd::NewSession)
 src/main.rs:751|enum MsgKind {
 src/main.rs:753|Reasoning
+src/main.rs:7539|PaletteCmd::NewSession => {
 src/main.rs:7592|PaletteCmd::Compact => {
 src/main.rs:7806|let Some(bot) = self.roster.bots.get(index).cloned() else {
 src/main.rs:7904|cx: &mut Context<Self>
