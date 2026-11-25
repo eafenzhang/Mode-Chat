@@ -349,11 +349,11 @@ fn migrate_pinned_settings(items: &[usize], layout: u64) -> Vec<usize> {
     out
 }
 
-/// 去重、去掉越界页、截断到上限；保持用户添加顺序。
+/// 去重、去掉越界页与内嵌页（浏览器/电脑操控，见下方 `settings_page_in_nav`）、截断到上限；保持用户添加顺序。
 fn normalize_pinned_settings(items: &[usize]) -> Vec<usize> {
     let mut out = Vec::new();
     for &item in items {
-        if item < SETTINGS_PAGES.len() && !out.contains(&item) {
+        if item < SETTINGS_PAGES.len() && settings_page_in_nav(item) && !out.contains(&item) {
             out.push(item);
             if out.len() == MAX_PINNED_SETTINGS {
                 break;
@@ -9192,7 +9192,7 @@ impl PilotApp {
             .py(px(16.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             // 浏览器 / 电脑操控已并入「插件」页，不单独占菜单项。
-            if index == 14 || index == 15 {
+            if !settings_page_in_nav(index) {
                 continue;
             }
             let active = self.settings_tab == index;
@@ -23484,6 +23484,19 @@ fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     }
 }
 
+/// 已并入「插件」页、不再单独占导航的设置页下标（浏览器 / 电脑操控）。
+///
+/// 这两页的内容由 `settings_page_plugins` 以内嵌卡片渲染，导航里故意不列。
+/// 用常量 + `settings_page_in_nav` 而不是两处 `index == 14 || index == 15` 硬编码：
+/// 导航在桌面侧栏（`settings_nav`）和微信风侧栏各写一遍，硬编码写歪一处就会出现
+/// 「`SETTINGS_PAGES` 17 项、侧栏只有 15 个入口」的不一致（验收 D-03）。
+const EMBEDDED_SETTINGS_PAGES: [usize; 2] = [14, 15];
+
+/// 该设置页是否在导航里单列（内嵌页返回 false）。
+fn settings_page_in_nav(index: usize) -> bool {
+    !EMBEDDED_SETTINGS_PAGES.contains(&index)
+}
+
 /// 设置页骨架：页标题 + 纵向间距（调用方继续 `.child` 内容）。
 fn settings_page_body(_title: &'static str) -> gpui::Div {
     // 统一到 ui_kit：页标题由设置壳渲染，页面只排内容（间距 S4）。
@@ -26481,7 +26494,7 @@ impl PilotApp {
                 .gap(px(2.));
         for (index, label) in SETTINGS_PAGES.iter().enumerate() {
             // 浏览器 / 电脑操控已并入「插件」页，不再单独占菜单项。
-            if index == 14 || index == 15 {
+            if !settings_page_in_nav(index) {
                 continue;
             }
             let active = self.settings_tab == index;
@@ -29391,6 +29404,40 @@ mod prefs_tests {
         // 群聊(5) 在任何旧版本都并入 Bot团队(4)。
         assert_eq!(migrate_pinned_settings(&[5], 3), vec![4]);
         assert_eq!(migrate_pinned_settings(&[5], 2), vec![4]);
+    }
+
+    /// 验收 D-03：导航项数必须等于「声明页数 - 内嵌页数」。
+    ///
+    /// 曾经两处导航各自写 `index == 14 || index == 15`，一旦有一处写歪，
+    /// 侧栏项数就和 `SETTINGS_PAGES` 对不上，却没有任何测试会红。
+    #[test]
+    fn settings_nav_lists_every_page_except_embedded() {
+        let nav: Vec<usize> = (0..SETTINGS_PAGES.len())
+            .filter(|index| settings_page_in_nav(*index))
+            .collect();
+        assert_eq!(
+            nav.len(),
+            SETTINGS_PAGES.len() - EMBEDDED_SETTINGS_PAGES.len()
+        );
+        assert_eq!(nav.len(), 15);
+        assert!(
+            !nav.contains(&14) && !nav.contains(&15),
+            "浏览器/电脑操控由插件页内嵌，不该单独占导航"
+        );
+        // 内嵌页必须真的是这两页，否则「跳过」的就是别的功能。
+        assert_eq!(SETTINGS_PAGES[14], "浏览器");
+        assert_eq!(SETTINGS_PAGES[15], "电脑操控");
+    }
+
+    /// 固定的设置页必须落在导航里：内嵌页固定出来只会是重复图标。
+    #[test]
+    fn pinned_settings_skip_embedded_pages() {
+        assert_eq!(normalize_pinned_settings(&[14, 15, 11]), vec![11]);
+        // 上限 5 条也只数导航页：14/15 不该占名额。
+        assert_eq!(
+            normalize_pinned_settings(&[14, 15, 0, 1, 2, 3, 4, 5]),
+            vec![0, 1, 2, 3, 4]
+        );
     }
 }
 
