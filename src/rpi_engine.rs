@@ -190,10 +190,8 @@ pub fn thinking_level_for(spec: &ModelSpec) -> ThinkingLevel {
 }
 
 fn teammate_record(identity: &str, workspace: &str) -> Option<serde_json::Value> {
-    let id = identity
-        .strip_prefix("mode-bot:teammate:")
-        .unwrap_or(identity)
-        .trim();
+    // 私聊与群成员两种身份都要能定位到同一条记录；定位不到时退回按工作目录匹配。
+    let id = bot_id_from_identity(identity).unwrap_or_default();
     let path = crate::data::data_root()
         .join("v2")
         .join("teammates.json");
@@ -204,7 +202,7 @@ fn teammate_record(identity: &str, workspace: &str) -> Option<serde_json::Value>
         .iter()
         .find(|item| {
             (!id.is_empty()
-                && item.get("id").and_then(|value| value.as_str()) == Some(id))
+                && item.get("id").and_then(|value| value.as_str()) == Some(id.as_str()))
                 || item
                     .get("directory")
                     .and_then(|value| value.as_str())
@@ -214,12 +212,27 @@ fn teammate_record(identity: &str, workspace: &str) -> Option<serde_json::Value>
 }
 
 /// 该 Bot 的审批档位与白名单（读同一份 teammates.json）。
-/// `mode-bot:teammate:<id>` → Bot id（用于审批白名单落盘）。
+///
+/// 身份 → Bot id（用于审批白名单、隐私归属、记忆注入）。两种形态都要认：
+/// - 私聊：`mode-bot:teammate:<id>`
+/// - 群成员：`mode-bot:group:<gid>:member:<id>`（见 `bot_team::group::group_member_workspace_identity`）
+///
+/// 只认前者会让群成员拿到 `None`，隐私守卫因此判不出「自己的目录」，
+/// 群里读自己的文件也会弹越界卡，记忆工具和记忆注入一并静默消失。
 pub fn bot_id_from_identity(identity: &str) -> Option<String> {
-    identity
+    let identity = identity.trim();
+    if let Some(id) = identity
         .strip_prefix("mode-bot:teammate:")
         .filter(|id| !id.trim().is_empty())
-        .map(str::to_string)
+    {
+        return Some(id.to_string());
+    }
+    // 群成员：取 `:member:` 之后那一段（群 id 里可能自带冒号，用 rsplit 从右取）。
+    let (prefix, member) = identity.rsplit_once(":member:")?;
+    if !prefix.starts_with("mode-bot:group:") || member.trim().is_empty() {
+        return None;
+    }
+    Some(member.to_string())
 }
 
 /// 隐私 Bot 的 id（只有 `mode-bot:teammate:<id>` 且记录了 isPrivate=true 才算）。
@@ -436,18 +449,12 @@ impl ApprovalGate {
         // 放在档位判定之前，所以 `full` 档也拦得住（越界不是「信任范围内」）。
         let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref());
         if let Some(owner) = cross_dir {
-            let lowered = tool_name.to_ascii_lowercase();
-            let risk = if matches!(lowered.as_str(), "bash" | "powershell") {
-                "exec"
-            } else {
-                "write"
-            };
             return self
                 .ask_permission(
                     &tool_name,
                     &request_id,
                     crate::privacy::reason_text(&tool_name, &args, &owner),
-                    risk,
+                    risk_of(&tool_name),
                     false,
                     true,
                     signal,
@@ -473,34 +480,7 @@ impl ApprovalGate {
                     lowered.as_str(),
                     "bash" | "shell" | "run_command"
                 ) && !lowered.starts_with("mcp__");
-                let risk = if lowered == "bash"
-                    || lowered == "powershell"
-                    || lowered.starts_with("computer_")
-                    || lowered.starts_with("browser_")
-                {
-                    "exec"
-                } else if lowered == "write"
-                    || lowered == "edit"
-                    || lowered.starts_with("automation_")
-                    || matches!(
-                        lowered.as_str(),
-                        "team_assign"
-                            | "team_goal_create"
-                            | "team_goal_stage"
-                            | "team_goal_pass"
-                            | "team_goal_rework"
-                            | "team_goal_acceptance"
-                            | "message_bot"
-                            | "post_to_group"
-                            | "remember"
-                            | "forget"
-                    )
-                    || lowered.starts_with("mcp__")
-                {
-                    "write"
-                } else {
-                    "read"
-                };
+                let risk = risk_of(&tool_name);
                 self.ask_permission(
                     &tool_name,
                     &request_id,
@@ -653,6 +633,42 @@ fn summarize_args(args: &serde_json::Value) -> String {
     } else {
         text
     }
+}
+
+/// 审批卡上的风险档：按工具有没有副作用分 exec / write / read。
+///
+/// 隐私越界卡和常规审批卡必须用同一套口径，否则 `read` 越界时卡上会写「风险 写入」，
+/// 同一工具在常规审批里却写「风险 读取」，用户会当成两回事（D-10）。
+fn risk_of(tool_name: &str) -> &'static str {
+    let lowered = tool_name.to_ascii_lowercase();
+    if lowered == "bash"
+        || lowered == "powershell"
+        || lowered.starts_with("computer_")
+        || lowered.starts_with("browser_")
+    {
+        return "exec";
+    }
+    if lowered == "write"
+        || lowered == "edit"
+        || lowered.starts_with("automation_")
+        || matches!(
+            lowered.as_str(),
+            "team_assign"
+                | "team_goal_create"
+                | "team_goal_stage"
+                | "team_goal_pass"
+                | "team_goal_rework"
+                | "team_goal_acceptance"
+                | "message_bot"
+                | "post_to_group"
+                | "remember"
+                | "forget"
+        )
+        || lowered.starts_with("mcp__")
+    {
+        return "write";
+    }
+    "read"
 }
 
 /// 工具结果里的图片落盘（截图类工具），返回本地路径供 UI 直接 img 渲染。
@@ -2370,5 +2386,47 @@ mod tests {
         assert!(agent_end_failure(&[assistant(rpi_ai::StopReason::Aborted, None)]).is_none());
         // 空消息（纯工具回合）也不报错
         assert!(agent_end_failure(&[]).is_none());
+    }
+
+    #[test]
+    fn identity_parses_teammate_and_group_member() {        // 私聊
+        assert_eq!(
+            bot_id_from_identity("mode-bot:teammate:b12").as_deref(),
+            Some("b12")
+        );
+        // 群成员（D-09）：不认这一形态会让群里的 bot_id 变 None，
+        // 隐私守卫就把「读自己的目录」判成越界。
+        assert_eq!(
+            bot_id_from_identity("mode-bot:group:grp-accept-001:member:b12").as_deref(),
+            Some("b12")
+        );
+        // 群 id 自带冒号也要从右取
+        assert_eq!(
+            bot_id_from_identity("mode-bot:group:9607:member:b12").as_deref(),
+            Some("b12")
+        );
+        // 不是成员身份的群身份、空串、别的前缀都不算
+        assert_eq!(bot_id_from_identity("mode-bot:group:grp-accept-001"), None);
+        assert_eq!(bot_id_from_identity("mode-bot:group:g1:member:"), None);
+        assert_eq!(bot_id_from_identity("other:member:b12"), None);
+        assert_eq!(bot_id_from_identity(""), None);
+        assert_eq!(bot_id_from_identity("mode-bot:teammate:"), None);
+    }
+
+    #[test]
+    fn privacy_and_normal_prompts_agree_on_risk() {
+        // D-10：同一个工具在隐私越界卡和常规审批卡上必须显示同一档风险。
+        assert_eq!(risk_of("read"), "read");
+        assert_eq!(risk_of("grep"), "read");
+        assert_eq!(risk_of("write"), "write");
+        assert_eq!(risk_of("edit"), "write");
+        assert_eq!(risk_of("remember"), "write");
+        assert_eq!(risk_of("mcp__fs__read"), "write");
+        assert_eq!(risk_of("bash"), "exec");
+        assert_eq!(risk_of("powershell"), "exec");
+        assert_eq!(risk_of("browser_open"), "exec");
+        assert_eq!(risk_of("computer_click"), "exec");
+        // 大小写不敏感
+        assert_eq!(risk_of("READ"), "read");
     }
 }

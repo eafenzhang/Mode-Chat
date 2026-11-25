@@ -32,16 +32,16 @@
 ## 1. 引擎与工具链
 
 ### 1.1 内嵌引擎（rpi / pi-rust）— 已有
-- 引擎接入：`src/rpi_engine.rs:1021`（`RpiSession::open`）、`:1061` send、`:1078` steer、`:1101` abort
-- 会话持久化 + 恢复：`src/rpi_engine.rs:1249`（import_markdown_session）、`:1350`（history_entries）
-- 系统提示：`src/rpi_engine.rs:325`（`system_prompt_for`，拼 `AGENTS.md` + 团队记忆；v0.5 起 `:333` 的 `system_prompt_for_bot` 追加 Bot 自己的记忆）
-- 内置工具只有 4 个：`src/rpi_engine.rs:332`（`tool_set`：read / write / edit / bash）
+- 引擎接入：`src/rpi_engine.rs:1043`（`RpiSession::open`）、`:1227` send、`:1244` steer、`:1267` abort
+- 会话持久化 + 恢复：`src/rpi_engine.rs:1275`（import_markdown_session）、`:1376`（history_entries）
+- 系统提示：`src/rpi_engine.rs:338`（`system_prompt_for`，拼 `AGENTS.md` + 团队记忆；v0.5 起 `:346` 的 `system_prompt_for_bot` 追加 Bot 自己的记忆）
+- 内置工具只有 4 个：`src/rpi_engine.rs:373`（`tool_set`：read / write / edit / bash）
 - 结论：引擎本体完整，**不需要改架构**。
 
 ### 1.2 上下文压缩（compaction）— 半成品（隐式已有，UI 无感知）
 - rpi 侧默认开启：`rpi-harness/src/types.rs:325`（`DEFAULT_COMPACTION_SETTINGS { enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000 }`）
-- MC 没有覆盖该配置：`src/rpi_engine.rs:1115`（`AgentHarnessOptions::default()`）到 `:1139` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
-- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:22995`，与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:713` 结构体、`:729` emit）不认识该事件
+- MC 没有覆盖该配置：`src/rpi_engine.rs:1137`（`AgentHarnessOptions::default()`）到 `:1158` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
+- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:22995`，与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
 - 也没有 `/compact` 手动触发入口
 - 分类：**补实现**。接一个事件 + 一个命令项即可，1～2 小时。
 
@@ -57,13 +57,13 @@
 
 ### 1.4 show_view（图表/表单渲染）— 框架性缺口
 - DS：`ds-bot/src/host/tools.js:726`（工具定义）、`ds-bot/src/client/widget-cell.js`、`cells.js`（渲染）
-- MC：grep `show_view` **0 命中**；只有 `ask_user_question`（`src/rpi_engine.rs:1687`）这一种结构化交互
+- MC：grep `show_view` **0 命中**；只有 `ask_user_question`（`src/rpi_engine.rs:2211`）这一种结构化交互
 - 分类：**框架性**。GPUI 侧要新写 chart/table/form 三种组件 + 一份 JSON 协议，属 UI 侧大件。建议排阶段 3 之后；时间不够可先只做 form + table。
 
 ### 1.5 技能（Skills）与能力（Capabilities）— 框架性缺口
 - DS：`ds-bot/src/host/capabilities.js:54`（install）、`:92`-`:131`（mcp / skill / pack 三种 kind），skills 由 DSH 注入
 - rpi 侧有现成挂点：`AgentHarnessResources.skills`（`rpi-harness/src/types.rs` 的 `resources` 字段）
-- MC：`src/rpi_engine.rs:1115`-`1139` **没有设置 `resources`**；`AgentHarnessResources` 在 `src` + `crates` **0 命中**；`skills` 在 `src` **0 命中**（唯一相关是注释 `src/acp.rs:835`）
+- MC：`src/rpi_engine.rs:1137`-`1158` **没有设置 `resources`**；`AgentHarnessResources` 在 `src` + `crates` **0 命中**；`skills` 在 `src` **0 命中**（唯一相关是注释 `src/acp.rs:835`）
 - 能力页是只读 4 行硬编码：`src/capabilities.rs:15`（`rows()`）
 - 分类：**框架性**。要定 `skills/<name>/SKILL.md` 目录约定 + 扫描 + 注入 resources + 能力页改可编辑。
 
@@ -76,7 +76,7 @@
 - 分类：**无需改动**，这是 MC 的强项。
 
 ### 2.2 记忆注入 — 半成品（预算写死）
-- MC：`src/rpi_engine.rs:324` 注入团队记忆、`src/backend.rs:1473` 注入群记忆，两处都是 `memory_context(root, 4_000)` 固定 4000 字符（`src/data.rs:384`、`:401`）
+- MC：`src/rpi_engine.rs:357` 注入团队记忆、`src/backend.rs:1473` 注入群记忆，两处都是 `memory_context(root, 4_000)` 固定 4000 字符（`src/data.rs:384`、`:401`）
 - DS：按模型上下文窗口动态算预算，`ds-bot/src/host/memory.js:688`（`shownEntries`）+ `ds-bot/src/host/memory-entries.js:75`（`fitWindow`）
 - 分类：**补实现**。`memory_context` 已有 `max_chars` 参数，把 4000 换成按模型窗口算的比例即可。
 
@@ -127,7 +127,7 @@
 
 ### 4.2 缺的隔离 — 框架性缺口（安全级）
 - DS 有三道守卫：`ds-bot/src/host/privacy.js:242`（guardFiles 文件读写归属）、`:96`（ownerOfPath）、`:308`（privateClash 冲突检测）、`:172`（guardTeam 团队外发审批）
-- MC：只有 `is_private` 布尔；`before_tool_call` 里只做审批策略（`src/rpi_engine.rs:381` `hook()` → `:394` `decide()`），**没有文件路径归属判定**
+- MC：只有 `is_private` 布尔；`before_tool_call` 里只做审批策略（`src/rpi_engine.rs:422` `hook()` → `:435` `decide()`），**没有文件路径归属判定**
 - 后果：隐私 Bot 的 read/write/edit/bash 可读任意路径，包括别的 Bot 目录。`README.zh.md:84` 的承诺不成立。
 - 分类：**框架性**。要在 `ApprovalGate::decide` 前加"路径归属 → 越界即审批/拒绝"，并定义"哪些目录属于哪个 Bot"。**v0.5 必做。**
 
@@ -257,7 +257,7 @@
 
 ## 12. 用量
 
-- MC 已有：本会话 `src/rpi_engine.rs:1955`（`session_usage`）、总量 `:1608`（`usage_totals`）、按天 `:1666`（`usage_daily`），页面 `src/main.rs:14609`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
+- MC 已有：本会话 `src/rpi_engine.rs:1981`（`session_usage`）、总量 `:1993`（`usage_totals`）、按天 `:1692`（`usage_daily`），页面 `src/main.rs:14609`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
 - 缺：**按 Bot / 按模型分组**（DS：`ds-bot/src/host/usage.js:182` SQL `GROUP BY session, provider, model, kind, slot`，客户端 `usage-page.js` 732 行）；费用估算两边都没有价格表，不算差距
 - 分类：**补实现**。`UsageSummary`（`src/session_db.rs`）加 provider/model 维度聚合 + 页面加分组切换。半天。
 
@@ -301,7 +301,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wecom_theme.rs`(236)、`src/main.rs:12097`（`accent_row`） | `client/themes.js`(124) | 已有 | — |
 | 托盘 / 自启 / 自动更新 | 已有：`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs`(215) | 已有 | — |
 | 头像 / Bot 图标 | 已有：`src/avatar.rs`(262)、`bot_icon.rs`(120)、`agent_icons.rs`(70)、`brand_icons.rs`(307) | `client/avatar-library.js`(149)、`agent-logos.js`(52) | 已有 | — |
-| 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1052`（`FindState`）+ `:2881`（`find_dialog`）、隐私过滤 `:6551`、`src/rpi_engine.rs:1510`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
+| 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1052`（`FindState`）+ `:2881`（`find_dialog`）、隐私过滤 `:6551`、`src/rpi_engine.rs:1536`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
 | 旁路会话（side chat） | 已有：`src/main.rs:7013`（`PaletteCmd::SideChat` → `:7239` `open_side`） | `ds-bot/src/client/side-chat.js`(155)、`host/side.js`(377) | 已有 | — |
 | 队列可视化 | 有上限 5 条但无独立 UI：`src/main.rs:4754` | `ds-bot/src/client/queue-dock.js:99`（`QueueDock`） | 半成品 | 补实现 |
 
@@ -315,12 +315,12 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 2 | Bot | 头像与图标库 | 已有 | `src/avatar.rs`(262)、`src/bot_icon.rs`(120) | `ds-bot/src/client/avatar-library.js`(149) |
 | 3 | Bot | 每 Bot 模型选择 | 已有 | `src/main.rs:10731`（models 页）、`src/rpi_engine.rs:55` | `ds-bot/src/host/models.js:101` |
 | 4 | Bot | 工作目录切换 | 已有 | `src/data.rs:554` | `ds-bot/src/host/tools.js:363` |
-| 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:246`（approval_policy）、`:381`（hook） | `ds-bot/src/host/approvals.js`(110) |
+| 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:267`（approval_policy）、`:422`（hook） | `ds-bot/src/host/approvals.js`(110) |
 | 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:11910`、`:15059` | `ds-bot/src/client/memory-panel.js:325` |
 | 7 | Bot | 记忆写入工具 remember/forget/recall | 缺失 | 0 命中 | `ds-bot/src/host/memory.js:1075/1114/1151` |
-| 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:634`（interject）、`src/rpi_engine.rs:1034` | `ds-bot/src/host/steer.js`(255) |
+| 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:634`（interject）、`src/rpi_engine.rs:1244` | `ds-bot/src/host/steer.js`(255) |
 | 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:7803`（open_side） | `ds-bot/src/host/side.js`(377) |
-| 10 | Bot | 会话全文搜索 | 已有 | `src/main.rs:1052`、`src/rpi_engine.rs:1510` | `ds-bot/src/host/chat-index.js`(276) |
+| 10 | Bot | 会话全文搜索 | 已有 | `src/main.rs:1052`、`src/rpi_engine.rs:1536` | `ds-bot/src/host/chat-index.js`(276) |
 | 11 | Main bot | Chief 身份与降级规则 | 已有 | `src/data.rs:88`、`:590` | `ds-bot/src/host/roster.js`(900) |
 | 12 | Main bot | 管理其它 Bot/群（工具化） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:325/363/496/526/590` |
 | 13 | 群聊 | 建群/改群/删群 | 已有 | `src/data.rs:1816`（create_group）、`src/main.rs:3741` | `ds-bot/src/host/groups.js`(1885) |
@@ -357,7 +357,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 44 | 能力 | Skill 注入到引擎 | 缺失 | 0 命中（未设 resources） | `ds-bot/src/host/capabilities.js:125` |
 | 45 | 能力 | show_view（图表/表格/表单） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:726` |
 | 46 | Office | docx/pptx/xlsx 读写与渲染检查 | 缺失 | 只有 MIME：`crates/bots-service/src/media.rs:126` | `ds-bot/src/office/docx.js`(612) 等 9 个 |
-| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:1478/1556/1564`、`src/main.rs:14609` | `ds-bot/src/host/usage.js`(630) |
+| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:1981/1993/1692`、`src/main.rs:14609` | `ds-bot/src/host/usage.js`(630) |
 | 48 | 用量 | 按 Bot / 模型分组 | 缺失 | 未见聚合维度 | `ds-bot/src/host/usage.js:182` |
 | 49 | 记忆 | Markdown 记忆 + 索引 + 历史 + 撤销 | 已有 | `crates/bots-service/src/memory_store.rs:659/1224/1258` | `ds-bot/src/host/memory.js` |
 | 50 | 记忆 | 团队/群双作用域 | 已有 | `src/data.rs:380/396` | `ds-bot/src/host/memory.js:854` |
@@ -367,7 +367,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 54 | 定时任务 | Agent 侧创建/查询定时任务工具 | 已有 | `src/automation_tools.rs:71/89/124` | `ds-bot/src/host/schedules.js:211` |
 | 55 | ACP | 会话/权限卡/提问卡 | 已有 | `src/acp.rs:387/472/108` | `ds-bot/src/host/local-agents/acp.js` |
 | 56 | ACP | 断线重连 / 会话恢复 | 已有 | `src/acp.rs:167`（resume 走 session/load） | `ds-bot/src/host/resume.js`(451) |
-| 57 | 通用 | 供 Agent 使用的 ask_user | 已有 | `src/rpi_engine.rs:1687` | `ds-bot/src/host/tools.js:670` |
+| 57 | 通用 | 供 Agent 使用的 ask_user | 已有 | `src/rpi_engine.rs:2211` | `ds-bot/src/host/tools.js:670` |
 | 58 | 通用 | 多语言（>2） | 缺失 | `src/i18n.rs:12`（只 zh/en） | `ds-bot/src/client/i18n.js:1695` |
 | 59 | 通用 | 语音朗读 | 缺失 | 0 命中 | `ds-bot/src/client/voice.js:81`、`ds-bot/src/client/read-page.js:22` |
 | 60 | 通用 | 手机端 / 远程配对 | 缺失 | 0 命中 | `link/src/pairing.ts:55`、`ds-bot/src/host/mobile.js:160` |
