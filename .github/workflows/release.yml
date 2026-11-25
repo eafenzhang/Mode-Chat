@@ -85,6 +85,25 @@ jobs:
         run: |
           set -euo pipefail
           version=""
+          # 仓库里声明的版本（Cargo.toml [package].version）。发版版本不能低于它：
+          # 版本号已经手工升到 0.5.0 时，即使这次是 push main 触发、HEAD 上还没有
+          # tag，也不该再去发一个 0.4.1。
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          # 语义化比较：a 大于 b 时返回 0（true）。
+          newer_than() {
+            local a="$1" b="$2"
+            [ "$a" = "$b" ] && return 1
+            local IFS=.
+            local -a av bv
+            read -r -a av <<< "$a"
+            read -r -a bv <<< "$b"
+            for i in 0 1 2; do
+              local x="${av[$i]:-0}" y="${bv[$i]:-0}"
+              if [ "$x" -gt "$y" ] 2>/dev/null; then return 0; fi
+              if [ "$x" -lt "$y" ] 2>/dev/null; then return 1; fi
+            done
+            return 1
+          }
           if [ -n "${INPUT_VERSION:-}" ]; then
             version="$INPUT_VERSION"
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -109,11 +128,16 @@ jobs:
                 patch="${rest#*.}"
                 version="${major}.${minor}.$((patch + 1))"
               fi
+              # 已经手工升过版本就听 Cargo.toml 的，别发一个更旧的 patch 号。
+              if [ -n "$cargo_version" ] && newer_than "$cargo_version" "$version"; then
+                echo "Cargo.toml 版本 $cargo_version 高于推算的 $version，按 Cargo.toml 发版"
+                version="$cargo_version"
+              fi
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "Mode Chat version: $version"
+          echo "Mode Chat version: $version (Cargo.toml: ${cargo_version:-unknown})"
 
       - name: Install NSIS
         run: choco install nsis -y --no-progress
