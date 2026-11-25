@@ -20546,15 +20546,11 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                         .pointer()
                         .text_color(theme::ink_secondary())
                         .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
-                        .on_click(cx.listener({
-                            let bot_id = bot.id.clone();
-                            move |this, _event, _window, cx| {
-                                // Q-05：与 Ctrl+N、标题栏「+」共用同一份实现。
-                                // 修复前这里自己复制了一遍，漏了 streaming 守卫，
-                                // 也漏了 `sessions.save()`，新会话重启后会丢。
-                                let _ = &bot_id;
-                                this.new_session_for_selected(cx);
-                            }
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            // Q-05：与 Ctrl+N、标题栏「+」共用同一份实现。
+                            // 修复前这里自己复制了一遍，漏了 streaming 守卫，
+                            // 也漏了 `sessions.save()`，新会话重启后会丢。
+                            this.new_session_for_selected(cx);
                         }))
                         .child(
                             div()
@@ -22066,12 +22062,12 @@ fn wecom_row_el(
                         cx,
                     )),
             )
-            // 用户气泡靠右，空位在左侧 → 动作条挂左边。
+            // 用户气泡贴右，动作条挂右上（与 classic 的 top -18 / right 0 一致）
             .child(wecom_message_actions(
                 index,
                 text,
                 weak,
-                false,
+                true,
                 &hover_group,
             ))
             .into_any_element(),
@@ -22130,12 +22126,12 @@ fn wecom_row_el(
                     el.rounded(px(theme::RADIUS_CHIP)).bg(theme::accent_soft())
                 })
                 .child(cell)
-                // 助手气泡靠左，空位在右侧 → 动作条挂右边。
+                // 助手气泡贴左，动作条挂左上
                 .child(wecom_message_actions(
                     index,
                     text,
                     weak,
-                    true,
+                    false,
                     &hover_group,
                 ))
                 .into_any_element()
