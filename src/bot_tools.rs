@@ -7,7 +7,8 @@
 //! - **隐私优先**：`list_bots` 对隐私 Bot 只输出名字与 `private:true`，不给 id/目录；
 //!   `message_bot` 目标为隐私 Bot 时直接拒绝，不建会话。
 //! - **不死锁**：投递走 `Command::AskBot`（run loop 里开独立会话，不占用调用者 lane），
-//!   120s 超时；目标正在跑也只影响它自己那一份，不会互相等。
+//!   等 [`crate::backend::ASK_BOT_TIMEOUT_SECS`]；目标正在跑也只影响它自己那一份，
+//!   不会互相等。等不到就当「已投递，稍后它会自己回复」，不报超时失败。
 //! - **群发言不阻塞**：`post_to_group` 只发一个 `BackendEvent::GroupPost`，
 //!   由 UI 按既有的群发送路径派发回合，工具立即返回。
 
@@ -255,11 +256,19 @@ impl BotTool {
         let Some(bus) = crate::backend::bus() else {
             return Err("后台引擎未启动，无法跨 Bot 投递".to_string());
         };
-        let reply = bus.ask_bot(bot.id.clone(), bot.name.clone(), message.to_string()).await?;
-        if reply.trim().is_empty() {
-            return Ok(format!("{} 的回复是空的。", bot.name));
+        let delivery = bus
+            .ask_bot(bot.id.clone(), bot.name.clone(), message.to_string())
+            .await?;
+        match delivery {
+            crate::backend::BotDelivery::Reply(text) => {
+                if text.trim().is_empty() {
+                    return Ok(format!("{} 的回复是空的。", bot.name));
+                }
+                Ok(format!("{} 的回复：\n{}", bot.name, text.trim()))
+            }
+            // 已投递但还没答完：这不是失败，文案必须让调用方知道「送到了、别重发」。
+            delivered => Ok(delivered.describe()),
         }
-        Ok(format!("{} 的回复：\n{}", bot.name, reply.trim()))
     }
 
     fn post_group(&self, params: &Value) -> Result<String, String> {

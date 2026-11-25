@@ -563,7 +563,7 @@ enum Command {
         target_bot_id: String,
         target_bot_name: String,
         text: String,
-        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+        reply: tokio::sync::oneshot::Sender<Result<BotTurn, String>>,
     },
     /// 往群聊里发言（`post_to_group`）：UI 收 `BackendEvent::GroupPost` 后走既有群发送路径。
     PostGroup {
@@ -576,6 +576,65 @@ enum Command {
 
 pub struct BackendHandle {
     tx: UnboundedSender<Command>,
+}
+
+/// 跨 Bot 投递的等待上限（秒）。
+///
+/// 目标 Bot 可能要过审批卡、跑一整轮，等太久用户就是在群里干站着；
+/// 但等不到**不能**当成没送到——消息早就进目标会话了，只是还没答完。
+pub const ASK_BOT_TIMEOUT_SECS: u64 = 60;
+
+/// 目标 Bot 那一轮的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BotTurn {
+    /// 目标答完了，拿到整段回复。
+    Reply(String),
+    /// 目标还在跑（多半卡在审批上），消息已送达，稍后它自己会答。
+    StillRunning,
+}
+
+/// `message_bot` 对调用方的交代。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BotDelivery {
+    /// 目标答完了，拿到整段回复。
+    Reply(String),
+    /// 已投递，目标还在处理；不是失败，不要报「超时」。
+    Delivered { target_bot_name: String },
+}
+
+impl BotDelivery {
+    /// 给 Agent 工具看的文案。`Delivered` 必须让人看出「送到了、在等答复」，
+    /// 不能读成「没送到」——用户会照着这个去重发一遍。
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Reply(text) => text.clone(),
+            Self::Delivered { target_bot_name } => format!(
+                "已投递给 {target_bot_name}，它还在处理（{ASK_BOT_TIMEOUT_SECS}s 内没答完）。\
+                 消息已经送到了，它会稍后自己回复，不用重发。"
+            ),
+        }
+    }
+}
+
+/// 等目标 Bot 的回复；超时返回 [`BotDelivery::Delivered`]，不当失败。
+///
+/// 抽出来单独测：超时必须走「已投递」这条分支，而不是报错（回归 D-11）。
+async fn await_bot_reply(
+    reply: tokio::sync::oneshot::Receiver<Result<BotTurn, String>>,
+    wait: Duration,
+    target_bot_name: &str,
+) -> Result<BotDelivery, String> {
+    match tokio::time::timeout(wait, reply).await {
+        Ok(Ok(Ok(BotTurn::Reply(text)))) => Ok(BotDelivery::Reply(text)),
+        Ok(Ok(Ok(BotTurn::StillRunning))) => Ok(BotDelivery::Delivered {
+            target_bot_name: target_bot_name.to_string(),
+        }),
+        Ok(Ok(Err(message))) => Err(message),
+        Ok(Err(_)) => Err("目标 Bot 未返回结果".to_string()),
+        Err(_) => Ok(BotDelivery::Delivered {
+            target_bot_name: target_bot_name.to_string(),
+        }),
+    }
 }
 
 impl Clone for BackendHandle {
@@ -825,29 +884,32 @@ impl BackendHandle {
 
     /// 跨 Bot 投递（`message_bot`）：等目标 Bot 回合结束拿到整段回复。
     ///
-    /// 超时 120s；目标忙 / 建会话失败都返回可读中文错误，调用方直接转述给用户。
+    /// 等待 [`ASK_BOT_TIMEOUT_SECS`]；等不到时**不算失败**——消息早已送达目标，
+    /// 只是它还没答完（可能要过审批卡）。这时回 [`BotDelivery::Delivered`]，
+    /// 让调用方转述「已投递，稍后它会自己回复」，而不是报「超时失败」让用户以为没送到。
     pub async fn ask_bot(
         &self,
         target_bot_id: String,
         target_bot_name: String,
         text: String,
-    ) -> Result<String, String> {
+    ) -> Result<BotDelivery, String> {
         let request_id = format!("ask-{}-{}", target_bot_id, crate::time::now_ms());
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.tx
             .send(Command::AskBot {
                 request_id: request_id.clone(),
                 target_bot_id,
-                target_bot_name,
+                target_bot_name: target_bot_name.clone(),
                 text,
                 reply: reply_tx,
             })
             .map_err(|_| "后台引擎已停止，无法跨 Bot 投递".to_string())?;
-        match tokio::time::timeout(Duration::from_secs(120), reply_rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("目标 Bot 未返回结果".to_string()),
-            Err(_) => Err("等待目标 Bot 回复超时（120s）".to_string()),
-        }
+        await_bot_reply(
+            reply_rx,
+            Duration::from_secs(ASK_BOT_TIMEOUT_SECS),
+            &target_bot_name,
+        )
+        .await
     }
 
     /// 往群里发言（`post_to_group`）：只投一条事件，UI 走既有群发送路径。
@@ -1695,13 +1757,16 @@ async fn run_agent(
                 });
                 // 自己收流式事件，攒完整段回复（不往 UI 事件流里发假 delta）。
                 tokio::spawn(async move {
-                    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+                    let deadline =
+                        tokio::time::Instant::now() + Duration::from_secs(ASK_BOT_TIMEOUT_SECS);
                     let mut answer = String::new();
                     loop {
                         let remaining =
                             deadline.saturating_duration_since(tokio::time::Instant::now());
                         if remaining.is_zero() {
-                            let _ = reply.send(Err("等待目标 Bot 回复超时（120s）".to_string()));
+                            // 消息已送达，只是目标还没答完：交「仍在跑」，由调用方
+                            // 回「已投递，稍后它会自己回复」，不报超时失败（D-11）。
+                            let _ = reply.send(Ok(BotTurn::StillRunning));
                             break;
                         }
                         let Ok(Some(event)) =
@@ -1716,7 +1781,7 @@ async fn run_agent(
                         match event {
                             SessionEvent::Delta { text, .. } => answer.push_str(&text),
                             SessionEvent::Done { .. } => {
-                                let _ = reply.send(Ok(answer));
+                                let _ = reply.send(Ok(BotTurn::Reply(answer)));
                                 break;
                             }
                             SessionEvent::Error { message, .. } => {
@@ -2263,4 +2328,64 @@ async fn run_memory_review(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 超时不能让调用方以为消息没送到（D-11）：必须走「已投递」而不是 Err。
+    #[tokio::test]
+    async fn timeout_reports_delivered_not_failure() {
+        // 五分钟没人答 → 用极短的等待把超时路径走一遍。
+        let (_tx, rx) = tokio::sync::oneshot::channel::<Result<BotTurn, String>>();
+        let delivery = await_bot_reply(rx, Duration::from_millis(10), "小助手")
+            .await
+            .expect("超时不算失败");
+        assert_eq!(
+            delivery,
+            BotDelivery::Delivered {
+                target_bot_name: "小助手".to_string()
+            }
+        );
+        let text = delivery.describe();
+        assert!(text.contains("已投递"), "{text}");
+        assert!(text.contains("不用重发"), "{text}");
+        // 不能出现过时的时间值，也不能读成失败。
+        assert!(!text.contains("120"), "{text}");
+        assert!(!text.contains("失败"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn reply_and_explicit_running_both_work() {
+        // 答完了：原样带回文本。
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<BotTurn, String>>();
+        let _ = tx.send(Ok(BotTurn::Reply("PONG".to_string())));
+        let delivery = await_bot_reply(rx, Duration::from_secs(1), "小助手")
+            .await
+            .expect("正常回复");
+        assert_eq!(delivery, BotDelivery::Reply("PONG".to_string()));
+
+        // 后端已经知道自己等不到了：同样回「已投递」，不是错误。
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<BotTurn, String>>();
+        let _ = tx.send(Ok(BotTurn::StillRunning));
+        let delivery = await_bot_reply(rx, Duration::from_secs(1), "小助手")
+            .await
+            .expect("仍在跑不算失败");
+        assert!(matches!(delivery, BotDelivery::Delivered { .. }));
+
+        // 真正的错误（隐私、找不到）照旧是 Err。
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<BotTurn, String>>();
+        let _ = tx.send(Err("目标 Bot 已设为隐私，拒绝跨 Bot 读取".to_string()));
+        let error = await_bot_reply(rx, Duration::from_secs(1), "小助手")
+            .await
+            .expect_err("隐私拒绝必须是错误");
+        assert!(error.contains("隐私"), "{error}");
+    }
+
+    #[test]
+    fn wait_budget_is_one_minute() {
+        // 太短会让本可成功的投递失败，太长等于让用户干站着。
+        assert_eq!(ASK_BOT_TIMEOUT_SECS, 60);
+    }
 }
