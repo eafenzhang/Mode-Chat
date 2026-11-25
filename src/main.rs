@@ -25916,7 +25916,7 @@ impl PilotApp {
     /// 外壳分支：企微四栏（试验）或经典三栏。
     fn shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.wecom_mode {
-            self.wecom_shell(window, cx)
+            self.wechat_shell(window, cx)
         } else {
             self.classic_shell(window, cx)
         }
@@ -25958,7 +25958,7 @@ impl PilotApp {
             .into_any_element()
     }
 
-    fn wecom_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn wechat_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         div()
             .flex()
             .flex_col()
