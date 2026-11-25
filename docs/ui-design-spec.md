@@ -265,8 +265,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
 
 **旧口径是错的，不要再用**：`grep -c 'text_size(px(' src/*.rs` → 「仅 `ui_kit.rs` 令牌定义」。
 这条判据无法区分合规与违规——`text_size(px(12.))` 合规、`text_size(px(14.))` 违规，
-两者都被 `text_size(px(` 命中。实际 `src/` 全仓 330 处：225 处数字字面量 + 22 处 `px(T_*)`
-+ 83 处变量，照字面永远不可能「仅 `ui_kit.rs`」，AC 永远不通过，等于没有 AC。
+两者都被 `text_size(px(` 命中。实际 `src/` 全仓 332 处，其中数字字面量 225 处，
+照字面永远不可能「仅 `ui_kit.rs`」，AC 永远不通过，等于没有 AC。
 
 **正确口径**：**非令牌字面量 = 0**。判定是「括号里**是否数字字面量**」× 「该数字**是否等于令牌值**」：
 
@@ -285,5 +285,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
 # 期望：[OK  ] text_size(px(non-token))   0
 ```
 
-实测基线（2026-11-25，HEAD `2aeacce`）：330 处 `text_size(px(`，其中非令牌字面量 **0**，
+实测基线（2026-11-25，HEAD `205b7e0`）：332 处 `text_size(px(`，其中非令牌字面量 **0**，
 `ui-lint -Enforce` 四项合计 0 违规。**不要再按 `grep -c` 的旧口径判定这条 AC。**
