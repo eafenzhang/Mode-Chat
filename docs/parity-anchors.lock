@@ -99,6 +99,7 @@ src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
 src/backend.rs:1321|} => {
+src/backend.rs:144|pub struct ElicitationCard {
 src/backend.rs:1498|let internal = member_session_key(&spec.group_key, &member.member_id);
 src/backend.rs:1603|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
 src/backend.rs:1611|let chosen: Vec<usize> = if !mentioned.is_empty() {
@@ -116,6 +117,8 @@ src/backend.rs:353|// 记忆回顾是隐藏的 JSON 任务，不给控制类工�
 src/backend.rs:561|AskBot {
 src/backend.rs:569|PostGroup {
 src/bot_icon.rs:1|//! Bot 图标 + 颜色：面罩机器人 9 表情，全局按 Bot id 存一份外观。
+src/bot_icon.rs:18|pub const ICONS: [(&str, &str); 1] = [("app", "气泡机器人")];
+src/bot_icon.rs:20|pub const COLORS: [(&str, &str); 8] = [
 src/bot_tools.rs:104|"post_to_group"
 src/bot_tools.rs:69|"whoami"
 src/bot_tools.rs:78|"list_bots"
@@ -123,8 +126,11 @@ src/bot_tools.rs:87|"message_bot"
 src/browser_tools.rs:33|const MAX_SESSIONS: usize = 4;
 src/browser_tools.rs:377|/// 进程退出前清空所有浏览器会话（profile 目录保留）。
 src/browser_tools.rs:387|pub fn profile_dir(scope: &str) -> PathBuf {
+src/browser_tools.rs:445|pub fn tools(identity: &str) -> Vec<HarnessTool> {
+src/browser_tools.rs:450|"browser_open"
 src/browser_tools.rs:46|fn session_key(scope: &str) -> String {
 src/browser_tools.rs:589|Action::Press
+src/browser_tools.rs:651|"browser_close"
 src/capabilities.rs:15|pub fn rows() -> Vec<CapabilityRow> {
 src/capabilities.rs:52|}
 src/composer_input.rs:16|gpui::actions!(composer, [Send, SendSecondary]);
@@ -135,9 +141,14 @@ src/cua_tree.rs:272|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/cua_tree.rs:320|
 src/data.rs:1081|.iter()
 src/data.rs:114|pub fn create_bot(
+src/data.rs:1165|pub fn set_provider_api_key(provider_id: &str, api_key: &str) -> Result<(), Stri
+src/data.rs:1249|pub fn set_provider_base_url(provider_id: &str, base_url: &str) -> Result<(), St
+src/data.rs:1356|pub fn add_model(provider_id: &str, model_id: &str) -> Result<(), String> {
+src/data.rs:1363|pub fn remove_model(provider_id: &str, model_id: &str) -> Result<(), String> {
 src/data.rs:1414|) -> Result<(), String> {
 src/data.rs:1545|pub fn provider_templates() -> Vec<ProviderTemplate> {
 src/data.rs:160|instructions: String::new()
+src/data.rs:1611|pub fn add_provider_from_template(
 src/data.rs:17|pub struct ModelSpec {
 src/data.rs:175|demote_other_chiefs(&mut file, &new_id);
 src/data.rs:1824|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
@@ -149,6 +160,7 @@ src/data.rs:352|];
 src/data.rs:37|pub is_main: bool
 src/data.rs:374|pub fn local_agents() -> Vec<LocalAgentInfo> {
 src/data.rs:392|bots_service::memory_store::memory_context(&root, 4_000)
+src/data.rs:40|pub pinned: bool
 src/data.rs:404|pub fn group_memory_context(group_id: &str, manual: &str) -> String {
 src/data.rs:409|let file_memory = bots_service::memory_store::memory_context(&root, 4_000);
 src/data.rs:41|pub model: Option<ModelSpec>
@@ -168,6 +180,7 @@ src/data.rs:701|pub fn delete_bot(id: &str) -> Result<(), String> {
 src/data.rs:712|if let Err(error) = crate::privacy::archive_private_bot(id, &name, &directory) {
 src/data.rs:72|}
 src/data.rs:79|pub hidden_bots: Vec<Bot>
+src/data.rs:815|pub fn set_bot_flags(id: &str, pinned: Option<bool>, hidden: Option<bool>) -> Re
 src/data.rs:88|fn check_chief_private(is_private: bool, is_chief: bool) -> Result<(), String> {
 src/data.rs:96|fn demote_other_chiefs(file: &mut bot_team::teammate::TeammatesFile, keep_id: &s
 src/group_goal.rs:105|fn write(path: &Path, goal: &GroupGoal) -> Result<(), String> {
@@ -180,6 +193,8 @@ src/group_tasks.rs:371|pub fn stop_task(data_root: &Path, group_id: &str, task_i
 src/group_tasks.rs:392|pub fn retry_task(
 src/group_tasks.rs:446|pub fn cancel_subtree(
 src/i18n.rs:21|LANG.load(Ordering::Relaxed) == 1
+src/i18n.rs:256|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
+src/i18n.rs:317|"回合进行中 · Ctrl+Enter 插话 · Enter 排队" => {
 src/i18n.rs:323|"不写入主会话" => Some("Not saved to the main chat")
 src/i18n.rs:478|"还没有群聊记忆。" => Some("No group chat memory yet.")
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
@@ -198,39 +213,67 @@ src/im_runtime.rs:520|pub fn start_heartbeat_scheduler(self: &Arc<Self>) {
 src/im_runtime.rs:547|async fn tick_heartbeats(&self) {
 src/im_runtime.rs:647|fn start_loop(self: &Arc<Self>, bot: BotConfig) {
 src/im_service.rs:153|/// 扫码渠道：微信（iLink）或企业微信（智能机器人 QR）。
+src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
 src/main.rs:10051|SettingsDetail::ConnectorSecret { connector_id } => {
+src/main.rs:10175|let once_hours = self
 src/main.rs:10192|"schedule-when-{}"
+src/main.rs:10237|SharedString::from(format!("schedule-day-{index}"))
 src/main.rs:1050|/// 立即压缩当前会话上下文（W4）。
 src/main.rs:1058|input: Entity<SimpleInput>
+src/main.rs:10588|SettingsDetail::AddModel {
+src/main.rs:10663|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:1070|enum GoalStageEdit {
 src/main.rs:10964|SettingsDetail::AutomationHistory { title, runs } => {
+src/main.rs:1102|match group_goal::apply(&data::data_root(), &self.group_id, action) {
 src/main.rs:11157|SettingsDetail::Allowlist { bot_id } => {
 src/main.rs:11582|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
 src/main.rs:11678|.bots
 src/main.rs:11786|let draft = data::GroupDraft {
 src/main.rs:11967|let scope_close = current_scope.clone();
 src/main.rs:12065|.child(settings_group(vec![
+src/main.rs:12250|let archives = crate::privacy::archived_private_bots();
 src/main.rs:12254|} else {
+src/main.rs:12296|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12300|match crate::privacy::release_archive(&id) {
 src/main.rs:12784|} else {
+src/main.rs:13138|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
+src/main.rs:13494|"暂未接入插件宿主；MCP 连接器见「连接器」。"
 src/main.rs:13498|.into_any_element()
 src/main.rs:13573|let bot = self.selected_bot().cloned();
+src/main.rs:13707|fn sidebar_sections_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
 src/main.rs:13711|body = body.child(settings_empty(i18n::t(
+src/main.rs:13749|SharedString::from(format!("section-up-{}", id_up))
+src/main.rs:13801|SharedString::from(format!("section-delete-{}", id_delete))
+src/main.rs:13969|body = body.child(settings_section(i18n::t("已隐藏")));
 src/main.rs:14068|i18n::t("恢复显示")
+src/main.rs:1422|.id("goal-acceptance-save")
 src/main.rs:14368|.flex()
 src/main.rs:14552|.h(px(84.))
 src/main.rs:14745|.heartbeat
 src/main.rs:14764|return body
+src/main.rs:14860|let button_id = SharedString::from(format!("im-group-activation-{label}"));
 src/main.rs:14864|match im::set_group_activation(&group_root, &group_bot, activation) {
 src/main.rs:15095|service.refresh_runtime();
 src/main.rs:15300|settings_row(
+src/main.rs:16069|SharedString::from(format!("usage-range-{days}"))
+src/main.rs:1607|format!("goal-stage-pass-{index}")
 src/main.rs:16073|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:16092|SharedString::from(format!("usage-group-{mode}"))
 src/main.rs:16096|.on_click(cx.listener(move |this, _event, _window, cx| {
 src/main.rs:1611|cx.listener({
 src/main.rs:16174|(total as f32 / max as f32 * 108.).max(if total > 0 { 2. } else { 0. });
+src/main.rs:1633|format!("goal-stage-rework-{index}")
+src/main.rs:16472|i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据")
+src/main.rs:16474|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
+src/main.rs:1654|format!("goal-stage-acceptance-{index}")
 src/main.rs:16930|fn open_delete_bot_dialog(
+src/main.rs:1698|"goal-stage-error-{index}"
+src/main.rs:16987|(i18n::t("隐藏").to_string(), false, DetailMenuAction::HideBot(bot.id.clone()))
 src/main.rs:18513|// CLI 对部分模型要求显式 reasoning level（缺了会「建会话失败」）。选中具体模型时
+src/main.rs:18580|if let Err(message) = data::delete_group(group_id) {
 src/main.rs:19078|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:19229|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
 src/main.rs:19395|column = column.child(compaction_status_row());
@@ -241,29 +284,45 @@ src/main.rs:19721|.child(kit_markdown_el(
 src/main.rs:19747|Some(message_actions(&chat_key, index, author.clone(), message.text.clone(), cx)
 src/main.rs:19751|SharedString::from(format!("msg-p-{}", index))
 src/main.rs:19812|let selected = self
+src/main.rs:19819|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
 src/main.rs:19841|.then(|| std::path::PathBuf::from(&path));
+src/main.rs:19967|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
 src/main.rs:19995|if index < chat.pending_attachments.len() {
 src/main.rs:20327|.id("composer-plus")
 src/main.rs:20531|.id("detail-new-session")
 src/main.rs:20564|this.backend.new_session(
+src/main.rs:2069|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:20994|fn bot_details(
 src/main.rs:20998|sessions: &state::SessionStore
 src/main.rs:21069|rows = rows.child(section_label(i18n::t("审批策略")));
 src/main.rs:21100|this.reselect_after_roster_change(keep.0.as_deref(), keep.1.as_deref());
+src/main.rs:2114|fn retry_or_reassign(
 src/main.rs:21163|.id("bot-details-memory-row")
 src/main.rs:21178|this.settings_detail = Some(SettingsDetail::BotMemory {
+src/main.rs:21217|// 历史会话列表：点行切换 resume 到对应会话（当前主会话不重复出现）。
 src/main.rs:21349|rows = rows.child(section_label(i18n::t("待办")));
+src/main.rs:21350|const TODO_ROWS: usize = 4;
+src/main.rs:21632|WecomRow::ToolGroup {
 src/main.rs:21988|fn wecom_row_el(
+src/main.rs:22021|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
 src/main.rs:22118|.child(kit_markdown_el(
+src/main.rs:22257|} => wecom_tool_group_card(key, *family, messages, *expanded, weak).into_any_ele
 src/main.rs:22258|WecomRow::Compacting => compaction_status_row().into_any_element()
 src/main.rs:22394|.any(|needle| message.contains(needle))
+src/main.rs:2278|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:2282|.flex()
 src/main.rs:22920|fn message_actions(
 src/main.rs:23273|///
+src/main.rs:23276|const SETTINGS_PAGES: [&str; 17] = [
 src/main.rs:23283|"连接器"
 src/main.rs:23297|///
+src/main.rs:23300|enum SettingsDetail {
+src/main.rs:23351|AddModel {
 src/main.rs:23352|provider_id: String
+src/main.rs:23372|AutomationHistory {
 src/main.rs:23379|}
+src/main.rs:2358|"task-reassign-{}"
+src/main.rs:2401|"task-reassign-{}-{}"
 src/main.rs:246|const TRANSCRIPT_WINDOW: usize = 120;
 src/main.rs:24639|fn compaction_status_row() -> impl IntoElement {
 src/main.rs:24641|.id("chat-compaction-status")
@@ -272,6 +331,7 @@ src/main.rs:24761|.selectable(true)
 src/main.rs:2530|div()
 src/main.rs:2560|.id(SharedString::from(format!("group-admin-{}", id)))
 src/main.rs:26886|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:27314|rows.push(
 src/main.rs:27636|fn wecom_transcript(
 src/main.rs:2818|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2840|message.streaming = false;
@@ -280,7 +340,10 @@ src/main.rs:28588|.id("composer-plus")
 src/main.rs:28595|this.on_palette_shortcut(&PaletteShortcut, window, cx);
 src/main.rs:28606|this.on_palette_shortcut(&PaletteShortcut, window, cx);
 src/main.rs:2866|struct BotFormState {
+src/main.rs:2901|for (key, _label) in bot_icon::ICONS {
+src/main.rs:2931|for (hex, label) in bot_icon::COLORS {
 src/main.rs:3266|schedule_when: usize
+src/main.rs:3632|ToolGroup {
 src/main.rs:3830|wecom_mode: std::env::var("BOT_PILOT_CLASSIC_UI").ok().as_deref() != Some("1")
 src/main.rs:3875|bounds_observer: None
 src/main.rs:4267|let workspace = match &group.directory {
@@ -288,10 +351,16 @@ src/main.rs:4269|None if !bot.directory.trim().is_empty() => bot.directory.clone
 src/main.rs:4555|.iter()
 src/main.rs:4673|chat.compacting = Some(active);
 src/main.rs:5320|fn queue_current(
+src/main.rs:5327|const MAX_QUEUED: usize = 5;
 src/main.rs:5341|.map(|attachment| attachment.file_name.clone())
+src/main.rs:5366|fn flush_queue(&mut self, key: &str, cx: &mut Context<Self>) {
 src/main.rs:5450|Some(&identity)
 src/main.rs:5476|.iter()
+src/main.rs:5823|fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:5836|fn question_card_el(
 src/main.rs:6042|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:6549|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+src/main.rs:6562|fn approval_card_el(
 src/main.rs:6840|fn on_new_session_shortcut(
 src/main.rs:6872|.new_session(
 src/main.rs:703|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
@@ -299,6 +368,8 @@ src/main.rs:7082|fn on_find_shortcut(&mut self, _: &FindShortcut, window: &mut W
 src/main.rs:7330|let found = self.find_owner_of_session(&session_id);
 src/main.rs:7419|}
 src/main.rs:748|User
+src/main.rs:753|enum MsgKind {
+src/main.rs:755|Reasoning
 src/main.rs:7559|PaletteCmd::NewSession => {
 src/main.rs:7576|self.backend.new_session(
 src/main.rs:7612|PaletteCmd::Compact => {
@@ -316,6 +387,7 @@ src/memory_review.rs:318|pub fn apply_operations(
 src/memory_review.rs:83|pub fn build_prompt(snapshot: &ReviewSnapshot, memory_root: &Path) -> String {
 src/memory_tools.rs:194|"这段内容像凭据（密码/令牌/密钥/长数字），不写进记忆".to_string()
 src/memory_tools.rs:396|/// 拒绝把凭据写进记忆（与 `src/memory_review.rs:286` 同一套标记 + 长数字检测）。
+src/memory_tools.rs:397|fn looks_sensitive(text: &str) -> bool {
 src/memory_tools.rs:58|pub fn tools(bot_id: Option<&str>) -> Vec<HarnessTool> {
 src/model_limits.rs:190|pub fn read(provider_id: &str, model_id: &str) -> ModelLimits {
 src/model_limits.rs:20|pub const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
@@ -339,9 +411,11 @@ src/rpi_engine.rs:1536|pub fn search_sessions(query: &str, limit: usize) -> Vec<
 src/rpi_engine.rs:1575|collect_search(&path, needle, limit, private_workspaces, out);
 src/rpi_engine.rs:1589|if !private_workspaces.is_empty()
 src/rpi_engine.rs:1692|pub fn usage_daily(days: usize) -> Vec<(String, i64, i64, i64)> {
+src/rpi_engine.rs:1731|pub fn usage_grouped(days: usize) -> GroupedUsage {
 src/rpi_engine.rs:1737|let mut out = GroupedUsage::default();
 src/rpi_engine.rs:1776|}
 src/rpi_engine.rs:188|pub fn thinking_level_for(spec: &ModelSpec) -> ThinkingLevel {
+src/rpi_engine.rs:1914|.find(|bot| !bot.directory.trim().is_empty() && bot.directory.eq_ignore_ascii_ca
 src/rpi_engine.rs:2051|pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageCo
 src/rpi_engine.rs:2117|name: "ask_user_question".to_string()
 src/rpi_engine.rs:239|pub fn private_bot_id(identity: &str) -> Option<String> {
