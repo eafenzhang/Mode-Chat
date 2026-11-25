@@ -233,7 +233,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | **O-2** | 运行状态面板接回 | 现状：「⋯ → 运行状态」设了状态但无渲染点（`:17460` → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | P0（删除批同步） |
 | **O-3** | 工作中状态行的文案分档 | 现状 `:28181-28184` 只有「工作中 / 重试中」两种；DS Bot `cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
-| **O-5** | 间距统一归入 4px 档（U-01） | 基线量级 **260–280 处**不在 {0,4,8,12,16,24,32}（我的正则实测 269 / 总 536；@Chief 用另一条正则得 263 / 总 527——差异来自 `.p()` 单值、`.size()`、`.line_height()` 是否计入）。**这个数字只是量级参考，不是判据** | 先给 `scripts/ui-lint.ps1` 加第 5 条规则（间距值必须属于六档或 `ui_kit::S*`），再按**页**清零：会话列表 → 聊天区 → 右栏 → 设置页，每页改完截图对照 | **判据只有一条**：`ui-lint.ps1 -Enforce` 第 5 条规则 **0 违规**。外加每页改前/改后截图各一张 | P1 |
+| **O-5** | 间距统一归入 4px 档（U-01） | `0.5.1-ui-review.md` U-01；标准见 `docs/ui-design-spec.md` 第 2 节「只用这六档」（4 / 8 / 12 / 16 / 24 / 32），同节末「废弃 5 / 10 / 14 / 18」。实测量级：`.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m*` 共 **560** 处，档外 **276** 处（`px(6)` 95、`px(10)` 64、`px(2)` 50、`px(14)` 33、`px(5)` 9、`px(1)` 6、`px(9)` 6、`px(3)` 3、`px(7)` 3、`px(56)` 1）。**数字只作量级参考，不进 AC**（理由见 §5.2） | 见 §5.2：先给 `scripts/ui-lint.ps1` 加第 5 条规则并以 report-only 跑出基线，再按页清零（会话列表 → 聊天区 → 右栏 → 设置页），每页改完前后各一张截图 | 见 §5.2：唯一判据是第 5 条规则在 `-Enforce` 下 **0 违规**；基线数值以脚本输出为准，不写手数的数字 | P1 |
 | **O-6** | 21 处 `truncate()` 缺 `min_w(px(0.))`（U-03） | 54 处 `truncate()`，21 处前 10 行内无 `min_w(px(0.))`；gpui 的 flex 子项 `min-width` 默认 `auto`，长 Bot 名 / 长路径会把父容器撑开而不是省略 | 只给**父容器是 flex 行且右侧有按钮**的位置补 `min_w(px(0.))`；父容器本身 `w_full` 的不补（避免多出无意义的省略号） | 逐处改完 `grep` 计数下降；超长 Bot 名（≥40 字）截图不撑破行 | P2 |
 | **O-7** | `ui_kit::button` / `button_ghost` 补 disabled 形态（U-04） | `ui_kit.rs:405/433` 两个函数无 disabled 参数、无置灰视觉 | 加 `disabled(bool)`，置灰用 `theme::ink_tertiary()` + 去 `cursor_pointer` + 不挂 hover；现有调用点不用改（默认 `false`） | 截图：一个 disabled 按钮与一个正常按钮同屏；`grep` 新增签名 | P2 |
 
@@ -245,6 +245,23 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 - **不新增入口**：O-1 的 chip 是「把输入框文字填进去」，不是新命令；O-2 的面板是已有菜单项的渲染点，不是新菜单项。
 - **不换视觉体系**：图标继续 Lucide 线框、间距走六档、字号四档、圆角令牌，`ui-lint -Enforce` 是硬门禁。
 - **每页改完立刻截图**：O-5 是机械替换，最容易出视觉回归，不做「全部改完再看」。
+
+### 5.2 O-5 的验收口径（第 5 条间距规则）
+
+**为什么不能把处数写进 AC**：同一份 `main.rs`、同一个「档外处数」，三次独立统计得到三个值——@前端 276、@Chief 263、@产品 269，差别只来自正则是否把 `.p()` 单值、`.size()`、`.line_height()` 算进来；classic 删除区里会随 D-CUT 一起消失的档外处数，@前端 实测 48、@产品 实测 39（按 28 个函数区间并集）。**这类数字随统计口径变，一旦写进 AC 就变成一条永远对不上的 AC**（U-06 同类教训）。
+
+**所以 O-5 拆成 4 步，前 3 步是前置条件，第 4 步才是验收**：
+
+| 步 | 动作 | 完成标志 |
+| --- | --- | --- |
+| ① 加规则 | 在 `scripts/ui-lint.ps1` 加第 5 条规则 `spacing_offtoken`：只检查 `.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m/.mx/.my/.mt/.mb/.ml/.mr` 的 `px(N)` 参数，`N` 属于 {4,8,12,16,24,32} 或在 `$SpacingTokens` 白名单内即通过；**`px(0.)` 一律放行**（它是 `min_w` / `min_h` 一类的容器约束，不是视觉间距）；规则名必须加进 `$order`，否则 `-Enforce` 根本不统计它 | `ui-lint.ps1` 能 grep 到 `spacing_offtoken`，且 `$order` 有 5 项 |
+| ② 报基线 | 规则先以 **report-only** 上线（不计入 `-Enforce` 退出码），跑一次，把基线条数写进本文 §8 变更记录 | 一条带日期、数值取自脚本输出的基线记录 |
+| ③ 逐页清零 | 会话列表 → 聊天区 → 右栏 → 设置页，每页改完一张前 / 后截图 | 4 页共 8 张截图 |
+| ④ 切硬门禁 | 第 5 条规则从 report-only 切到 `-Enforce` | `ui-lint.ps1 -Enforce` 输出 `total violations: 0`，且规则清单里含 `spacing_offtoken` |
+
+**明确不做**：不把 `px(0.)`、`.size()`、`.line_height()` 纳入第 5 条（后两类分别归字号规则与既有规则）；不为凑数把 `px(6)` 的 95 处一次性全改——先让规则上线报基线，再按页清零，否则一次性大改没人能看出视觉回归。
+
+**@测试 的验收动作固定为一条命令**：`scripts/ui-lint.ps1 -Enforce`，要求输出里出现 `spacing_offtoken` 这一项且 `total violations: 0`。只看 `PASS` 不看规则名，会在第 5 条尚未上线时**假通过**——这是本项唯一必须防的坑。
 
 ---
 
@@ -259,7 +276,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | **D-CUT** | ① 删 §2.1 第一批（约 2,772 行含注释）+ 五处易漏项（`control_card` / `chat_status` / `status_color` / `two_line` / `text_block`）；② 删第二批（241 行）+ `shell()` 改单分支 + `BOT_PILOT_CLASSIC_UI` 移除；③ 清 `theme.rs` 10 函数 + 2 常量 + `shadow_1` 断言 | 前端 | 删除方案补完五处易漏项与 `theme.rs` 清单 | 每删一组 `cargo check`；本批结束时 §3.1 / §3.2 / §3.3 的 grep 全过，`clippy -D warnings` 0 告警 |
 | **D3** | 搬欢迎区（O-1）+ 接回运行状态面板（O-2） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（深浅 × 两功能） |
 | **D4** | 文档锚点重指 + 锁重建 + 矩阵 A12 改判 | 产品（锚点语义）+ 架构（重排脚本） | D-CUT / D3 完成 | 删除方案 §7.4 五步；§3.8；矩阵 88/21/27 |
-| **O 批** | O-3 / O-4 / O-5 / O-6 / O-7 | 前端（O-5 逐页） | D4 六道门禁全绿 | §5 各行「验收怎么验」 |
+| **O 批** | O-3 / O-4 / O-5 / O-6 / O-7 | 前端（O-5 先加规则再逐页，见 §5.2） | D4 六道门禁全绿 | §5 各行「验收怎么验」+ §5.2 四步 |
 | **V 批** | 回归验证 + 发布 v0.6.0 | 测试 | O 批完成 | 见目标验收 |
 
 **依赖关系里唯一不能反序的**：D4 的锁重建必须在 D-CUT / D3 之后（删除方案 §7.4：先删代码 → 再改文档 → 最后重建锁）。反过来会把错误指纹固化成基线。
@@ -286,3 +303,4 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | --- | --- | --- | --- |
 | 2026-11-26 | 0.6.0-draft | 首版。删 classic（main.rs 约 3,013 行 + theme.rs 约 20 行）+ 微信壳优化（O-1…O-7）；拍板 A12 降 🟡、`chat_detail_panel` 保留接回；明确不做骨架改动、引用条、主卡位、U-02、U-05 | 矩阵 89/20/27 → **88/21/27** |
 | 2026-11-26 | 0.6.0-draft2 | 吸收交叉验证：补五处易漏项（`control_card`/`chat_status`/`status_color`/`two_line`/`text_block`）与 `theme.rs` 10 函数 2 常量；D1+D2 合为 D-CUT；行数预期改区间；O-5 判据改为只认 `ui-lint` 第 5 条规则（数量级 260–280 仅作参考） | 无功能变更；删除清单从 27 项增至 42 项单元 |
+| 2026-11-26 | 0.6.0-draft3 | 新增 §5.2「O-5 的验收口径」：第 5 条间距规则拆成「加规则 → 报基线 → 逐页清零 → 切硬门禁」四步，`px(0.)` 放行，判据只认 `-Enforce` 输出里 `spacing_offtoken` 为 0；O-5 行内数字改为单一来源实测（560 / 档外 276）且明确不进 AC | 删掉 AC 里对数字的依赖；测试验收动作收敛为一条命令 + 一个规则名 |
