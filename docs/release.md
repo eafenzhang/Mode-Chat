@@ -47,6 +47,11 @@ git push chat v0.2.1
 
 然后在 `Mode-Chat` 建 Release，上传上面三个文件，标记为 latest。
 
+**核对口径（重要）**：CI 在 runner 上重新编译，产物与本地**不是逐字节相同**（v0.5.0 实测：本地 zip `0927cefa…`，发布产物 `dcfff443…`）。所以：
+
+- 本地算出的 zip `sha256` 只能用来验证**打包脚本本身**没问题，不能拿去和 CI 产物比对；
+- 发版核对只认**发布产物自身**：Release 里 zip 的 `sha256` == 同一 Release 里 `gpui-latest.json` 的 `platforms.windows-x86_64.sha256`，`size` 同理。
+
 ## 更新源约定
 
 - 客户端清单：`https://github.com/eafenzhang/Mode-Chat/releases/latest/download/gpui-latest.json`
