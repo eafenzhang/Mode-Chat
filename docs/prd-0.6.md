@@ -109,6 +109,20 @@ Select-String -Path src\theme.rs -Pattern 'fn shadow_2|fn shadow_3|fn shadow_4|f
 | **重命名剩余 `wecom_*`**（24 个、88 处，企微渠道协议层） | 与企业微信这个 IM 渠道本身同名是有意的，改名会与「微信 UI 皮肤」混淆 | 不做，永久保留 |
 | **新增任何双击可达入口** | 「优化」不等于「加功能」 | v0.7 |
 
+### 2.4 删除批暴露的三处功能位缺失与处置（本版拍板）
+
+D-CUT 删完 classic 后 `clippy -D warnings` 报出 20 条 dead code，其中三处**不是单纯死代码，而是「原来只有 classic 有入口」的功能位**。逐项拍板：
+
+| # | 功能位 | 现状证据 | 判定 | 计入 |
+| --- | --- | --- | --- | --- |
+| 1 | **会话重命名**（`SettingsDetail::RenameSession`） | HEAD 里唯一触发点是 classic `right_panel` 的 `hist-rename-{id}`「改名」按钮（`c86c899:21286-21309`）；微信壳历史会话行（`panel-history-{target}`）只有切换，没有改名。对话框、`sessions.set_title`、state.json 落盘全都还在 | **接回**。微信壳 `chat_info_panel` 历史会话行加一个「改名」按钮触发同一个 `SettingsDetail::RenameSession`，复用现成对话框与落盘逻辑，约 12 行。这是「给已存在功能补回丢失的入口」，不是新功能 | D3，与 O-2 同批 |
+| 2 | **浏览器「打开 URL / 最近记录 / 已装浏览器」**（`browser_panel_section`、`record_browser_open`、`browser_recents`、`browser_url_input`、`save/load_browser_recents`、`installed_browsers`） | HEAD 里只在 classic `control_card(kind==1)` 内渲染（`c86c899:8861`）；微信壳浏览器页（`settings_page_browser`）只有「打开 / 关闭 / 页面截图 + 使用范围」 | **不接回，明确记为功能回退**。接回等于在设置页新增一整块 URL 输入 + 最近列表 + 已装浏览器列表，属于新功能，超出「优化」边界。矩阵 **G04 差距列必须改写**（现在写的是「只有用系统浏览器打开 URL + 最近 + 已装浏览器列表」，v0.6.0 起这句不再成立），保持 ❌，留给 v0.7 的内嵌浏览器面板 | 随 D-CUT 删除；矩阵改判归 D4 |
+| 3 | **插件开关二次确认**（`PluginSwitchConfirm`、`apply_plugin_switch`、`open_plugin_confirm_dialog`、`data::set_plugin_switch`） | HEAD 里只在 classic `control_card` 的插件分页触发；微信壳插件页明写「暂未接入插件宿主」。`data::set_plugin_switch` 在框架层无消费者（只有 `data.rs:2676` 的单测） | **UI 删，数据层留**。`data.rs` 的 `set_plugin_switch` + 它的单测保留，加 `#[allow(dead_code)]`（同文件 `workspace_plugins:217` 已有同款先例）；插件宿主 K09 是 ❌ 降级 v0.6，v0.7 接宿主时直接用，删了要重写，且删测试会压低测试数 | 随 D-CUT 删除 UI；`data.rs` 只加注解 |
+
+**纯死代码（无功能含义，直接删，不留记录）**：`avatar.rs` 的 `deg` / `shell` / `bot_avatar` / `channel_avatar` / `unread_dot`（`bot_avatar_rect` 保留，微信壳在用）、`sidebar_status_badge`、`nav_row`、`NavRowFocus`、`tool_state_color`、`settings_nav`（微信壳侧栏是 `wechat_nav`，导航一致性由 `settings_page_in_nav` 单测覆盖）。字段级 dead（`browser_url_input`、`PluginSwitchConfirm` 等）随所属结构体一起清；**`Bot.description` / `last_session_id` 不在其列**——它们由 `data.rs:2336` / `:2344` 序列化读，clippy 若仍报，报的是别的结构体，按报错的具体类型处理，不许顺手把 `data::Bot` 的字段删掉（会破坏 state.json 兼容）。
+
+**本节的验收口径**：`cargo clippy --all-targets --locked -- -D warnings` **0 error**；`cargo test` 总数 **≥575**（`composer_radius` 单测随函数删除是唯一允许的下降，其余只许不变或上升）。
+
 ---
 
 ## 3. 可执行验收（删除批）
@@ -294,7 +308,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | 批 | 内容 | 负责 | 前置 | 验证 |
 | --- | --- | --- | --- | --- |
 | **D-CUT** | ① 删 §2.1 第一批（约 2,772 行含注释）+ 五处易漏项（`control_card` / `chat_status` / `status_color` / `two_line` / `text_block`）；② 删第二批（241 行）+ `shell()` 改单分支 + `BOT_PILOT_CLASSIC_UI` 移除；③ 清 `theme.rs` 10 函数 + 2 常量 + `shadow_1` 断言 | 前端 | 删除方案补完五处易漏项与 `theme.rs` 清单 | 每删一组 `cargo check`；本批结束时 §3.1 / §3.2 / §3.3 的 grep 全过，`clippy -D warnings` 0 告警 |
-| **D3** | 搬欢迎区（O-1）+ 接回运行状态面板（O-2） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（深浅 × 两功能） |
+| **D3** | 搬欢迎区（O-1）+ 接回运行状态面板（O-2）+ 接回会话改名入口（§2.4 ①） | 前端 | D-CUT 完成 | §3.4 / §3.5 的 grep + 四张截图（深浅 × 两功能） |
 | **D4** | 文档锚点重指 + 锁重建 + 矩阵 A12 改判 | 产品（锚点语义）+ 架构（重排脚本） | D-CUT / D3 完成 | 删除方案 §7.4 五步；§3.8；矩阵 88/21/27 |
 | **O 批** | O-3 / O-4 / O-5 / O-6 / O-7 | 前端（O-5 先加规则再逐页，见 §5.2） | D4 六道门禁全绿 | §5 各行「验收怎么验」+ §5.2 四步 |
 | **V 批** | 回归验证 + 发布 v0.6.0 | 测试 | O 批完成 | 见目标验收 |
