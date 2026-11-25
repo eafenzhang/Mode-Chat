@@ -4508,6 +4508,19 @@ impl PilotApp {
                 from_bot_name,
             } => {
                 let key = group_key(&group_id);
+                // D-06：群外机器人发言常常先于「用户点开这个群」到达。此时 backend 里
+                // 还没有这个群的 spec，后面的 send_group_in_turn 只会回「群聊会话尚未建立」，
+                // 消息只进了台账、群目录里连 transcript.jsonl 都不会有。
+                // 这里按需补建一次（EnsureGroup 幂等，已存在则复用成员会话）。
+                if !self.chats.contains_key(&key)
+                    && let Some(index) = self
+                        .roster
+                        .groups
+                        .iter()
+                        .position(|group| group.id == group_id)
+                {
+                    self.ensure_group(index);
+                }
                 let Some(group) = self
                     .roster
                     .groups
@@ -24674,6 +24687,12 @@ fn auto_permission(
     bot: &Bot,
     prompt: &PermissionPrompt,
 ) -> Option<(String, String, String)> {
+    // 隐私越界（访问别人/已归档的目录）一律交给用户：档位说的是「这个 Bot 在它自己的
+    // 范围内可以多自由」，不是「允许它读别人的隐私目录」。曾经这里只按工具名判定，
+    // `full` 对 `read` 返回 Allow，越界卡被静默消费，文件内容直接进了回复（D-05）。
+    if prompt.privacy {
+        return None;
+    }
     let level = parse_level(&bot.approval_level).ok()?;
     let decision = decide(level, &bot.approval_allowlist, &prompt.tool_name);
     let (allow, label) = match decision {
@@ -27317,6 +27336,63 @@ impl PilotApp {
                 body = body.child(ui::section(i18n::t("最近会话"))).child(card);
             }
         }
+        // 8) Bot 记忆（验收 D-07）：默认微信风 UI 之前没有入口，只有 classic UI 的
+        //    `bot_details` 里有。记忆条目数直接读索引；点行进编辑面板，与团队/群聊
+        //    记忆共用 `SettingsDetail::BotMemory`，行级 id 仍是 `bot-memory-row-<file>`。
+        if let Some(bot_id) = bot.as_ref().map(|bot| bot.id.clone()) {
+            let entries = data::bot_memory_entries(&bot_id);
+            let count = entries.len();
+            let summary = if count == 0 {
+                i18n::t("还没有记忆").to_string()
+            } else {
+                tri!("{count} 条记忆", "{count} entries")
+            };
+            let click_id = bot_id.clone();
+            body = body.child(ui::section(i18n::t("记忆"))).child(
+                ui::card(vec![]).child(ui::card_row(
+                    div()
+                        .id("chat-info-memory-row")
+                        .w_full()
+                        .px(px(ui::S3))
+                        .py(px(ui::S1))
+                        .flex()
+                        .items_center()
+                        .gap(px(ui::S1))
+                        .pointer()
+                        .hover(|style| style.bg(wecom_theme::nav_item_hover_bg()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.settings_detail = Some(SettingsDetail::BotMemory {
+                                bot_id: click_id.clone(),
+                            });
+                            this.settings_detail_input = None;
+                            this.settings_detail_extra.clear();
+                            this.settings_detail_error = None;
+                            this.settings_open = true;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(11.))
+                                .text_color(wecom_theme::list_preview())
+                                .child(SharedString::from(summary)),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .font_family(wecom_theme::FONT_FAMILY)
+                                .text_size(px(ui_kit::T_LABEL))
+                                .text_color(wecom_theme::time_label())
+                                .child(i18n::t("查看")),
+                        )
+                        .into_any_element(),
+                    true,
+                )),
+            );
+        }
 
         // 快捷动作：与「⋯」菜单里的常用项对齐
         if let Some(bot_id) = bot.as_ref().map(|bot| bot.id.clone()) {
@@ -29438,6 +29514,72 @@ mod prefs_tests {
             normalize_pinned_settings(&[14, 15, 0, 1, 2, 3, 4, 5]),
             vec![0, 1, 2, 3, 4]
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_permission_tests {
+    use super::*;
+
+    fn bot(level: &str) -> Bot {
+        Bot {
+            id: "b1".to_string(),
+            name: "B1".to_string(),
+            role: String::new(),
+            description: String::new(),
+            directory: String::new(),
+            is_chief: false,
+            is_main: false,
+            is_private: false,
+            pinned: false,
+            model: None,
+            last_session_id: None,
+            identity_sync: true,
+            approval_level: level.to_string(),
+            approval_allowlist: Vec::new(),
+        }
+    }
+
+    fn prompt(tool: &str, privacy: bool) -> PermissionPrompt {
+        PermissionPrompt {
+            request_id: "r1".to_string(),
+            tool_name: tool.to_string(),
+            reason: String::new(),
+            risk: "write".to_string(),
+            options: vec![
+                backend::PromptOption {
+                    option_id: "allow_once".to_string(),
+                    label: "允许一次".to_string(),
+                    kind: "allow_once".to_string(),
+                },
+                backend::PromptOption {
+                    option_id: "deny".to_string(),
+                    label: "拒绝".to_string(),
+                    kind: "deny".to_string(),
+                },
+            ],
+            member: None,
+            privacy,
+        }
+    }
+
+    #[test]
+    fn privacy_prompt_is_never_auto_approved() {
+        // D-05：`full` 档下 read 本来会被自动放行，越界卡就被静默消费、文件内容进了回复。
+        // 隐私越界必须一律弹给用户，任何档位都不许自动放行。
+        for level in ["full", "auto", "ask"] {
+            assert!(
+                auto_permission(&bot(level), &prompt("read", true)).is_none(),
+                "{level} 档不得自动放行隐私越界卡"
+            );
+        }
+    }
+
+    #[test]
+    fn normal_prompt_still_follows_level() {
+        // 非隐私卡维持原行为，别把档位机制一起改坏。
+        assert!(auto_permission(&bot("full"), &prompt("read", false)).is_some());
+        assert!(auto_permission(&bot("ask"), &prompt("read", false)).is_none());
     }
 }
 
