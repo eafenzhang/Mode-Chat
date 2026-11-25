@@ -1092,6 +1092,9 @@ struct GroupGoalState {
     /// 新建目标时尚未落盘的阶段标题。
     new_stages: Vec<String>,
     error: Option<String>,
+    /// 出错的那一行（阶段 id）。有值时错误条渲染在该阶段操作条下面，
+    /// 而不是整块面板最末尾——面板一长用户就看不到提示了。
+    error_stage: Option<String>,
 }
 
 impl GroupGoalState {
@@ -1100,8 +1103,28 @@ impl GroupGoalState {
             Ok(goal) => {
                 self.goal = goal;
                 self.error = None;
+                self.error_stage = None;
             }
-            Err(message) => self.error = Some(message),
+            Err(message) => {
+                self.error = Some(message);
+                self.error_stage = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// 阶段级操作：失败时把错误挂到该阶段行下，而不是整块面板末尾。
+    fn apply_stage(&mut self, stage_id: &str, action: GoalAction, cx: &mut Context<Self>) {
+        match group_goal::apply(&data::data_root(), &self.group_id, action) {
+            Ok(goal) => {
+                self.goal = goal;
+                self.error = None;
+                self.error_stage = None;
+            }
+            Err(message) => {
+                self.error = Some(message);
+                self.error_stage = Some(stage_id.to_string());
+            }
         }
         cx.notify();
     }
@@ -1110,9 +1133,11 @@ impl GroupGoalState {
         let value = self.stage.read(cx).content().trim().to_string();
         if value.is_empty() {
             self.error = Some(i18n::t("阶段标题不能为空").to_string());
+            self.error_stage = None;
         } else {
             self.new_stages.push(value);
             self.error = None;
+            self.error_stage = None;
             let stage = self.stage.clone();
             stage.update(cx, |input, cx| input.set_content("", cx));
         }
@@ -1123,6 +1148,8 @@ impl GroupGoalState {
         let title = self.title.read(cx).content().trim().to_string();
         let description = self.description.read(cx).content().to_string();
         let stages = self.new_stages.clone();
+        // 还没建出目标：任何遗留的阶段级错误都得清掉，否则下面的面板级错误被挡住。
+        self.error_stage = None;
         self.apply(
             GoalAction::Create {
                 title,
@@ -1137,6 +1164,7 @@ impl GroupGoalState {
     fn begin_stage_edit(&mut self, edit: GoalStageEdit, seed: String, cx: &mut Context<Self>) {
         self.edit = Some(edit);
         self.error = None;
+        self.error_stage = None;
         let input = self.stage_action.clone();
         input.update(cx, |input, cx| input.set_content(seed, cx));
         cx.notify();
@@ -1146,6 +1174,11 @@ impl GroupGoalState {
     fn commit_stage_edit(&mut self, cx: &mut Context<Self>) {
         let Some(edit) = self.edit.clone() else {
             return;
+        };
+        let stage_id = match &edit {
+            GoalStageEdit::Pass { stage_id }
+            | GoalStageEdit::Rework { stage_id }
+            | GoalStageEdit::Acceptance { stage_id } => stage_id.clone(),
         };
         let text = self.stage_action.read(cx).content().trim().to_string();
         // 空值一律在前端拦下：后端也会报错，但这样能立刻给用户提示。
@@ -1158,6 +1191,8 @@ impl GroupGoalState {
                 }
                 .to_string(),
             );
+            // 校验失败也挂在该阶段行下，别让用户去面板底部找。
+            self.error_stage = Some(stage_id);
             cx.notify();
             return;
         }
@@ -1176,7 +1211,7 @@ impl GroupGoalState {
             },
         };
         self.edit = None;
-        self.apply(action, cx);
+        self.apply_stage(&stage_id, action, cx);
     }
 
     /// 保存目标级验收线（W5 的「整体做完的标准」）。
@@ -1575,6 +1610,8 @@ impl Render for GroupGoalState {
                                         if !stage_active {
                                             this.error =
                                                 Some(i18n::t("只有进行中的阶段可以通过").to_string());
+                                            // 提示挂在这一行下面，用户点哪儿就在哪儿看到。
+                                            this.error_stage = Some(stage_id.clone());
                                             cx.notify();
                                             return;
                                         }
@@ -1644,6 +1681,29 @@ impl Render for GroupGoalState {
                                         stage_id: stage_id.clone(),
                                     }))
                             .then(|| self.stage_edit_row(index, cx)),
+                        )
+                        // 阶段级错误挂在这一行下面：面板再长用户也一眼看到。
+                        .children(
+                            self.error_stage
+                                .as_deref()
+                                .filter(|id| *id == stage_id.as_str())
+                                .and_then(|_| self.error.clone())
+                                .map(|message| {
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "goal-stage-error-{index}"
+                                        )))
+                                        .w_full()
+                                        .rounded(px(theme::RADIUS_CHIP))
+                                        .bg(theme::danger_soft())
+                                        .px(px(ui_kit::S2))
+                                        .py(px(ui_kit::S1))
+                                        .font_family(theme::FONT_FAMILY)
+                                        .text_size(px(ui_kit::T_LABEL))
+                                        .line_height(px(ui_kit::T_LABEL_LH))
+                                        .text_color(theme::danger())
+                                        .child(SharedString::from(message))
+                                }),
                         ),
                 );
             }
@@ -1869,11 +1929,19 @@ impl Render for GroupGoalState {
                 );
         }
 
-        if let Some(error) = &self.error {
+        // 面板级错误（创建/新建阶段的失败）落在这里；阶段级错误已挂在该阶段行内。
+        if let (Some(error), None) = (&self.error, &self.error_stage) {
             body = body.child(
                 div()
+                    .id("goal-error")
+                    .w_full()
+                    .rounded(px(theme::RADIUS_CHIP))
+                    .bg(theme::danger_soft())
+                    .px(px(ui_kit::S2))
+                    .py(px(ui_kit::S1))
                     .font_family(theme::FONT_FAMILY)
-                    .text_size(px(11.))
+                    .text_size(px(ui_kit::T_LABEL))
+                    .line_height(px(ui_kit::T_LABEL_LH))
                     .text_color(theme::danger())
                     .child(SharedString::from(error.clone())),
             );
@@ -3181,9 +3249,10 @@ struct PilotApp {
 
     /// 定时任务页快照（None = 下次渲染时重读）。
     automations_view: Option<AutomationsView>,
-    /// 用量页「全库累计」快照：外层 None = 未加载，内层 None = 还没有会话。
-    usage_totals_view: Option<Option<session_db::UsageSummary>>,
     /// 用量页分组视图（W9）：扫描全部会话 JSONL，不能进每帧渲染，按需加载。
+    ///
+    /// 顶部四张卡也读它的 `total`，这样卡片和下方明细吃的是同一个 `usage_range`，
+    /// 不会出现「卡片是全库累计、明细说这个范围没数据」的自相矛盾。
     usage_grouped_view: Option<crate::rpi_engine::GroupedUsage>,
     /// 用量页时间范围（天）：1/7/30/90。
     usage_range: usize,
@@ -3714,7 +3783,6 @@ impl PilotApp {
             menu_selected: 0,
             menu_focus: cx.focus_handle(),
             automations_view: None,
-            usage_totals_view: None,
             usage_grouped_view: None,
             usage_range: 7,
             usage_group: 0,
@@ -6812,7 +6880,7 @@ impl PilotApp {
         debug_action("SettingsShortcut");
         self.settings_open = true;
         self.automations_view = None;
-        self.usage_totals_view = None;
+        self.usage_grouped_view = None;
         self.detail_menu_open = false;
         self.settings_focus.clone().focus(window, cx);
         cx.notify();
@@ -9159,7 +9227,7 @@ impl PilotApp {
                         this.im_create = None;
                         this.im_qr_page = None;
                         this.automations_view = None;
-                        this.usage_totals_view = None;
+                        this.usage_grouped_view = None;
                         cx.notify();
                     }))
                     .child(menu_icons::menu_icon(
@@ -10042,7 +10110,27 @@ impl PilotApp {
                 )
             }
             SettingsDetail::NewSchedule => {
-                let bot = self.selected_bot().cloned()?;
+                // 定时任务挂在 Bot 上：没选 Bot 时以前用 `?` 直接返回 None，
+                // 用户点「新建任务」看不到任何反应。这里给显式空态 + 关闭按钮。
+                let Some(bot) = self.selected_bot().cloned() else {
+                    let panel = ui::DetailPanel::new(i18n::t("新建定时任务"))
+                        .subtitle(i18n::t("定时任务挂在某个 Bot 上"))
+                        .body(ui::empty(i18n::t("先在左侧选一个 Bot，再点新建任务。")))
+                        .action(ui::button("detail-cancel", i18n::t("关闭")).on_click(
+                            cx.listener(|this, _event, _window, cx| {
+                                this.settings_detail = None;
+                                this.settings_detail_input = None;
+                                this.settings_detail_extra.clear();
+                                this.settings_detail_flags.clear();
+                                this.settings_detail_entries.clear();
+                                this.settings_detail_error = None;
+                                cx.notify();
+                            }),
+                        ));
+                    return Some(
+                        panel.render(move |_window: &mut Window, _cx: &mut App| {}, cx),
+                    );
+                };
                 // 5 个输入：标题（主输入）+ 指令 / 时间 / 分钟数 / cron。
                 let fields = self.ensure_detail_fields(
                     cx,
@@ -10151,6 +10239,9 @@ impl PilotApp {
                         i18n::t("每隔多少分钟（1–10080）"),
                         &every_input,
                     )),
+                    // 「每周」的时间框和日期 chip 在下面单独加，这里不能再给一个
+                    // `schedule-daily-time`，否则右侧会并排出现两个「时间（HH:mm）」。
+                    2 => wizard,
                     _ => wizard.child(ui::form_field(
                         "schedule-daily-time",
                         i18n::t("时间（HH:mm）"),
@@ -10773,6 +10864,7 @@ impl PilotApp {
                         edit: None,
                         new_stages: Vec::new(),
                         error: None,
+                        error_stage: None,
                     });
                     self.settings_detail_view = Some(view.into());
                 }
@@ -15899,18 +15991,10 @@ impl PilotApp {
         body.child(card).into_any_element()
     }
 
-    /// 全库用量快照（懒加载；打开设置/切页时清空重读）。
-    fn get_or_load_usage_totals(&mut self) -> &Option<session_db::UsageSummary> {
-        if self.usage_totals_view.is_none() {
-            self.usage_totals_view = Some(crate::rpi_engine::usage_totals());
-        }
-        // 同上：刚写过 Some，但用 as_ref().unwrap_or(&None) 同一语义更安全。
-        self.usage_totals_view
-            .as_ref()
-            .unwrap_or(&const { None })
-    }
-
-    /// 用量分组快照（W9；懒加载，同 totals）。
+    /// 用量分组快照（W9；懒加载，按 `usage_range` 缓存）。
+    ///
+    /// 顶部四张卡与按 Bot / 按模型两张表都从这里取数，切范围时由范围 chip
+    /// 把 `usage_grouped_view` 清空重读，三处不会各读各的。
     fn get_or_load_usage_grouped(&mut self) -> crate::rpi_engine::GroupedUsage {
         if self.usage_grouped_view.is_none() {
             self.usage_grouped_view = Some(crate::rpi_engine::usage_grouped(self.usage_range));
@@ -15932,12 +16016,14 @@ impl PilotApp {
         let usage = chat.and_then(|chat| chat.usage);
         let todo_count = chat.map(|chat| chat.todos.len()).unwrap_or(0);
         // 快照只在切到本页/打开设置时重读：扫全部 JSONL 不能进每帧渲染路径。
-        let totals = *self.get_or_load_usage_totals();
-        let summary = totals.or(usage);
+        // 卡片口径必须跟 chips 的 `usage_range` 一致，所以读 `grouped.total`
+        // （同一次扫描的累计），不再用全库的 `usage_totals()`。
         let range = self.usage_range;
         let group_mode = self.usage_group;
         let grouped = self.get_or_load_usage_grouped();
         let daily = grouped.by_day.clone();
+        // 扫描范围内一回合都没有时给 `None`，卡片显示「—」而不是一排 0。
+        let summary = (grouped.total.turns > 0).then_some(grouped.total);
 
         let token = |value: Option<i64>| {
             value
@@ -15964,8 +16050,8 @@ impl PilotApp {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         if this.usage_range != days {
                             this.usage_range = days;
+                            // 卡片、按 Bot、按模型、按天全吃这一份快照，清一次全刷新。
                             this.usage_grouped_view = None;
-                            this.usage_totals_view = None;
                         }
                         cx.notify();
                     }))
@@ -17370,7 +17456,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         self.im_create = None;
         self.im_qr_page = None;
         self.automations_view = None;
-        self.usage_totals_view = None;
+        self.usage_grouped_view = None;
         self.detail_menu_open = false;
         self.footer_menu_open = false;
         // 菜单/导轨打开设置时也要把焦点交给设置页：否则焦点还在会话输入框上，
@@ -20528,14 +20614,14 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             .on_action(cx.listener(|this, _: &ActivateTabStop, window, cx| {
                                 this.settings_open = true;
                                 this.automations_view = None;
-                                this.usage_totals_view = None;
+                                this.usage_grouped_view = None;
                                 this.settings_focus.clone().focus(window, cx);
                                 cx.notify();
                             }))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.settings_open = true;
                                 this.automations_view = None;
-                                this.usage_totals_view = None;
+                                this.usage_grouped_view = None;
                                 this.settings_focus.clone().focus(window, cx);
                                 cx.notify();
                             })),
@@ -23403,9 +23489,15 @@ fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
     (hour < 24 && minute < 60).then_some((hour, minute))
 }
 
+/// W9 用量分组表列宽：回合窄、token 三列等宽（右对齐，等宽字体才对齐）。
+const COL_TURNS: f32 = 44.;
+const COL_TOKENS: f32 = 64.;
+
 /// W9 用量分组表（按 Bot）：名称 / 回合 / 输入 / 输出 / 合计。
 ///
-/// 数字列右对齐、等宽字体（`FONT_MONO`），保证同屏比较时位数对齐。
+/// 名称列 `flex_1` 吃掉剩余宽度并 truncate；四个数字列用**定宽**右对齐 +
+/// 等宽字体（`FONT_MONO`）。定宽是必须的：之前数字列表头和数据行都用 `flex_1`
+/// 平分软宽，内容一短就挤到最右侧，表头和数字对不上。
 fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
     use crate::ui_kit as ui;
     if rows.is_empty() {
@@ -23415,20 +23507,22 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
             .into_any_element();
     }
     let mut card_rows: Vec<gpui::AnyElement> = Vec::new();
-    let header = |text: &'static str, right: bool| {
-        div()
-            .flex_1()
-            .min_w(px(0.))
+    let header = |text: &'static str, width: Option<f32>| {
+        let mut cell = div()
             .flex()
-            .justify_end()
-            .when(!right, |el| el.justify_start())
+            .items_center()
+            .min_w(px(0.))
+            .when(width.is_none(), |el| el.flex_1())
+            .when_some(width, |el, width| el.w(px(width)).justify_end())
             .child(
                 div()
                     .font_family(theme::FONT_FAMILY)
                     .text_size(px(ui::T_LABEL))
                     .text_color(theme::ink_tertiary())
                     .child(i18n::t(text)),
-            )
+            );
+        cell = cell.when(width.is_none(), |el| el.justify_start());
+        cell
     };
     card_rows.push(
         div()
@@ -23436,19 +23530,19 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
             .flex()
             .items_center()
             .gap(px(ui::S2))
-            .child(header("名称", false))
-            .child(header("回合", true))
-            .child(header("输入", true))
-            .child(header("输出", true))
-            .child(header("合计", true))
+            .child(header("名称", None))
+            .child(header("回合", Some(COL_TURNS)))
+            .child(header("输入", Some(COL_TOKENS)))
+            .child(header("输出", Some(COL_TOKENS)))
+            .child(header("合计", Some(COL_TOKENS)))
             .into_any_element(),
     );
     let last = rows.len();
     for (index, (name, turns, input, output)) in rows.iter().enumerate() {
         let number = |value: String| {
             div()
-                .flex_1()
-                .min_w(px(0.))
+                .w(px(COL_TOKENS))
+                .flex_shrink_0()
                 .flex()
                 .justify_end()
                 .child(
@@ -23476,7 +23570,20 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
                             .text_color(theme::ink())
                             .child(SharedString::from(name.clone())),
                     )
-                    .child(number(turns.to_string()))
+                    .child(
+                        div()
+                            .w(px(COL_TURNS))
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_end()
+                            .child(
+                                div()
+                                    .font_family(theme::FONT_MONO)
+                                    .text_size(px(ui::T_BODY))
+                                    .text_color(theme::ink())
+                                    .child(SharedString::from(turns.to_string())),
+                            ),
+                    )
                     .child(number(session_db::format_tokens(*input)))
                     .child(number(session_db::format_tokens(*output)))
                     .child(number(session_db::format_tokens(input + output))),
@@ -23493,6 +23600,9 @@ fn usage_table_bot(rows: &[(String, i64, i64, i64)]) -> impl IntoElement {
 }
 
 /// W9 用量分组表（按模型）：provider / model / 回合 / 输入 / 输出 / 合计。
+///
+/// 列宽与 [`usage_table_bot`] 完全一致（同 `COL_TURNS` / `COL_TOKENS`），
+/// 两张表切换时数字不会左右跳。
 fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoElement {
     use crate::ui_kit as ui;
     if rows.is_empty() {
@@ -23502,15 +23612,56 @@ fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoEleme
             .into_any_element();
     }
     let mut card_rows: Vec<gpui::AnyElement> = Vec::new();
-    let number = |value: String| {
-        div().flex().justify_end().child(
-            div()
-                .font_family(theme::FONT_MONO)
-                .text_size(px(ui::T_BODY))
-                .text_color(theme::ink())
-                .child(SharedString::from(value)),
-        )
+    let number = |width: f32, value: String| {
+        div()
+            .w(px(width))
+            .flex_shrink_0()
+            .flex()
+            .justify_end()
+            .child(
+                div()
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(ui::T_BODY))
+                    .text_color(theme::ink())
+                    .child(SharedString::from(value)),
+            )
     };
+    let mut header = div()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(ui::S2))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .font_family(theme::FONT_FAMILY)
+                .text_size(px(ui::T_LABEL))
+                .text_color(theme::ink_tertiary())
+                .child(i18n::t("模型 / 提供方")),
+        );
+    for (label, width) in [
+        ("回合", COL_TURNS),
+        ("输入", COL_TOKENS),
+        ("输出", COL_TOKENS),
+        ("合计", COL_TOKENS),
+    ] {
+        header = header.child(
+            div()
+                .w(px(width))
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .child(
+                    div()
+                        .font_family(theme::FONT_FAMILY)
+                        .text_size(px(ui::T_LABEL))
+                        .text_color(theme::ink_tertiary())
+                        .child(i18n::t(label)),
+                ),
+        );
+    }
+    card_rows.push(header.into_any_element());
     let last = rows.len();
     for (index, (provider, model, turns, input, output)) in rows.iter().enumerate() {
         card_rows.push(
@@ -23519,7 +23670,7 @@ fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoEleme
                     .w_full()
                     .flex()
                     .items_center()
-                    .gap(px(ui::S3))
+                    .gap(px(ui::S2))
                     .child(
                         div()
                             .flex_1()
@@ -23544,10 +23695,10 @@ fn usage_table_model(rows: &[(String, String, i64, i64, i64)]) -> impl IntoEleme
                                     .child(SharedString::from(provider.clone())),
                             ),
                     )
-                    .child(number(turns.to_string()))
-                    .child(number(session_db::format_tokens(*input)))
-                    .child(number(session_db::format_tokens(*output)))
-                    .child(number(session_db::format_tokens(input + output))),
+                    .child(number(COL_TURNS, turns.to_string()))
+                    .child(number(COL_TOKENS, session_db::format_tokens(*input)))
+                    .child(number(COL_TOKENS, session_db::format_tokens(*output)))
+                    .child(number(COL_TOKENS, session_db::format_tokens(input + output))),
                 index + 1 == last,
             )
             .into_any_element(),
@@ -26100,7 +26251,7 @@ impl PilotApp {
                     if this.settings_open {
                         // 每次打开都让定时任务/用量页重读快照。
                         this.automations_view = None;
-                        this.usage_totals_view = None;
+                        this.usage_grouped_view = None;
                         // 焦点交给设置页，Esc 才能在任意页立即关闭（否则被输入框吃掉）。
                         this.settings_focus.clone().focus(_window, cx);
                     } else {
@@ -26344,7 +26495,7 @@ impl PilotApp {
                                 this.im_create = None;
                                 this.im_qr_page = None;
                                 this.automations_view = None;
-                                this.usage_totals_view = None;
+                                this.usage_grouped_view = None;
                                 this.settings_focus.focus(window, cx);
                                 cx.notify();
                             },
@@ -26369,7 +26520,7 @@ impl PilotApp {
                             // 定时任务页读的是快照：切页必须让它重读，否则 Bot 刚用
                             // automation_create 建的任务在页面上仍显示「还没有定时任务」。
                             this.automations_view = None;
-                            this.usage_totals_view = None;
+                            this.usage_grouped_view = None;
                             cx.notify();
                             // 点导航不产生焦点，Esc 会因无焦点元素而丢键：把焦点留在设置页上。
                             this.settings_focus.focus(window, cx);
