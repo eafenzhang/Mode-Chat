@@ -14,9 +14,9 @@
 仓库里有两套**各自手写**的渲染代码，不是同一组件换皮：
 
 ```
-wechat_shell  :25961   ← 默认，微信风四栏
-classic_shell :25925   ← 只有 BOT_PILOT_CLASSIC_UI=1 才走（:3830）
-shell()       :25917   if self.wecom_mode { wechat } else { classic }
+wechat_shell   第 25961 行   ← 默认，微信风四栏
+classic_shell  第 25925 行   ← 只有 BOT_PILOT_CLASSIC_UI=1 才走（第 3830 行）
+shell()        第 25917 行   if self.wecom_mode { wechat } else { classic }
 ```
 
 `0.5.1-shell-parity-diff.md` 量出 14 项不等价（A 方向 5 项、B 方向 6 项、C 方向 3 项）。这个数字本身就是证据：**同一个能力永远只接进一边**。v0.5.1 修的 Q-01/Q-02/Q-04/Q-05 四处，全是这个病的发作，不是四次独立的事故。
