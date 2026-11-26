@@ -1,0 +1,80 @@
+# 提交后锚点门禁：只跑 parity 一个脚本，让"改了锚点没重建锁"在几分钟内变红，
+# 而不是等到发版或等谁想起来手动跑。
+#
+# 为什么不放 pre-commit hook：hook 校验的是整个工作区，不是暂存区。本项目是
+# 单工作区多人并行改文档，产品 PRD 里一条新锚点还没进锁时，前端提交一张截图
+# 会被误拦——而那次提交和锚点毫无关系。实测 parity 单跑 4.9s，失败面却是全部。
+# 提交后检查不会拦错人，又能把"漏网"从几小时缩短到几分钟。
+#
+# 判据只用两个，都是"两个状态之间的差异"，不是单点读数：
+#   drifted > 0   锚点指向的内容变了（代码移动了，锚点没跟着改）
+#   unlocked > 0  文档里有锚点、锁里没有（这条锚点从没参与过比对）
+# 注意 stale-in-lock 只报告不判失败：本机没配外部对照树时，那 53 条指向
+# DS-Bot / pi-rust 的锚点本来就够不到，它们必须留在锁里。
+name: Anchor gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/parity-matrix.md"
+      - "docs/prd-0.5.md"
+      - "docs/prd-0.6.md"
+      - "docs/parity-anchors.lock"
+      - "docs/parity-arch-notes.md"
+      - "scripts/verify-parity-anchors.ps1"
+      - "scripts/verify-arch-anchors.ps1"
+      - "src/**"
+      - "crates/**"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths:
+      - "docs/parity-matrix.md"
+      - "docs/prd-0.5.md"
+      - "docs/prd-0.6.md"
+      - "docs/parity-anchors.lock"
+      - "docs/parity-arch-notes.md"
+      - "scripts/verify-parity-anchors.ps1"
+      - "scripts/verify-arch-anchors.ps1"
+      - "src/**"
+      - "crates/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anchor-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  anchors:
+    runs-on: windows-latest
+    steps:
+      # fetch-depth: 0 是必须的：-Baseline Head 用 `git log -1` 取提交时间给
+      # "锚点指纹与代码同源"那条注释用，浅克隆下会拿到空串。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parity anchors (HEAD baseline)
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-parity-anchors.ps1 -Baseline Head
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # 两个基线口径都要过。它们不是冗余：Head 验已提交的内容，WorkTree 验
+      # 检出后的文件。CRLF/LF 转换、编码、符号链接这类差异只在其中一个口径下
+      # 暴露过（本地 autocrlf=true、runner 上是 false）。
+      - name: Parity anchors (worktree baseline)
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-parity-anchors.ps1 -Baseline WorkTree
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Architecture anchors
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-arch-anchors.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
