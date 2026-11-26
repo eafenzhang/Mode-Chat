@@ -298,6 +298,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "需要你的回答" => Some("Needs your answer"),
         "工具" => Some("Tool"),
         "工作中" => Some("Working"),
+    "未支持" => Some("Unsupported"),
         // O-3：状态行按 ToolFamily 分档后的五个短语（Other 档沿用上面的「工作中」）。
         "正在执行命令" => Some("Running a command"),
         "正在改文件" => Some("Editing files"),
@@ -738,8 +739,8 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "已解除保护" => Some("Protection removed"),
         "已重命名" => Some("Renamed"),
         "引擎" => Some("Engine"),
-        "当前版本不支持钉钉通道，计划 v0.6.0" => Some("DingTalk channels are not supported in this version; planned for v0.6.0"),
-        "当前版本不支持飞书通道，计划 v0.6.0" => Some("Feishu channels are not supported in this version; planned for v0.6.0"),
+        "暂不支持钉钉通道" => Some("DingTalk channels are not supported yet"),
+        "暂不支持飞书通道" => Some("Feishu channels are not supported yet"),
         "待处理" => Some("Pending"),
         "待处理审批/提问" => Some("Pending approvals and questions"),
         "心跳间隔（分钟，0 关闭）" => Some("Heartbeat interval (minutes, 0 disables)"),

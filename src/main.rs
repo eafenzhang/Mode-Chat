@@ -13977,7 +13977,7 @@ impl PilotApp {
                                     .text_color(theme::ink_secondary())
                                     .child(title),
                             )
-                            .child(ui_kit::badge("v0.6.0", ui_kit::Tone::Neutral)),
+                            .child(ui_kit::badge(i18n::t("未支持"), ui_kit::Tone::Neutral)),
                     )
                     .child(
                         div()
@@ -14037,7 +14037,7 @@ impl PilotApp {
                         cx,
                     )),
             )
-            // v0.6.0 的两张卡：明确不可用，不打开创建页（见 im_platform_card_planned）。
+            // 两张「暂不支持」的卡：明确不可用，不打开创建页（见 im_platform_card_planned）。// 不要写「计划 vX.Y」——发版当天承诺下一版，等于把没做的事变成欠条。
             .child(
                 div()
                     .flex()
@@ -14045,13 +14045,13 @@ impl PilotApp {
                     .child(self.im_platform_card_planned(
                         "im-new-feishu",
                         i18n::t("飞书"),
-                        i18n::t("当前版本不支持飞书通道，计划 v0.6.0"),
+                        i18n::t("暂不支持飞书通道"),
                         cx,
                     ))
                     .child(self.im_platform_card_planned(
                         "im-new-dingtalk",
                         i18n::t("钉钉"),
-                        i18n::t("当前版本不支持钉钉通道，计划 v0.6.0"),
+                        i18n::t("暂不支持钉钉通道"),
                         cx,
                     )),
             )
