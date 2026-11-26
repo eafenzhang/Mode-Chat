@@ -121,9 +121,9 @@ D-CUT 删完 classic 后 `clippy -D warnings` 报出 20 条 dead code，其中�
 
 **纯死代码（无功能含义，直接删，不留记录）**：`avatar.rs` 的 `deg` / `shell` / `bot_avatar` / `channel_avatar` / `unread_dot`（`bot_avatar_rect` 保留，微信壳在用）、`sidebar_status_badge`、`nav_row`、`NavRowFocus`、`tool_state_color`、`settings_nav`（微信壳侧栏是 `wechat_nav`，导航一致性由 `settings_page_in_nav` 单测覆盖）。字段级 dead（`browser_url_input`、`PluginSwitchConfirm` 等）随所属结构体一起清；**`Bot.description` / `last_session_id` 不在其列**——它们由 `src/data.rs:2336` / 第 2344 行 序列化读，clippy 若仍报，报的是别的结构体，按报错的具体类型处理，不许顺手把 `data::Bot` 的字段删掉（会破坏 state.json 兼容）。
 
-**本节的验收口径**：`cargo clippy --all-targets --locked -- -D warnings` **0 error**；`cargo test` **测试总数 ≥577**、**`failed` = 0**、**`passed` ≥575**（`composer_radius` 单测随函数删除是唯一允许的下降，其余只许不变或上升）。
+**本节的验收口径**：`cargo clippy --all-targets --locked -- -D warnings` **0 error**；`cargo test --workspace --locked --no-fail-fast` 下 **`failed` = 0** 且 **`total` = 577**（`composer_radius` 单测随函数删除是唯一允许的总数下降，其余只许不变或上升）。**`passed` 不作判据**（见下）。
 
-> **三个数别混着读**（`exit=0` 只是必要条件，不看数会漏判）：`577` = `passed + failed + ignored`，是「仓库里一共存在多少条测试」，删测试才会掉；`575` 是 `passed`，是「真跑过并通过了几条」，环境退化成 `skipped` 时会掉。D-CUT 后的基线是 `575 passed / 0 failed / 2 ignored`（合计 577），所以**「总数 ≥575」是个错误口径**——桌面不可捕获时 `passed` 掉到 573，总数仍是 577，用 575 去卡 `passed` 会永远红，用 575 去卡总数又拦不住「删了 10 条加了 8 条」这种净减。两个数各管一件事。
+> **三个数各管一件事，别混着读**（`exit=0` 只是必要条件，不看数会漏判）：`total` = `passed + failed + ignored`，是「仓库里一共存在多少条测试」，删测试才会掉；`failed` 是**唯一主判据**；`passed` 是「真跑过并通过了几条」，**它会随桌面是否可捕获在 573–575 之间浮动**（锁屏时 573、可用时 575），所以不能当判据——用 575 卡它会造成「桌面一锁屏就红」，用 575 卡总数又拦不住「删了 10 条加了 8 条」的净减。**「总数 ≥575」曾经是本 PRD 的错误口径，已废弃**。
 
 ---
 
