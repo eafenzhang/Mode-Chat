@@ -189,7 +189,7 @@ src/group_tasks.rs:392|pub fn retry_task(
 src/group_tasks.rs:446|pub fn cancel_subtree(
 src/i18n.rs:21|LANG.load(Ordering::Relaxed) == 1
 src/i18n.rs:256|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
-src/i18n.rs:317|"回合进行中 · Ctrl+Enter 插话 · Enter 排队" => {
+src/i18n.rs:317|"会话还没有可导出的消息" => Some("This conversation has nothing to export")
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
 src/im_runtime.rs:1434|crate::backend::SessionEvent::Question(card) => {
 src/im_runtime.rs:169|pub async fn deliver_mirror(
@@ -290,29 +290,33 @@ src/main.rs:21595|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_
 src/main.rs:21597|.selectable(true)
 src/main.rs:221|}
 src/main.rs:2257|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:22891|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+src/main.rs:22891|}
+src/main.rs:22913|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
 src/main.rs:2337|"task-reassign-{}"
-src/main.rs:23609|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:23609|div()
 src/main.rs:2380|"task-reassign-{}-{}"
-src/main.rs:23855|body = body.child(ui::section(i18n::t("待办"))).child(card);
-src/main.rs:24054|.filter(|id| live.as_deref() != Some(id.as_str()))
-src/main.rs:24074|.w_full()
-src/main.rs:24104|.id(SharedString::from(format!("chat-info-rename-{rename_row}")))
-src/main.rs:24164|.id("chat-info-memory-row")
+src/main.rs:23855|.w_full()
+src/main.rs:24054|.into_any_element()
+src/main.rs:24074|.history_of(&bot.id)
+src/main.rs:24104|.on_click(cx.listener(move |this, _event, window, cx| {
+src/main.rs:24164|let mut card = ui::card(vec![]);
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:24394|.id("wechat-new-session")
-src/main.rs:24403|this.new_session_for_selected(cx);
-src/main.rs:24444|.children(self.queue_panel(cx))
+src/main.rs:24394|.flex()
+src/main.rs:24403|cx.notify();
+src/main.rs:24444|if this.selection.is_some() {
 src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24647|if chat.compacting == Some(true) {
-src/main.rs:25007|fn wechat_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElem
-src/main.rs:25011|let turn_start = chat
-src/main.rs:25017|let has_output = chat
-src/main.rs:25303|div()
-src/main.rs:25513|let plus_focus = self.tab_focus["composer-plus"].clone();
-src/main.rs:25520|&& !pending_approval
-src/main.rs:25531|} else {
-src/main.rs:25589|.id("composer-plus")
+src/main.rs:24647|}
+src/main.rs:25007|"{} · {}"
+src/main.rs:25017|.text_size(px(ui_kit::T_BODY))
+src/main.rs:25039|let has_output = chat
+src/main.rs:25041|.get(turn_start..)
+src/main.rs:25078|.data(include_bytes!("../assets/icons/spinner.svg"))
+src/main.rs:25082|"wecom-working-spin"
+src/main.rs:25303|}
+src/main.rs:25513|"排队中 {} 条 · 所有成员回合结束后自动发送"
+src/main.rs:25520|)
+src/main.rs:25531|window: &Window
+src/main.rs:25589|.children(self.mention_panel(cx))
 src/main.rs:2797|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2815|fn finish_member(&mut self, member: &str) {
 src/main.rs:2845|struct BotFormState {
@@ -429,7 +433,7 @@ src/ui_kit.rs:128|fn pointer(mut self) -> Self {
 src/ui_kit.rs:25|pub const S1: f32 = 4.;
 src/ui_kit.rs:405|pub fn button(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> 
 src/ui_kit.rs:433|pub fn button_ghost(id: impl Into<gpui::ElementId>, text: impl Into<SharedString
-src/ui_kit.rs:948|assert_eq!(R_CARD, crate::theme::RADIUS_MENU);
+src/ui_kit.rs:948|#[test]
 src/update.rs:209|pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
 src/update.rs:322|pub fn spawn_swap_and_restart(current_exe: &Path, staged: &StagedUpdate) -> Resu
 src/update.rs:69|pub fn check(timeout: Duration) -> Check {
