@@ -412,6 +412,8 @@ src/theme.rs:133|pub fn is_light() -> bool {
 src/theme.rs:138|pub fn set_light_runtime(light: bool) {
 src/theme.rs:143|///
 src/theme.rs:499|pub const RADIUS_BUBBLE: f32 = 18.0;
+src/tool_render.rs:26|pub fn family(name: &str) -> ToolFamily {
+src/tool_render.rs:68||| has("browser")
 src/tool_scope.rs:1|//! 浏览器 / 电脑控制的「使用范围」。
 src/tool_scope.rs:9|//! 因此设置页关掉后立即生效，不必重开会话。
 src/ui_kit.rs:128|fn pointer(mut self) -> Self {
