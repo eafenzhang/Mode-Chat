@@ -240,7 +240,7 @@
 | R01 | 数据根兼容旧版（`~/.mode-bot/.mode`） | `README.zh.md:128` | ✅ | `src/data.rs:6`（数据根说明，`MODE_DATA_BASE_DIR`）/`:289`（`cli_storage_dir`）、`MODE_BOT_DATA_ROOT` 隔离 | 无 |
 | R02 | 会话落盘格式 + 迁移 | `ds-bot/src/host/parts.js` | 🟡 | `src/rpi_engine.rs:327`（`sessions_root`）、`examples` 内迁移工具 | 自有 JSONL 格式，跨版本迁移靠脚本 〔降级 v0.6〕 |
 | R03 | 应用内检查更新 + 自替换 | `ds-bot/src/host/update.js` | ✅ | `src/update.rs:69/209/322`（SHA-256 + 替换/回滚） | 未接签名（minisign） |
-| R04 | CI：test + clippy + NSIS + Release | `ds-bot` CI | ✅ | `.github/workflows/release.yml:54-79`（Test/Clippy + ui-lint/parity/arch 三道门禁）、`:121`（Package） | 无 |
+| R04 | CI：test + clippy + NSIS + Release | `ds-bot` CI | ✅ | `.github/workflows/release.yml:54-85`（Test/Clippy + ui-lint/parity/arch 三道门禁）、`:127`（Package） | 无 |
 | R05 | 自动化测试规模 | `ds-bot/test/` | ✅ | `src/*.rs` 186 个 `#[test]` + 12 个 `#[tokio::test]`、`crates/**` 331 个 `#[test]` + 50 个 `#[tokio::test]`，合计 579 个测试属性；`cargo test --workspace --locked` 实测 37 个测试目标全绿（576 passed / 0 failed / 2 ignored=需真实浏览器）。579 − 1 个 `#[cfg(unix)]` 关闭 = 578 = 576 + 2，对得上 | 无 |
 
 ---
