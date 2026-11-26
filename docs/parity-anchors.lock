@@ -286,7 +286,6 @@ src/main.rs:21605|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_
 src/main.rs:21607|.selectable(true)
 src/main.rs:221|}
 src/main.rs:2258|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:22891|for row in 0..3 {
 src/main.rs:2338|"task-reassign-{}"
 src/main.rs:23641|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
 src/main.rs:2381|"task-reassign-{}-{}"
