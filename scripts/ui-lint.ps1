@@ -124,7 +124,7 @@ foreach ($key in $order) {
 }
 
 Write-Output ('-' * 72)
-Write-Output ("total violations: {0}" -f $total)
+Write-Output ("total violations: {0}   (规则 1-4；规则 5 见下，单独统计、单独开关)" -f $total)
 Write-Output ''
 
 # ---- 规则 5：间距档（O-5）。默认 report-only，-EnforceSpacing 才计退出码 ----
