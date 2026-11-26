@@ -14502,8 +14502,14 @@ impl PilotApp {
         self.working_tick_started = true;
         cx.spawn(async move |this, cx| {
             loop {
+                // O-4：对齐到整秒，而不是固定睡 1000ms。
+                // 固定 1000ms 会把每一轮的调度延迟累加进去（timer 到期到真正被唤醒
+                // 之间还有时间），跑几分钟后秒数就会比真实经过时间慢好几秒。
+                // 按「距下一个整秒还有多久」睡，秒数就不会漂。
+                let now = time::now_ms();
+                let wait = 1000 - (now % 1000);
                 cx.background_executor()
-                    .timer(Duration::from_millis(1000))
+                    .timer(Duration::from_millis(wait))
                     .await;
                 let alive = this.update(cx, |this, cx| {
                     if this.chats.values().any(|chat| chat.turn_started.is_some()) {
