@@ -348,6 +348,7 @@ src/main.rs:8353|div()
 src/main.rs:8581|.filter(|bot| !bot.is_private)
 src/main.rs:864|queued: Vec<QueuedSend>
 src/main.rs:8948|crate::model_limits::placeholder(&limits);
+src/main.rs:9094|"只影响显示名（存在 state.json）；留空保存 = 恢复默认短名。"
 src/main.rs:9188|.roster
 src/main.rs:9192|let entries = data::bot_memory_entries(&bot_id);
 src/main.rs:9235|.child(
