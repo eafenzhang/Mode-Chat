@@ -121,7 +121,9 @@ D-CUT 删完 classic 后 `clippy -D warnings` 报出 20 条 dead code，其中�
 
 **纯死代码（无功能含义，直接删，不留记录）**：`avatar.rs` 的 `deg` / `shell` / `bot_avatar` / `channel_avatar` / `unread_dot`（`bot_avatar_rect` 保留，微信壳在用）、`sidebar_status_badge`、`nav_row`、`NavRowFocus`、`tool_state_color`、`settings_nav`（微信壳侧栏是 `wechat_nav`，导航一致性由 `settings_page_in_nav` 单测覆盖）。字段级 dead（`browser_url_input`、`PluginSwitchConfirm` 等）随所属结构体一起清；**`Bot.description` / `last_session_id` 不在其列**——它们由 `src/data.rs:2336` / 第 2344 行 序列化读，clippy 若仍报，报的是别的结构体，按报错的具体类型处理，不许顺手把 `data::Bot` 的字段删掉（会破坏 state.json 兼容）。
 
-**本节的验收口径**：`cargo clippy --all-targets --locked -- -D warnings` **0 error**；`cargo test` 总数 **≥575**（`composer_radius` 单测随函数删除是唯一允许的下降，其余只许不变或上升）。
+**本节的验收口径**：`cargo clippy --all-targets --locked -- -D warnings` **0 error**；`cargo test` **测试总数 ≥577**、**`failed` = 0**、**`passed` ≥575**（`composer_radius` 单测随函数删除是唯一允许的下降，其余只许不变或上升）。
+
+> **三个数别混着读**（`exit=0` 只是必要条件，不看数会漏判）：`577` = `passed + failed + ignored`，是「仓库里一共存在多少条测试」，删测试才会掉；`575` 是 `passed`，是「真跑过并通过了几条」，环境退化成 `skipped` 时会掉。D-CUT 后的基线是 `575 passed / 0 failed / 2 ignored`（合计 577），所以**「总数 ≥575」是个错误口径**——桌面不可捕获时 `passed` 掉到 573，总数仍是 577，用 575 去卡 `passed` 会永远红，用 575 去卡总数又拦不住「删了 10 条加了 8 条」这种净减。两个数各管一件事。
 
 ---
 
@@ -208,8 +210,8 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 | `251-o1-group-dark` / `253-o1-group-light` | §3.4 群聊 | 九宫格 + 「群名 · N 位成员」+ 成员名单 |
 | `255-o1-chip-clicked-light` | §3.4 交互 | 点 chip 后输入框 = 建议文字、发送钮变绿 |
 | `260-o2-3a-group-title-full` | §3.5 **3a** | 群聊选中 + 右栏打开，标题「前端走查群」完整、badge「就绪」，左栏选中项可见 |
-| `261-o2-highlight-with-title` | §3.5 **判据 1 + 4a** | 「运行状态」标题 + 基础卡绿描边（判据 1 由 0 处变 1 处） |
-| `257-o2-4b-after-collapse-reopen` | §3.5 **4b** | 折叠再展开后描边消失 |
+| `261-o2-highlight-with-title` | §3.5 **判据 1 + 4a + 4b 的折叠前帧** | 「运行状态」标题 + 基础卡绿描边（判据 1 由 0 处变 1 处）。4b 需要「折叠前是亮的」这一帧，`261` 正是该状态，与 `257` 配对使用 |
+| `257-o2-4b-after-collapse-reopen` | §3.5 **4b** | 折叠再展开后描边消失。摄于 10:28:31，早于 `6930a4a`（12:14:10 补回标题）和 `e659eb7`（11:03:29 提交清空逻辑）——**但拍的是 10:24:26 编译的 exe，当时 `set_right_panel` 里的 `chat_detail = None` 已在工作区并编进 exe**，测试独立复核过这一点。且 4b 验的是「绿边消失」，标题在 4b 里本就不该出现，**判据不依赖标题**。所以这张对 4b 仍然有效 |
 | `258-o2-4c-switched-away` | §3.5 **4c 第二步** | 切到 bot 13，无描边 |
 | `262-o2-4c-real-switchback` | §3.5 **4c 第三步** | 真实切回 bot 12（12:32:55，晚于 `258` 的 10:31:48），无描边；SHA256 `B5F37295… ≠ 257 的 DF68AE34…` |
 
@@ -231,7 +233,7 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 
 | 阶段 | 判据 | 空会话截图 |
 | --- | --- | --- |
-| D-CUT（阶段 2） | §3.1 / §3.2 / §3.3 的 grep + §3.6 行数 + §3.7 六道门禁 + 测试数 ≥575 | 不拍；拍了必然是空白，不作判据 |
+| D-CUT（阶段 2） | §3.1 / §3.2 / §3.3 的 grep + §3.6 行数 + §3.7 六道门禁 + 测试总条数 ≥577（`failed`=0） | 不拍；拍了必然是空白，不作判据 |
 | D3（阶段 3） | 本节 grep（`wechat-welcome-suggestion-` ≥1）+ 上面四张截图（单聊深浅 ×2、群聊深浅 ×2）+ **改名实机图三张**（见下） | 必拍；任一路径空白即失败 |
 
 **改名实机图（D3 第三项，单独立判据）**：`e659eb7` 已把入口接回（`chat-info-rename` = 1、`SettingsDetail::RenameSession` 构造点 2 处），但**没有实机截图就还不算闭环**。必须三张、同一个实例连续拍，顺序不能倒：
@@ -267,9 +269,16 @@ Select-String -Path src\main.rs -Pattern 'fn chat_detail_panel'     # 期望 0�
    - **4b** 折叠右栏再展开 → 描边消失（`set_right_panel(false)` 必须清 `chat_detail`）；
    - **4c** 切到另一个 **Bot**（或群）再切回 → 描边不回来。**判据按「换 Bot」验，不按「换会话」验**——`RunStatus` 的 key 是 bot 级 `bot:<id>`，换 session 时 key 不变，测出来的「不亮」是假象。
 
-**四张截图必须互不相同（对「截图证据」的硬要求）**：`4a` 一张、`4b` 一张、`4c` 的两步各一张，共 4 张。**每张的 SHA256 必须互不相同**，并且 `4c` 切回那张的时间戳必须晚于切走那张。
+**截图证据的硬要求：两条，缺一不可**。只满足其中一条的图，一律不能作为通关证据。
 
-> 出处：`259-o2-4c-switched-back.png` 与 `257-o2-4b-after-collapse-reopen.png` 曾经是**字节级完全相同**（同一 SHA256、同一时间戳 10:28:31），还比「切走」那张 `258` 早 3 分钟。也就是说 4c 的第三步根本没有截图，只有一张复用图。**验收动作里必须写「比对 SHA256」，不能只看文件名齐不齐**——文件名齐是最容易伪造的证据形态。
+1. **互不相同**：`4a` 一张、`4b` 一张、`4c` 的两步各一张，共 4 张，**每张的 SHA256 必须互不相同**；`4c` 切回那张的时间戳必须晚于切走那张。这条防「同一张图改名复用」。
+2. **时间戳晚于代码生效时间**：每张图的文件时间必须晚于**该图要验证的那段代码进入 exe 的时间**（不是提交时间）。这条防「拿修复前的旧图蒙混过关」。**判断"代码生效时间"不能只看 `git log` 的提交时间**——本轮实际踩过：`settlement` 类改动常常在提交前就已经在工作区里、并且已经编进 exe（`257` 摄于 10:28:31，`set_right_panel` 里的 `chat_detail = None` 直到 `e659eb7`（11:03:29）才提交，但它在 10:24:26 编译的那版 exe 里已经存在，测试独立复核过）。正确做法是比对 **exe 的编译时间 vs 该图文件时间**，并把两个时间都写进映射表。
+
+> 两条规则各自的出处（都是本轮真实发生过的）：
+> - `259-o2-4c-switched-back.png` 与 `257-o2-4b-after-collapse-reopen.png` **字节级完全相同**（同一 SHA256 `DF68AE34…`、同一时间戳 10:28:31），还比「切走」那张 `258` 早 3 分钟 → 4c 第三步根本没有截图，只有一张复用图；
+> - `263-d3-before-click.png` **同样等于 `257` 的 SHA256**（`DF68AE34…`，长度 247985，时间戳 10:28:31），是第三次同类问题。它在入库前被 Chief 拦下。
+>
+> **验收动作必须包含「跑一次 `Get-FileHash` 并把 8 位短哈希写进本节的映射表」**，不能只看文件名齐不齐——文件名齐是最容易伪造的证据形态，肉眼也看不出两张图字节相同。
 
 **3a 的截图必须让左栏选中项可见**：判据是「右栏顶部标题行完整显示会话名」，所以要拍**群聊被选中、右栏同时打开**的状态。只有右栏、左栏看不到选中项时，无法证明标题显示的是哪一个会话的名字。
 
@@ -283,6 +292,8 @@ Select-String -Path src\main.rs -Pattern 'fn chat_detail_panel'     # 期望 0�
 | `select_bot` | `3884` | 4c 切 Bot |
 | `select_group` | `4145` | 4c 切群 |
 | 改名按钮（切设置页前） | `24118` | 防止从设置返回时带出旧高亮 |
+
+**4b 的缺口（`257` 只补了一半）**：4b 的动作是「先亮、折叠、再展开、绿边没了」。`257` 拍的是**展开之后**那一帧（无绿边），它能证明「展开时没有描边」，**但证明不了折叠前确实亮过**——如果用户根本没点过运行状态，展开时本来就不会有绿边，`257` 反映的情况和「清空逻辑生效」看起来完全一样。所以 4b 要成立还需要一张**折叠前亮着的图**（`261` 正好是这个状态，可以当这一帧用），两张拼起来才是完整链路：`261`（亮）→ `257`（折叠再展开后灭）。这两张的 SHA256 已确认不同（`B70290C9…` vs `DF68AE34…`）。**因此 4b 不需要重拍，需要的是在验收时把 `261` 和 `257` 一起看**，单看 `257` 会误判。
 
 **为什么必须清**：高亮表达的是「用户刚刚点了运行状态、正在看这一份」。留着它，用户下次展开右栏会看到一个说不清来源的描边；切回旧会话又会亮起来，看起来像「这个会话有某种状态」。**瞬时 UI 状态不能写成持久字段的副作用。**
 
@@ -373,7 +384,7 @@ src/avatar.rs     281 ->    190   (-91)
 
 ```
 cargo check --workspace --all-targets --locked
-cargo test  --workspace --locked          （576 passed / 0 failed / 2 ignored，只允许因删除而变多或不变）
+cargo test  --workspace --locked          （基线 577 条 = 575 passed / 0 failed / 2 ignored）
 cargo clippy --all-targets --locked -- -D warnings
 scripts\ui-lint.ps1 -Enforce              0 violations / PASS
 scripts\verify-parity-anchors.ps1 -Baseline Head        drifted=0 unlocked=0
@@ -381,9 +392,13 @@ scripts\verify-parity-anchors.ps1 -Baseline WorkTree    drifted=0 unlocked=0
 scripts\verify-arch-anchors.ps1            anchors=143 ok=92 bad=0
 ```
 
-**测试数只允许上升或不变**：`composer_radius` 的单测随函数一起删（D-CUT 前它在第 29536–29546 行），所以 `576` 会变成 `575`；此时必须由新增的欢迎区/运行状态测试补回来，总数不低于 575。低于 575 说明有人顺手删了别的测试。
+**测试数只允许上升或不变**：`composer_radius` 的单测随函数一起删（D-CUT 前它在第 29536–29546 行），所以基线从 `576` 变成 `575 passed`；此时必须由新增的欢迎区/运行状态测试补回来，`passed` 不低于 575。低于 575 且 `skipped` 没增多，说明有人顺手删了别的测试。
 
-**D-CUT 实测（`c93ef4a`）**：`575 passed / 0 failed / 2 ignored`，正好等于下限，六道门禁全 `EXIT=0`，`parity` 双口径 `drifted=0 unlocked=0`、锁 **412 条**（原 419，随 classic 一起死掉 7 条）。**D3 加欢迎区与改名入口后，测试数必须 ≥575；低于此数视为回归。**
+**「本机跑不了」允许探测式跳过，但有一条硬约束**：`computer_tools` 的 `capture_screen_encodes_png` / `windows_and_cursor_are_readable` 依赖交互桌面（锁屏或远程会话断开时 `BitBlt` 必然返回 0、`GetLastWin32Error = 203`）。本版拍板：**允许改成运行时探测，探测不到就打印明确原因后 skip，不计入 `failed`**；**禁止用 `#[ignore]` 无条件豁免**。区别在于：`#[ignore]` 在能被截屏的机器上也永久不跑，等于把真实缺陷藏起来；探测式跳过只在「本机确实拿不到桌面」时让开，换一台能截屏的机器这两条仍然真跑。
+
+对数字的影响：skip 让 `passed` 从 575 掉到 573，**但 `总条数` 仍是 577**。这正是上面拆两个口径的原因——`failed` 必须 0，`总数` 必须 ≥577，`passed` 允许因环境降到 573（此时必须在输出里能看到跳过原因）。**验收时不许只看 `EXIT=0`**：`failed=0` 且 `总数=577` 且「跳过的两条各自打印了原因」，三样齐了才算过。
+
+**D-CUT 实测（`c93ef4a`）**：`575 passed / 0 failed / 2 ignored`（合计 **577 条**），正好等于 `passed` 下限，六道门禁全 `EXIT=0`，`parity` 双口径 `drifted=0 unlocked=0`、锁 **412 条**（原 419，随 classic 一起死掉 7 条）。**D3 加欢迎区与改名入口后，总条数必须 ≥577、`failed` 必须 0；`passed` 低于 575 时必须在输出里看得到跳过原因，看不到就是回归。**
 
 ### 3.8 文档与锁
 
