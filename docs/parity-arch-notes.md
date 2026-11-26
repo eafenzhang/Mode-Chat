@@ -88,7 +88,7 @@
 
 ### 2.4 Bot 私有记忆面板 — 半成品（缺页面）
 - DS：`ds-bot/src/client/memory-panel.js:325`（`MemoryDialog`，文件 449 行）
-- MC：只有团队记忆页 `src/main.rs:14657`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16063`（`group_memory_section`）
+- MC：只有团队记忆页 `src/main.rs:14688`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16094`（`group_memory_section`）
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
@@ -110,7 +110,7 @@
 - 分类：**半成品**，但闭环关键。数据结构加 2 个字段（`stage.acceptance` / `goal.acceptance`）+ 2 个动作，要带迁移（旧 `goal.json` 无这两字段按空串处理）。**v0.5 必做。**
 
 ### 3.3 群内排队消息可视化 — 半成品
-- MC：`src/main.rs:5209`（`queue_current`）、`:4733`（`MAX_QUEUED = 5`）、`:4772`（`flush_queue`），排队隐式，界面无独立队列 dock
+- MC：`src/main.rs:5317`（`queue_current`）、`:5324`（`MAX_QUEUED = 5`）、`:5363`（`flush_queue`），排队隐式，界面无独立队列 dock
 - DS：`ds-bot/src/client/queue-dock.js:99`（`QueueDock` 独立组件）
 - 分类：**补实现**（UI）。
 
@@ -226,7 +226,7 @@
 - 分类：**框架性**，改动明确：单例换 `HashMap<botId, Arc<Browser>>` + 每 Bot 一个 `user-data-dir`。**v0.5 必做**（1 天内）。
 
 ### 9.3 内置浏览器面板 — 框架性缺口
-- MC：`src/main.rs:8674`（`browser_panel_section`）= 只看"最近打开的 URL" + "已安装浏览器"，点了调系统浏览器（`:8300` `shell_open::open_url`）
+- MC：`src/main.rs:8695`（`browser_panel_section`）= 只看"最近打开的 URL" + "已安装浏览器"，点了调系统浏览器（`:8725` `shell_open::open_url`）
 - DS：真正的内嵌窗格 `ds-bot/src/client/browser-pane.js:523`（`BotPanel`，838 行）+ `bot-browsers.js`（616 行），带标签页、favicon、接管按钮
 - 分类：**框架性**——要在 GPUI 里嵌 WebView（GPUI 当前无 webview 组件），属技术风险项，见第 13 节。
 - 建议 v0.5.1 评估，不在 v0.5 承诺。
@@ -334,15 +334,15 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 3 | Bot | 每 Bot 模型选择 | 已有 | `src/main.rs:10159`（models 页）、`src/rpi_engine.rs:55` | `ds-bot/src/host/models.js:101` |
 | 4 | Bot | 工作目录切换 | 已有 | `src/data.rs:553` | `ds-bot/src/host/tools.js:363` |
 | 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:267`（approval_policy）、`:422`（hook） | `ds-bot/src/host/approvals.js`(110) |
-| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:14657`、`:14432` | `ds-bot/src/client/memory-panel.js:325` |
+| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:14688`、`:9298` | `ds-bot/src/client/memory-panel.js:325` |
 | 7 | Bot | 记忆写入工具 remember/forget/recall | 缺失 | 0 命中 | `ds-bot/src/host/memory.js:1075/1114/1151` |
 | 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:697`（interject）、`src/rpi_engine.rs:1244` | `ds-bot/src/host/steer.js`(255) |
-| 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:7798`（open_side） | `ds-bot/src/host/side.js`(377) |
+| 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:7826`（open_side） | `ds-bot/src/host/side.js`(377) |
 | 10 | Bot | 会话全文搜索 | 已有 | `src/main.rs:1030`、`src/rpi_engine.rs:1536` | `ds-bot/src/host/chat-index.js`(276) |
 | 11 | Main bot | Chief 身份与降级规则 | 已有 | `src/data.rs:88`、`:590` | `ds-bot/src/host/roster.js`(900) |
 | 12 | Main bot | 管理其它 Bot/群（工具化） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:325/363/496/526/590` |
 | 13 | 群聊 | 建群/改群/删群 | 已有 | `src/data.rs:1816`（create_group）、`src/main.rs:3717` | `ds-bot/src/host/groups.js`(1885) |
-| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:4520`（route_group_members） | `ds-bot/src/host/groups.js` |
+| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:19536`（route_group_members） | `ds-bot/src/host/groups.js` |
 | 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:246`、`src/backend.rs:1503` | `ds-bot/src/host/tools.js` |
 | 16 | 群聊 | 群目标（阶段） | 半成品 | `crates/bot-team/src/goal.rs:53/64` | `ds-bot/src/host/goals.js:670` |
 | 17 | 群聊 | 目标验收标准 pass/rework | 缺失 | 0 命中 | `ds-bot/src/host/goals.js:760/767` |
@@ -358,7 +358,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 27 | 浏览器 | browser_* 工具（20 个） | 已有 | `src/browser_tools.rs:382`-`:583` | `ds-bot/src/host/browser/session.js` |
 | 28 | 浏览器 | 每 Bot 独立浏览器 profile | 缺失（全局单例） | `src/browser_tools.rs:28`、`:274` | `ds-bot/src/host/browser/session.js:94` |
 | 29 | 浏览器 | Cookie 导入 | 缺失 | 0 命中 | `app/src/cookie-import.mjs:41`、`app/src/cookie-parse.mjs:115` |
-| 30 | 浏览器 | 内置浏览器窗格（标签/接管） | 缺失 | `src/main.rs:8674`（只有"用系统浏览器打开"） | `ds-bot/src/client/browser-pane.js:523` |
+| 30 | 浏览器 | 内置浏览器窗格（标签/接管） | 缺失 | `src/main.rs:8695`（只有"用系统浏览器打开"） | `ds-bot/src/client/browser-pane.js:523` |
 | 31 | 电脑操控 | computer_* 工具（14 个）+ UI 树 4 个 | 已有 | `src/computer_tools.rs:103-244`、`src/cua_tree.rs:277`-`:306` | `ds-bot/src/host/computer/index.js`(1259) |
 | 32 | 电脑操控 | 档位 / 应用白名单 / lease / 顶部指示条 | 缺失 | 0 命中 | `ds-bot/src/host/computer/leases.js:7`、`computer/catalog.js` |
 | 33 | IM | 微信（扫码 + 长轮询） | 已有 | `src/im_runtime.rs:247/647`、`src/im_service.rs:506` | `ds-bot/src/host/im/platforms/weixin.js`(343) |
@@ -557,18 +557,18 @@ docs/prd-0.6.md
 **回路（每一步都是代码事实，不是推断）：**
 
 ```
-labels      src/main.rs:24088-24092  label = title(&session_id).unwrap_or(display_session_id)
-rename_id   src/main.rs:24095        rename_id = session_id.clone()      ← 与 label 同一个变量
-history     src/main.rs:24080        来自 self.sessions.history_of(&bot.id)
-push_history src/main.rs:6846/7342/7550/24286  old_id = chat.session_id.clone()
-write       src/main.rs:9114         set_title(&session_id, &title)      ← 写的就是 rename_id
+labels      src/main.rs:24242-24246  label = title(&session_id).unwrap_or_else(display_session_id)
+rename_id   src/main.rs:24249        rename_id = session_id.clone()      ← 与 label 同一个变量
+history     src/main.rs:24232        来自 self.sessions.history_of(&bot.id)
+push_history src/main.rs:6865/7359/7569/24442  离开会话时把 chat.session_id 压进 history
+write       src/main.rs:9135         set_title(&session_id, &title)      ← 写的就是 rename_id
 ```
 
 所以：**`titles` 的 key 只能由 `history` 里的串写入，而 `history` 里的串只来自 `chat.session_id`。** 两条路径共用同一个来源变量，形态不可能不一致——除非 `chat.session_id` 在「写入那一刻」和「渲染那一刻」之间变过。
 
 这才是真正的边界：**`263-3` 成立是因为行上的 label 和改名按钮的 id 来自同一次 `history_of` 迭代**，不是因为「路径 key 的形态碰巧一致」。前者是结构保证，后者是运气。
 
-**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24132` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
+**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24286` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
 
 这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
 
@@ -763,3 +763,62 @@ RESULT: FAIL (1 bad)
 
 负向自测（往文档里塞一个越界的行号锚点）：`anchors=173  bad=1  RESULT: FAIL (1 bad)`、`EXIT=1`；删掉后回到 `EXIT=0`。**判决行跟着 `bad` 变，不是个常量。**
 
+### 18.15 局部替换没有边界：四次误伤都是同一个病，不是「手滑」
+
+今天出现过四次结构被改坏，表现各不相同，根因同一个——**用「按内容替换一小段」来做结构修改，替换的匹配范围没有边界**：
+
+```
+提交/场合        意图                      实际后果
+c841544          修 hover 的一处字符串      匹配到另一处同形代码，把 24199 结构改坏
+97b0fb9          裁掉「多四笔」那段          连紧邻的下一个标题 ## 版本演进 一起裁掉
+i18n 缩进        给词表加一层缩进            Replace 补空格，缩进变成 12 个
+注释拆行         把一行长注释拆成两行        用数组插入而没替换原行，留下重复行
+```
+
+**匹配得太宽会误伤别处，匹配得太窄会留下残骸。** 这两种错在 `git diff` 里都不显眼：`97b0fb9` 的那行 `-## 版本演进` 夹在 20 行改动中间，只看 diff 里「我打算改的那几行」根本发现不了。
+
+规矩写死成三条，照做就不会漏：
+
+```
+① 替换前打印匹配次数        ([regex]::Matches($t, [regex]::Escape($old))).Count
+                            ≠ 1 就停下，补唯一上下文再试
+② 替换后重读整个区块        含紧邻的下一个标题 / 右括号，读到边界为止
+③ 不看 diff 判断完整性      diff 展示的是「变了什么」，不是「整块还对不对」
+```
+
+④ 的另一半：**改完 `.md` 要顺手数一遍标题**（`Select-String '^## '`），标题数少了一个，多半就是被连带裁掉了。`97b0fb9` 那次如果数一下标题，当场就能发现。
+
+### 18.16 Head 口径在中文 Windows 上假红：编码是一种「秤」，不是被测对象
+
+同一提交、同一个脚本，本机 `-Baseline Head` 报 `drifted 167 / 454 problem(s)`，CI runner 上是绿的。**红的不是锚点，是导出 HEAD 版源码那一步。**
+
+```powershell
+& git -C $root show "HEAD:$rel" | Set-Content -LiteralPath $dst -Encoding UTF8
+                                   ↑ 管道这一段由 PowerShell 解码子进程 stdout
+```
+
+PowerShell 5.1 用**系统代码页**解码子进程输出。本机代码页是 936/GBK，`git show` 输出的是 UTF-8，中文注释按 GBK 解码会被拆成错误的字节序列，行数随之变化：
+
+```
+src/data.rs   实际 2853 行   →   导出后 2701 行
+L40           应为 pub pinned: bool   →   实际变成 }
+```
+
+行号整体偏移，于是几乎所有锚点都「指到了 `}`」。**CI runner 的代码页是 UTF-8，所以同一份代码在那边是正确的**——这就是「CI 绿、本机红」被当成「环境差异」放过去的原因。
+
+修法是在脚本开头把输出编码钉死：
+
+```powershell
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+修后两个口径第一次读数相同：`checked 209 / fingerprint 282 / drifted 0 / unlocked 0 / stale 53 / EXIT=0`。
+
+**和 18.12 是同一个病**：`EXIT=0` 和 `drifted=0` 都只是读数，读数的正确性取决于「秤」——退出码的秤是调用方式，文件内容的秤是解码方式。**换个代码页，同一个脚本会给出另一个答案，而它不会告诉你自己换了秤。** 凡是「同一输入在两个环境给出不同读数」的，先检查读法，再怀疑被测对象。
+
+判断有没有踩这个坑，一条命令就够：拿一个已知行数的文件对比。
+
+```powershell
+(git -C $repo show "HEAD:src/data.rs" | Measure-Object -Line).Lines   # 小了就是解码错了
+```
