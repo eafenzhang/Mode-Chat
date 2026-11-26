@@ -8,6 +8,8 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - "scripts/**"
+      - ".github/**"
       - "LICENSE*"
       - ".gitignore"
       - "assets/icons/LICENSE*"
@@ -140,6 +142,20 @@ jobs:
                 version="$cargo_version"
               fi
             fi
+          fi
+          # 版本号必须与 Cargo.toml 同源。
+          #
+          # 包里的版本是构建期注入的（`package-mode-chat.mjs --version=...` 写 MODE_BOT_VERSION），
+          # 源码里的版本是 Cargo.toml 的 [package].version。两者不一致时，「从 tag 重建」
+          # 会得到另一个版本号，这个包就不可复现。
+          #
+          # v0.6.1 就是这么产生的：tag v0.6.1 → 02bb019，而那个提交里 Cargo.toml 仍是 0.6.0，
+          # 包自报 0.6.1。源码与已发布产物对不上，只能把这个版本撤掉。
+          # 所以这里不再「取两者较大值」了事，不一致就直接挡住发版。
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::版本号与源码不一致：本次要发 v$version，Cargo.toml 里是 ${cargo_version:-（读不到）}。"
+            echo "::error::请先把 Cargo.toml 的 [package].version 改成 $version 再发版，否则从 tag 重建会得到 ${cargo_version:-另一个} 的包。"
+            exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"

@@ -215,6 +215,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "已开启免打扰" => Some("Mute on"),
         "已开启开机自启" => Some("Launch at startup on"),
         "已开启群记忆自动回顾" => Some("Group memory auto-review on"),
+        "已引用消息" => Some("Message quoted"),
         "已归档" => Some("Archived"),
         "已归档群聊" => Some("Archived group chats"),
         "已恢复历史" => Some("History restored"),

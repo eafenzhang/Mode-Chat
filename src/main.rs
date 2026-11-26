@@ -3887,6 +3887,9 @@ impl PilotApp {
             let key = bot_key(&bot.id);
             if let Some(chat) = self.chats.get_mut(&key) {
                 chat.unread = 0;
+                // 引用条同属瞬时 UI 状态：跨会话留着会让用户引用到上一个会话
+                // 的消息，而发出去之后从文本上看不出错。
+                chat.quote = None;
             }
             if !self.browser_recents.contains_key(&bot.id) {
                 let recents = load_browser_recents(&bot.id);
@@ -4149,6 +4152,7 @@ impl PilotApp {
             let group_id = group.id.clone();
             if let Some(chat) = self.chats.get_mut(&key) {
                 chat.unread = 0;
+                chat.quote = None;
             }
             self.restore_draft(&key, cx);
             self.refresh_group_task_bar(&group_id);
@@ -18418,6 +18422,97 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         Some(row.into_any_element())
     }
 
+    /// 写入待发送的引用（气泡动作条「引用」的唯一写入点）。
+    ///
+    /// `quote` 是会话级瞬时状态：和 `chat_detail` 一样，跨会话残留会让用户拿
+    /// 上一个会话的消息去引用，且发出去之后看不出错——所以切会话必须清。
+    fn set_quote(&mut self, author: String, body: String, cx: &mut Context<Self>) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        // 空消息（纯附件行、占位行）引用出来只是一行空壳，直接不写。
+        if body.trim().is_empty() {
+            return;
+        }
+        if let Some(chat) = self.chats.get_mut(&key) {
+            chat.quote = Some((author, body));
+        }
+        self.toast(i18n::t("已引用消息"), cx);
+        cx.notify();
+    }
+
+    /// 引用条：显示待发送的引用（作者 + 单行摘要），右侧 ✕ 清空。
+    ///
+    /// 只在 `chat.quote` 有值时渲染；28px 高、单行截断，宽度跟随 composer。
+    /// 纯 wechat_theme 令牌。发送时 `compose_with_quote` 会 `take()` 掉它。
+    fn wechat_quote_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let (author, body) = self.chats.get(&key)?.quote.clone()?;
+        // 摘要压成单行：引用正文常是多行 markdown，原样塞进 28px 会把条撑开。
+        let summary = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        let summary: String = summary.chars().take(120).collect();
+        let mut label = String::new();
+        if !author.trim().is_empty() {
+            label.push_str(author.trim());
+            label.push('：');
+        }
+        label.push_str(&summary);
+        let clear_key = key.clone();
+        Some(
+            div()
+                .id("wechat-quote-bar")
+                .w_full()
+                .h(px(28.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .px(px(8.))
+                .rounded(px(theme::RADIUS_TAG))
+                .bg(wechat_theme::chip_bg())
+                .child(icons::icon_light(
+                    icons::Icon::MessageSquare,
+                    12.,
+                    wechat_theme::chip_text(),
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .font_family(wechat_theme::FONT_FAMILY)
+                        .text_size(px(ui_kit::T_LABEL))
+                        .line_height(px(ui_kit::T_LABEL_LH))
+                        .text_color(wechat_theme::chip_text())
+                        .child(SharedString::from(label)),
+                )
+                .child(
+                    div()
+                        .id("wechat-quote-clear")
+                        .size(px(18.))
+                        .flex_shrink_0()
+                        .rounded(px(theme::RADIUS_TAG))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .pointer()
+                        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if let Some(chat) = this.chats.get_mut(&clear_key) {
+                                chat.quote = None;
+                            }
+                            cx.notify();
+                        }))
+                        .child(icons::icon_light(
+                            icons::Icon::X,
+                            12.,
+                            wechat_theme::chip_text(),
+                        )),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// 发送失败条：错误文案 + 重试（重发 `last_sent`，不改草稿历史）。
     fn error_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
@@ -19222,6 +19317,8 @@ fn wechat_row_el(
             .child(wechat_message_actions(
                 index,
                 text,
+                // 自己发的消息，引用头显示「你」而不是 Bot 名。
+                i18n::t("你"),
                 weak,
                 true,
                 &hover_group,
@@ -19286,6 +19383,7 @@ fn wechat_row_el(
                 .child(wechat_message_actions(
                     index,
                     text,
+                    author,
                     weak,
                     false,
                     &hover_group,
@@ -19851,11 +19949,17 @@ fn user_text_with_mentions(text: &str, names: &[String]) -> gpui::AnyElement {
 /// 是虚拟列表的纯函数，只拿到 `&mut App`；这里照 `history_attachment_view` 的
 /// 已验证写法，用 `weak.update` 在点击回调里取 Context。
 ///
-/// 只做「复制 / 复制代码」：默认壳的 composer 还没有引用条 UI，挂上「引用」
-/// 会让用户点了看不到任何反馈，属于新增 UI，归 v0.6。
+/// 三个动作：复制 / 复制代码 / 引用（v0.6 O-5 补上「引用」）。
+///
+/// 之前只挂前两个，理由是 composer 还没有引用条 UI，点了看不到反馈。但
+/// `chat.quote` 在此之前**全仓没有写入点**（只有声明、`None` 初始化、四处
+/// `take()` 和 `compose_with_quote`），所以只补渲染点等于永远为空的控件。
+/// O-5 把写入点（本函数）、渲染点（`wechat_quote_bar`）、清空点（三处切会话）
+/// 一起补齐，缺一个链路就走不通。
 fn wechat_message_actions(
     index: usize,
     text: &str,
+    author: &str,
     weak: &gpui::WeakEntity<PilotApp>,
     align_right: bool,
     hover_group: &gpui::SharedString,
@@ -19921,6 +20025,31 @@ fn wechat_message_actions(
                 .child(i18n::t("复制代码")),
         );
     }
+
+    // 「引用」：把这条消息的作者 + 正文写进 chat.quote，由 composer 顶部的
+    // 引用条显示。正文在 compose_with_quote 里还会再压一遍空白并截到 200 字，
+    // 这里不预截，避免两处截断长度不一致。
+    let weak_quote = weak.clone();
+    let quote_author = author.trim().to_string();
+    let quote_body = text.to_string();
+    bar = bar.child(
+        div()
+            .id(SharedString::from(format!("wechat-quote-{index}")))
+            .font_family(wechat_theme::FONT_FAMILY)
+            .text_size(px(ui_kit::T_LABEL))
+            .line_height(px(ui_kit::T_LABEL_LH))
+            .text_color(wechat_theme::chip_text())
+            .pointer()
+            .hover(|style| style.text_color(wechat_theme::chat_title()))
+            .on_click(move |_event, _window, cx| {
+                let author = quote_author.clone();
+                let body = quote_body.clone();
+                let _ = weak_quote.update(cx, |this, cx| {
+                    this.set_quote(author, body, cx);
+                });
+            })
+            .child(i18n::t("引用")),
+    );
 
     bar.into_any_element()
 }
@@ -24322,6 +24451,8 @@ impl PilotApp {
             chat.elicitations.clear();
             chat.session_id = None;
             chat.ready = false;
+            // 换会话后引用对象已经不在当前 transcript 里，留着必然引错。
+            chat.quote = None;
             chat.status = i18n::t("切换会话…").to_string();
         }
         self.backend.switch_session(
@@ -25611,6 +25742,9 @@ impl PilotApp {
             .flex_col()
             .children(self.mention_panel(cx))
             .children(self.attachment_chips(cx))
+            // 引用条插在附件 chips 之后、输入框之前：它属于「这条消息附带的
+            // 上下文」，和附件同一层语义；放在输入框之下会被当成按钮行。
+            .children(self.wechat_quote_bar(cx))
             .children(self.error_bar(cx))
             .child(
                 div()
