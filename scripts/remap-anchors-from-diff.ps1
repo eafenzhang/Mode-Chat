@@ -72,6 +72,23 @@ $numRx = [regex]':(\d+)(?:-(\d+))?((?:/\d+)*)'
 $deletedNotes = New-Object System.Collections.Generic.List[string]
 $totalMapped = 0
 $totalDeleted = 0
+# 改写前先量一次，末尾自检用同一个函数再量一次（口径必须一致，见第 4 节）。
+function Measure-MainTokens {
+    $n = 0
+    foreach ($d in $Docs) {
+        $path = Join-Path $root $d
+        if (-not (Test-Path $path)) { continue }
+        foreach ($line in [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)) {
+            if ($line -notmatch 'main\.rs:') { continue }
+            $n += $numRx.Matches($line).Count
+        }
+    }
+    return $n
+}
+
+
+$beforeTotal = Measure-MainTokens
+
 
 foreach ($d in $Docs) {
     $path = Join-Path $root $d
@@ -133,4 +150,32 @@ foreach ($d in $Docs) {
 
 Write-Output "tokens remapped: $totalMapped"
 Write-Output "anchors pointing at deleted lines: $totalDeleted"
+
+# ---- 4. 自检：token 数必须守恒 ------------------------------------------
+# 这一轮已经踩过三次「看起来绿了、实际少扫」，所以脚本自己也要守这条：
+#   重指只允许改行号，**不允许改变锚点 token 的总数**。
+# 少掉或多出都说明有 token 被吃掉/拼坏（正则漏了某种写法、区间被压平、多位置写法丢了），
+# 而这类问题在输出里完全看不出来，所以必须 EXIT=1。
+#
+# 统计必须用**同一个函数**在改写前后各算一次。最初版本用扫描阶段的 $tokensSeen 当 before，
+# 它按「当前归属文件」过滤（一行里第一个锚点若是别的文件，后面的裸行号就归那边），
+# 而 after 用「行里有没有 main.rs:」过滤 —— 两个口径不同，实测差 123 个，天天误报。
+# 判据只能比「同一个量」的前后值，不能比两个定义不同的量。
+# 被删掉的锚点本来就该少一个，所以从 before 里扣掉。
+# 被删掉的锚点本来就该少一个，所以从 before 里扣掉。
+$afterTotal = Measure-MainTokens
+$expected = $beforeTotal - $totalDeleted
+# 注意：这两个量都是「本次运行前后」的，所以它只能证明**本脚本没有吃掉 token**，
+# 不能证明「别人手工删掉一个锚点」——那种删除让 before 和 after 一起变小，仍然守恒。
+# 我用「先删一个 token 再跑」做负向用例，实测这样是拦不住的（SELF-CHECK OK）。
+# 真正能拦的是指纹锁那一侧的 LOCK COVERAGE：锚点不再被扫描时它报 unlocked/stale，
+# 所以这里只负责守住「重指动作本身不丢 token」这一条，别把它当通用防线。
+if ($afterTotal -ne $expected) {
+    Write-Output "SELF-CHECK FAILED: 锚点 token 数不守恒（差 $($afterTotal - $expected) 个）。"
+    Write-Output "  可能原因：正则漏掉某种写法、或重指时把区间/多位置写法拼坏了。"
+    Write-Output "  不要提交这次改写；先逐条比对文档，确认少掉/多出的 token 是哪一个。"
+    foreach ($n in $deletedNotes) { Write-Output "  [DELETED] $n" }
+    exit 1
+}
+Write-Output "SELF-CHECK OK: 锚点 token 数守恒"
 foreach ($n in $deletedNotes) { Write-Output "  [DELETED] $n" }
