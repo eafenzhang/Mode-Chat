@@ -175,7 +175,7 @@ src/group_tasks.rs:392|pub fn retry_task(
 src/group_tasks.rs:446|pub fn cancel_subtree(
 src/i18n.rs:21|LANG.load(Ordering::Relaxed) == 1
 src/i18n.rs:256|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
-src/i18n.rs:317|"会话还没有可导出的消息" => Some("This conversation has nothing to export")
+src/i18n.rs:318|"会话还没有可导出的消息" => Some("This conversation has nothing to export")
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
 src/im_runtime.rs:1434|crate::backend::SessionEvent::Question(card) => {
 src/im_runtime.rs:169|pub async fn deliver_mirror(
@@ -212,57 +212,56 @@ src/main.rs:12500|ui::button("provider-add", i18n::t("+ 添加服务商")).on_cl
 src/main.rs:12579|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
 src/main.rs:13338|let label = if bot.role.trim().is_empty() {
 src/main.rs:13737|.bg(ui_accent())
-src/main.rs:14665|/// 连接器：目录 + 启用状态 + 内联密钥（与主程序同一 `connectors.json` / 密钥库）。
-src/main.rs:14909|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
-src/main.rs:15438|.children([1usize, 7, 30, 90].into_iter().map(|days| {
-src/main.rs:15468|this.usage_group = mode;
-src/main.rs:15500|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
-src/main.rs:15845|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
-src/main.rs:15847|i18n::t("电脑操控远程桌面")
+src/main.rs:14666|/// 连接器：目录 + 启用状态 + 内联密钥（与主程序同一 `connectors.json` / 密钥库）。
+src/main.rs:14910|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
+src/main.rs:15439|.children([1usize, 7, 30, 90].into_iter().map(|days| {
+src/main.rs:15469|this.usage_group = mode;
+src/main.rs:15501|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
+src/main.rs:15846|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
+src/main.rs:15848|i18n::t("电脑操控远程桌面")
 src/main.rs:1585|strip = strip.child(stage_action_chip(
-src/main.rs:16067|body = body.child(settings_group(entry_rows));
+src/main.rs:16067|if !entry_rows.is_empty() {
 src/main.rs:1611|strip = strip.child(stage_action_chip(
-src/main.rs:16295|self.ensure_bot(0);
+src/main.rs:16295|self.selection = Some(Selection::Bot(0));
 src/main.rs:1632|strip = strip.child(stage_action_chip(
-src/main.rs:16362|i18n::t("创建副本").to_string()
+src/main.rs:16363|i18n::t("创建副本").to_string()
 src/main.rs:1676|.id(SharedString::from(format!(
-src/main.rs:17724|.scrollbar_width(px(6.))
-src/main.rs:17955|self.chats.remove(&group_key(group_id));
-src/main.rs:18067|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:18140|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
-src/main.rs:18288|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:18597|fn approval_note(level: &str) -> &'static str {
-src/main.rs:18758|find_hit
-src/main.rs:19116|WecomRow::Compacting => mix(1)
-src/main.rs:19124|fn wechat_row_el(
-src/main.rs:19275|.relative()
-src/main.rs:19400|.child(block);
-src/main.rs:19559|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
-src/main.rs:19855|fn wechat_message_actions(
-src/main.rs:19883|.id(SharedString::from(format!("wecom-copy-{index}")))
-src/main.rs:19893|cx.write_to_clipboard(ClipboardItem::new_string(text));
-src/main.rs:19901|if let Some(code) = fenced_code(text) {
-src/main.rs:19915|cx.write_to_clipboard(ClipboardItem::new_string(code));
-src/main.rs:20136|"Bot团队"
-src/main.rs:20155|enum SettingsDetail {
-src/main.rs:20207|AddModel {
-src/main.rs:20232|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
+src/main.rs:17724|.overflow_y_scroll()
+src/main.rs:17956|self.chats.remove(&group_key(group_id));
+src/main.rs:18068|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
+src/main.rs:18141|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
+src/main.rs:18289|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+src/main.rs:18598|fn approval_note(level: &str) -> &'static str {
+src/main.rs:18758|author_id
+src/main.rs:19117|WecomRow::Compacting => mix(1)
+src/main.rs:19125|fn wechat_row_el(
+src/main.rs:19401|.child(block);
+src/main.rs:19560|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+src/main.rs:19856|fn wechat_message_actions(
+src/main.rs:19884|.id(SharedString::from(format!("wecom-copy-{index}")))
+src/main.rs:19894|cx.write_to_clipboard(ClipboardItem::new_string(text));
+src/main.rs:19902|if let Some(code) = fenced_code(text) {
+src/main.rs:19916|cx.write_to_clipboard(ClipboardItem::new_string(code));
+src/main.rs:20137|"Bot团队"
+src/main.rs:20156|enum SettingsDetail {
+src/main.rs:20208|AddModel {
+src/main.rs:20233|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
 src/main.rs:2048|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:205|fn panel_target_width(
 src/main.rs:2092|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
-src/main.rs:21094|wechat_theme::chat_title()
-src/main.rs:21487|.id("chat-compaction-status")
-src/main.rs:21605|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:21607|.selectable(true)
+src/main.rs:21094|.text_color(if wechat {
+src/main.rs:21488|.id("chat-compaction-status")
+src/main.rs:21606|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:21608|.selectable(true)
 src/main.rs:221|}
 src/main.rs:2258|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:2338|"task-reassign-{}"
-src/main.rs:23641|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:23642|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
 src/main.rs:2381|"task-reassign-{}-{}"
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
 src/main.rs:2452|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24686|if chat.compacting == Some(true) {
-src/main.rs:25639|.id("composer-plus")
+src/main.rs:24687|if chat.compacting == Some(true) {
+src/main.rs:25645|.id("composer-plus")
 src/main.rs:2798|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2816|fn finish_member(&mut self, member: &str) {
 src/main.rs:3245|usage_group: usize
