@@ -533,3 +533,27 @@ docs/prd-0.6.md
 2. **量值要选「精确值」而不是「阈值内的近似值」**。同一个「绿边」判据，产品量出 21、Chief 换个阈值量出 50——因为就绪 badge 的底色是浅绿 tint `rgb(217,255,217)`，会被宽松阈值算进去。**只用精确 `0x07C160`（卡片描边色）计数，「= 0」这个结论才不随阈值漂移。**
 
 推论一条，适用于所有门禁而不只是截图：**判住一个量的「存在」很难，判住两个互斥状态下的「差异」才可靠。** 所以锚点门禁里真正有用的不是 `anchors checked > 0`，而是「同一份文档在 `-Baseline Head` 和 `-Baseline WorkTree` 两个口径下必须一致」——那是两个状态之间的差异，不是单点读数。
+
+### 18.7 一条回路验证：`263-3` 证明的比它声称的多一个前提
+
+`263-3` 那张图（「最近会话」那行从短 id 变成 `发布前走查-263`）常被当成「改名落盘生效」的完整证据。它确实证明了这条链，但**它之所以能成立，依赖一个没有写在任何判据里的前提**。把回路走完，这个前提就露出来了。
+
+**回路（每一步都是代码事实，不是推断）：**
+
+```
+labels      src/main.rs:24060-24064  label = title(&session_id).unwrap_or(display_session_id)
+rename_id   src/main.rs:24067        rename_id = session_id.clone()      ← 与 label 同一个变量
+history     src/main.rs:24050        来自 self.sessions.history_of(&bot.id)
+push_history src/main.rs:6846/7342/7550/24264  old_id = chat.session_id.clone()
+write       src/main.rs:9114         set_title(&session_id, &title)      ← 写的就是 rename_id
+```
+
+所以：**`titles` 的 key 只能由 `history` 里的串写入，而 `history` 里的串只来自 `chat.session_id`。** 两条路径共用同一个来源变量，形态不可能不一致——除非 `chat.session_id` 在「写入那一刻」和「渲染那一刻」之间变过。
+
+这才是真正的边界：**`263-3` 成立是因为行上的 label 和改名按钮的 id 来自同一次 `history_of` 迭代**，不是因为「路径 key 的形态碰巧一致」。前者是结构保证，后者是运气。
+
+**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24104` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被 `src/main.rs:24054` 的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
+
+这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
+
+**另有一处口径**：`chat.session_id` 对 ACP 引擎（`acp.rs` 的 `AcpEvent::Ready`）是协议给的 opaque id，对 pi-rust 引擎（`src/backend.rs:1213` 的 `session_id: path`）是文件全路径。两套来源都能进 `history`，所以 `titles` 的 key 实际上混着两种形态——但它们各自自洽，因为每条记录的写入和读取都走同一条来源。**跨引擎切换同一个 Bot 时才需要额外小心**，这一点记在风险清单第 5 条里。
