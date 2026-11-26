@@ -1,6 +1,3 @@
-.github/workflows/release.yml:127|if [ -z "$latest" ]; then
-.github/workflows/release.yml:54|- name: Test
-.github/workflows/release.yml:85|if ($LASTEXITCODE -ne 0) { exit 1 }
 Cargo.toml:25|version = "0.6.0"
 crates/automation-schedule/src/cron.rs:1|//! 五段/六段/七段 cron 解析与下次/上次触发计算。
 crates/automation-schedule/src/cron.rs:49|pub fn parse(pattern: &str) -> Result<Self, String> {
@@ -174,8 +171,8 @@ src/group_tasks.rs:371|pub fn stop_task(data_root: &Path, group_id: &str, task_i
 src/group_tasks.rs:392|pub fn retry_task(
 src/group_tasks.rs:446|pub fn cancel_subtree(
 src/i18n.rs:21|LANG.load(Ordering::Relaxed) == 1
-src/i18n.rs:256|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
-src/i18n.rs:318|"会话还没有可导出的消息" => Some("This conversation has nothing to export")
+src/i18n.rs:257|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
+src/i18n.rs:319|"会话还没有可导出的消息" => Some("This conversation has nothing to export")
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
 src/im_runtime.rs:1434|crate::backend::SessionEvent::Question(card) => {
 src/im_runtime.rs:169|pub async fn deliver_mirror(
@@ -196,109 +193,84 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10006|SettingsDetail::AddModel {
-src/main.rs:10081|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
-src/main.rs:1030|Compact
-src/main.rs:10385|"Run history · {title}"
+src/main.rs:10026|SettingsDetail::AddModel {
+src/main.rs:10085|let templates = data::provider_templates();
+src/main.rs:10389|panel = panel.body(view);
 src/main.rs:1048|#[derive(Clone, PartialEq, Eq)]
-src/main.rs:10578|&& self.settings_detail_input.is_none()
+src/main.rs:10582|let Some(form) = this.settings_detail_group.clone() else {
 src/main.rs:1080|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11000|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
-src/main.rs:11098|.filter(|bot| !bot.is_private)
-src/main.rs:11667|let archives = crate::privacy::archived_private_bots();
-src/main.rs:11713|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12247|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:12500|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
-src/main.rs:12579|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:13338|let label = if bot.role.trim().is_empty() {
-src/main.rs:13737|.bg(ui_accent())
-src/main.rs:14666|/// 连接器：目录 + 启用状态 + 内联密钥（与主程序同一 `connectors.json` / 密钥库）。
-src/main.rs:14910|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
-src/main.rs:15439|.children([1usize, 7, 30, 90].into_iter().map(|days| {
-src/main.rs:15469|this.usage_group = mode;
-src/main.rs:15501|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
-src/main.rs:15846|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
-src/main.rs:15848|i18n::t("电脑操控远程桌面")
+src/main.rs:11118|.filter(|bot| !bot.is_private)
+src/main.rs:11128|.filter(|bot| !bot.is_private)
+src/main.rs:11135|.filter(|bot| !bot.is_private)
+src/main.rs:11671|settings_row(i18n::t("测试通知").to_string(), None)
+src/main.rs:11717|.text_color(theme::ink())
+src/main.rs:12251|this.settings_dropdown = None;
+src/main.rs:12583|ui::button_ghost(
+src/main.rs:13354|body = body.child(settings_section(i18n::t("已隐藏")));
+src/main.rs:13741|settings_button("im-create-cancel", i18n::t("取消")).on_click(
+src/main.rs:14914|let toggled_on = !on;
+src/main.rs:15443|let token = |value: Option<i64>| {
+src/main.rs:15500|.child(ui::stat_card(
+src/main.rs:15518|);
 src/main.rs:1585|strip = strip.child(stage_action_chip(
-src/main.rs:16067|if !entry_rows.is_empty() {
 src/main.rs:1611|strip = strip.child(stage_action_chip(
-src/main.rs:16295|self.selection = Some(Selection::Bot(0));
 src/main.rs:1632|strip = strip.child(stage_action_chip(
-src/main.rs:16363|i18n::t("创建副本").to_string()
 src/main.rs:1676|.id(SharedString::from(format!(
-src/main.rs:17724|.overflow_y_scroll()
-src/main.rs:17956|self.chats.remove(&group_key(group_id));
-src/main.rs:18068|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:18141|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
-src/main.rs:18289|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:18598|fn approval_note(level: &str) -> &'static str {
-src/main.rs:18758|author_id
-src/main.rs:19117|WecomRow::Compacting => mix(1)
-src/main.rs:19125|fn wechat_row_el(
-src/main.rs:19401|.child(block);
-src/main.rs:19560|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
-src/main.rs:19856|fn wechat_message_actions(
-src/main.rs:19884|.id(SharedString::from(format!("wecom-copy-{index}")))
-src/main.rs:19894|cx.write_to_clipboard(ClipboardItem::new_string(text));
-src/main.rs:19902|if let Some(code) = fenced_code(text) {
-src/main.rs:19916|cx.write_to_clipboard(ClipboardItem::new_string(code));
-src/main.rs:20137|"Bot团队"
-src/main.rs:20156|enum SettingsDetail {
-src/main.rs:20208|AddModel {
-src/main.rs:20233|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
+src/main.rs:17960|true
+src/main.rs:18293|.unwrap_or(true);
+src/main.rs:18693|rendered = true;
+src/main.rs:18801|.filter(|bot| !bot.is_private)
+src/main.rs:19220|expanded
+src/main.rs:19499|.line_height(px(18.))
+src/main.rs:19658|"发送失败"
+src/main.rs:19959|.into_any_element()
+src/main.rs:19988|.when(align_right, |el| el.right(px(0.)))
+src/main.rs:19998|.bg(wechat_theme::chip_bg());
+src/main.rs:20006|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:20266|.text_size(px(11.))
+src/main.rs:20285|"IM频道"
 src/main.rs:2048|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:205|fn panel_target_width(
 src/main.rs:2092|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
-src/main.rs:21094|.text_color(if wechat {
-src/main.rs:21488|.id("chat-compaction-status")
-src/main.rs:21606|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:21608|.selectable(true)
+src/main.rs:21094|crate::ui_kit::error(text)
+src/main.rs:21735|.options
+src/main.rs:21737|.find(|option| option.kind.starts_with("allow"))
 src/main.rs:221|}
 src/main.rs:2258|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:2338|"task-reassign-{}"
-src/main.rs:23642|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:23771|gpui::Animation::new(theme::motion_base())
 src/main.rs:2381|"task-reassign-{}-{}"
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
 src/main.rs:2452|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24687|if chat.compacting == Some(true) {
-src/main.rs:25645|.id("composer-plus")
+src/main.rs:25779|.text_color(wechat_theme::bubble_text())
 src/main.rs:2798|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2816|fn finish_member(&mut self, member: &str) {
 src/main.rs:3245|usage_group: usize
 src/main.rs:3610|ToolGroup {
-src/main.rs:4242|.filter(|bot| !bot.is_private)
-src/main.rs:4247|None => backend::fallback_workspace()
-src/main.rs:4534|.filter(|bot| !bot.is_private)
-src/main.rs:4650|chat.compacting = Some(active);
-src/main.rs:5297|fn queue_current(
-src/main.rs:5304|const MAX_QUEUED: usize = 5;
-src/main.rs:5343|fn flush_queue(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:5455|.filter(|bot| !bot.is_private)
-src/main.rs:5800|fn question_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-src/main.rs:5813|fn question_card_el(
-src/main.rs:6019|fn elicitation_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-src/main.rs:6032|fn elicitation_card_el(
-src/main.rs:6372|fn submit_elicitation(&mut self, request_id: String, cx: &mut Context<Self>) {
-src/main.rs:6526|fn approval_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-src/main.rs:6539|fn approval_card_el(
-src/main.rs:6817|fn on_new_session_shortcut(
-src/main.rs:6831|fn new_session_for_selected(&mut self, cx: &mut Context<Self>) {
+src/main.rs:4262|.filter(|bot| !bot.is_private)
+src/main.rs:4264|let workspace = match &group.directory {
+src/main.rs:4554|.filter(|bot| !bot.is_private)
+src/main.rs:5301|&session_id
+src/main.rs:5308|self.mirror_reply_sessions.insert(session_id);
+src/main.rs:5347|accepted = true;
+src/main.rs:5475|.filter(|bot| !bot.is_private)
+src/main.rs:5804|else {
+src/main.rs:6023|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:6376|if pending.sent {
+src/main.rs:6530|.elicitations
+src/main.rs:6821|/// 关闭当帧对话框还在退场动画里，焦点会被浮层盖住，所以延后一帧再还。
 src/main.rs:701|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7069|if self.find_dialog.is_some() {
-src/main.rs:7411|(i18n::t("新会话").to_string(), "Ctrl+N".to_string(), PaletteCmd::NewSession)
+src/main.rs:7073|window: &mut Window
 src/main.rs:751|enum MsgKind {
 src/main.rs:753|Reasoning
-src/main.rs:7543|PaletteCmd::NewSession => {
-src/main.rs:7596|PaletteCmd::Compact => {
-src/main.rs:8353|.child(
-src/main.rs:8582|.filter(|bot| !bot.is_private)
-src/main.rs:8949|crate::model_limits::placeholder(&limits);
-src/main.rs:9188|let bot_name = self
-src/main.rs:9192|.unwrap_or_else(|| bot_id.clone());
-src/main.rs:9469|SettingsDetail::ConnectorSecret { connector_id } => {
-src/main.rs:9595|.first()
-src/main.rs:9610|"schedule-when-{}"
-src/main.rs:9655|SharedString::from(format!("schedule-day-{index}"))
+src/main.rs:7547|/// 执行命令面板的一项（关面板由调用方保证）。
+src/main.rs:8353|if let Some(side) = this.side_chat.as_mut() {
+src/main.rs:8602|.filter(|bot| !bot.is_private)
+src/main.rs:9192|match &id {
+src/main.rs:9473|tri!("已保存密钥：{name}", "Saved secret: {name}")
+src/main.rs:9595|("例如：每日简报", String::new())
+src/main.rs:9614|.settings_detail_entries
+src/main.rs:9659|let mut days_row = div().flex().items_center().gap(px(ui::S1));
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
