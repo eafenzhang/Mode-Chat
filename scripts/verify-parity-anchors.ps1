@@ -8,6 +8,13 @@ param(
 # -UpdateAnchors：把当前每个锚点指向的源码行内容重新记入 docs/parity-anchors.lock。
 # 只有在「确认锚点已按新代码重新映射过」之后才该跑它；它本身不做任何映射。
 $ErrorActionPreference = 'Stop'
+# PowerShell 5.1 在中文 Windows 上按系统代码页（这里 936/GBK）解码子进程 stdout。
+# 本脚本用 `git show ... | Set-Content` 导出 HEAD 版源码：解码一错，UTF-8 中文注释
+# 就被当成 GBK 拆错行，提取出的文件行号整体偏移——实测 src/data.rs 只提出 2701 行
+# 而实际 2853 行，Head 口径因此报 167 条 drifted（全是假的）；CI runner 是 UTF-8
+# 代码页，同一提交却是绿的。显式钉住 UTF-8，两个环境才在量同一个东西。
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 # 仓库根从脚本位置反推（脚本在 scripts/ 下），这样 CI 的临时检出目录也能跑；
 # 两个外部对照树（DS-Bot 基线、pi-rust checkout）可选，用
 # MODE_PARITY_DS_ROOT / MODE_PARITY_RPI_ROOT 指过去，没有就跳过（不当作 OK）。
