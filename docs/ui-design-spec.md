@@ -133,6 +133,50 @@
 为什么是 trait 而不是函数：调用方是形状各异的手写 `div()` 链（列表行、图标按钮、分段、徽标），
 包成组件会改变布局参数；trait 只接管"鼠标变成手"一个职责，视觉零变化，可逐页替换。
 
+### 6.7 按钮禁用态（2026-11-26 新增，O-7）
+
+| 组件 | 说明 |
+| --- | --- |
+| `button_state(id, text, disabled)` | `button()` 的完整形态；`disabled == false` 时与 `button()` 完全一致 |
+| `button_ghost_state(id, text, disabled)` | `button_ghost()` 的完整形态，同上 |
+| `button(id, text)` / `button_ghost(id, text)` | 现有 60 个调用点的入口，等价于 `*_state(..., false)`，**不需要改** |
+
+**为什么是「分支构造」而不是链式 `.disabled(bool)`**：`cursor_pointer()` 和 `hover()` 是在构造时
+逐条加在 `Style` 上的，事后追加 `.cursor(Arrow)` / `.hover(|s| s)` 并不能可靠地把它们盖掉
+（hover 是叠加的，后加只是又叠一层）。`button_state` 的禁用分支里**根本不构造**这两个方法，
+所以不存在"覆盖不掉"的可能。**不要**再往一个已构造好的 `Stateful<Div>` 上补禁用样式。
+
+**用法约束：视觉禁用 ≠ 逻辑禁用。** `*_state` 只负责置灰、去手型、不挂 hover；
+**`on_click` 仍会被挂上**。所有调用点必须在 handler 里自己守一次条件，否则会出现
+「看起来灰、点了还有反应」。反过来也成立：只写 handler 守卫而不置灰，用户会以为按钮坏了。
+两者必须同时做，由同一处 `disabled` 布尔值决定。
+
+### 6.8 工作中行状态短语（2026-11-26 新增，O-3）
+
+转录底部的「工作中 N 秒」不再是一句固定文案，按**本轮最后一条工具消息**所属类别分档：
+
+| `tool_render::ToolFamily` | 短语 | 触发工具（举例） |
+| --- | --- | --- |
+| `Execute` | 正在执行命令 | `bash` / `powershell` / `shell` / `exec` |
+| `Edit` | 正在改文件 | `edit` / `write` / `apply_patch` |
+| `Search` | 正在检索 | `grep` / `find` / `glob` / `browser` / `fetch` / `web` |
+| `Read` | 正在读文件 | `read` / `ls` / `list` / 带 `file` 的名字 |
+| `Cua` | 正在操作界面 | `computer*` / `cua*` |
+| `Other` / 缺失 / 空串 | 工作中 | 未知工具、本轮还没调用过工具 |
+
+实现：`main.rs::working_phrase(Option<&str>)`，类别来自 `tool_render::family()`（纯函数，不引 i18n）。
+短语在 `i18n.rs` 词表里各有一条英文译文。
+
+三条边界，写清楚以免下一轮又改错：
+
+1. **`browser` 归 `Search`，不单切一类**。`Search` 里已经含 `grep/find/glob/browser/fetch/http/web` 七种，
+   为浏览器单切一类会让「搜索」这一档语义变窄，改动面也变大。
+2. **`Other` 档不可证伪**——它与旧行为（固定「工作中」）完全相同。验收截图必须是 `Execute` 和
+   `Read` 这类可对照的档位，拍两张「工作中」什么也证明不了。
+3. **必须先触发过一次工具调用**。`wechat_working_row` 在 `!has_output && retry.is_none()` 时提前返回
+   「正在输入」气泡，`has_output` 为假就永远到不了状态行——验收时先让本轮跑过一次工具，否则必然白测。
+   `retry` 分支在 `else` 外面，重试中优先于任何工具状态，这一点不要动。
+
 ## 7. 页面骨架
 
 ### 7.1 设置页
@@ -275,7 +319,7 @@ Lucide 是 24 网格、stroke-width 2，图形约占 85%，与旧版相当。
 
 四项合计 **0 处**，`-Enforce` 已可用于 CI 阻断（2026-11-25 达成）。
 
-**第 5 条（间距）尚未实现**（`spacing_offtoken`）。当前 `main.rs` 里仍有非 4 倍数值的间距字面量，
+**第 5 条（间距）已实现**（`spacing_offtoken`，`9822319`），但**默认不拦门禁**：它由独立开关 `-EnforceSpacing` 控制，`-Enforce` 的行为一字未改（仍只统计前四条）。当前 `main.rs` 里仍有非 4 倍数值的间距字面量，按用法拆开（`main.rs` 实测，2026-11-26）：
 按用法拆开（`main.rs` 实测，2026-11-26）：
 
 | 字面量 | 字面量合计 | 间距属性内 | 非间距属性（不检） |
@@ -339,3 +383,68 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
 
 实测基线（2026-11-25，HEAD `205b7e0`）：332 处 `text_size(px(`，其中非令牌字面量 **0**，
 `ui-lint -Enforce` 四项合计 0 违规。**不要再按 `grep -c` 的旧口径判定这条 AC。**
+
+**`-Enforce` 与 `-EnforceSpacing` 是两个开关，名字像、结论相反，务必分清**：
+
+```
+-Enforce           只统计前四条（cursor_pointer / rounded_px / text_size_offtoken / rgb）
+                   当前 total violations: 0 → EXIT=0，六道门禁用的就是它
+-EnforceSpacing    只统计第 5 条（spacing_offtoken）
+                   当前 232 处 → EXIT=1，它现在是红的（间距尚未清零，这是事实不是缺陷）
+```
+
+**判据可证伪**：`232` 不是硬编码常量，已做 +1 自测——临时注入一处 `gap(px(6.))` 后变 `233`、删除后回到 `232`、`git diff` 为空。**只看到 `PASS` 或只看到 `FAIL` 都不算验过，要看数字随注入变化。**
+
+**发布后若有人跑 `-EnforceSpacing` 报红，那不是阶段 3 没通过**——O-5 ③（232 处逐页清零）已单独立项，不进 v0.6.0 的「已完成」。
+
+### 9.x 工作中状态行按工具类别分档（O-3）
+
+`wechat_working_row` 的短语由本轮最后一个工具消息的类别决定，映射函数是 `main.rs` 里的 `working_phrase`（`fn working_phrase(tool_name: Option<&str>) -> &'static str`）。
+
+```
+类别来源   tool_render::family(name)  → 六类（Execute / Edit / Search / Read / Cua / Other）
+映射       Execute→正在执行命令   Edit→正在改文件   Search→正在检索
+           Read→正在读文件         Cua→正在操作界面  Other/None→工作中
+优先级     retry 高于一切工具状态：重试时固定显示「重试中」，不看工具名
+回落       工具名缺失或空串 → 「工作中」（与旧行为一致，不新增数据通道）
+```
+
+**为什么 `tool_render::family` 保持纯函数**：它不引 `i18n` 依赖，只做名字→类别的判定；中文短语在 `main.rs` 侧映射，`i18n::t` 已是那里的既有依赖。
+
+**六类短语必须全在 `i18n` 词表里**（`Running a command` / `Editing files` / `Searching` / `Reading files` / `Controlling the desktop`）。缺了不会报错，但英文界面会混进中文——**这是静默降级，只有用户会看到**。
+
+**验收上 `Other` 档不可证伪**：「工作中」与旧行为完全相同，截了也证明不了分档生效。所以视觉验收至少要有 `Execute` 和 `Read` 两个可证伪档位，且**同一帧里必须同时看到状态行短语和工具卡上的工具名**。
+
+### 9.y 按钮的 disabled 形态（O-7）
+
+`ui_kit` 提供**分支构造**而不是给按钮叠一个 disabled 样式：`button_state` / `button_ghost_state` 在禁用分支里**根本不构造 `cursor_pointer` 和 `hover`**。
+
+**为什么不叠样式**：gpui 的 `hover` 是叠加的，`.cursor_pointer()` 写在前面、`.cursor(Arrow)` 写在后面**不一定能覆盖**——结果就是「置灰了、还是手形、点了还响应」的假 disabled。分支构造从根上不存在这个问题：禁用分支里那两行代码压根没执行。
+
+**约束**：禁用态必须同时满足三条，缺一条就是假 disabled——
+
+```
+视觉   置灰（theme::ink_tertiary()）
+光标   不是手形（禁用分支里不调 cursor_pointer）
+交互   hover 无高亮、点击无回调
+```
+
+**验收不能用「截图里有个灰按钮」**：那只能证明第一条。必须实测后两条——hover 上去不变色、点下去状态不变。
+
+### 9.z 瞬时 UI 状态不跨会话（`chat_detail` 的教训）
+
+`chat_detail` 是「用户刚点了运行状态、正在看这一份」的**瞬时标记**，不是持久设置。它必须在该清的入口清掉，否则切回来会看到来源不明的绿框，用户会以为「这个会话有某种状态」。
+
+**当前 5 个清空点**（`self.chat_detail = None`）：
+
+```
+切 Bot        select_bot
+切群聊        select_group
+折叠右栏      set_right_panel(false)
+点改名跳设置  chat_info_panel 的改名回调
+切历史会话    switch_to_history_session
+```
+
+**第 5 处是缺陷修复补上的**（`257ae4d`）：4c 判据当初只验了「切 Bot」，没验「切历史会话」，于是漏了一处。**根因不是代码写错，是判据只覆盖了部分入口。**
+
+**约束（v0.7 加引用条时会再用到）**：新增任何瞬时 UI 状态（`quote` 等），**加写入点的同时必须把这 5 个清空点一起补**，否则会产生「切会话后引用错对象」这类用户看不出来的错误。**「字段存在」不等于「链路存在」**：`quote` 有声明、有初始化、有消费、有单测，唯独没有写入点，四个环节都齐仍然走不通。
