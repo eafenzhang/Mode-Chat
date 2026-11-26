@@ -21610,6 +21610,28 @@ fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
         .into_any_element()
 }
 
+/// 工作时间行的状态短语：按本轮最后一个工具所属类别分档（O-3）。
+///
+/// 类别来自 `tool_render::family()` 的六类，不另造映射。`browser`/`fetch`/`web`
+/// 在那六类里归 `Search`，所以没有单独的「正在检索网页」——为浏览器单切一类会让
+/// 「搜索」这一档语义变窄。
+///
+/// 取不到工具名（本轮还没有工具调用、或调用名是空串）时回落到「工作中」，与旧行为一致。
+fn working_phrase(tool_name: Option<&str>) -> &'static str {
+    let family = tool_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(tool_render::family);
+    match family {
+        Some(tool_render::ToolFamily::Execute) => i18n::t("正在执行命令"),
+        Some(tool_render::ToolFamily::Edit) => i18n::t("正在改文件"),
+        Some(tool_render::ToolFamily::Search) => i18n::t("正在检索"),
+        Some(tool_render::ToolFamily::Read) => i18n::t("正在读文件"),
+        Some(tool_render::ToolFamily::Cua) => i18n::t("正在操作界面"),
+        Some(tool_render::ToolFamily::Other) | None => i18n::t("工作中"),
+    }
+}
+
 /// 时长文案：秒 / 分秒（与 WebView 的「2 分 20 秒」一致）。
 fn elapsed_label(ms: u64) -> String {
     let secs = ms / 1000;
@@ -25006,7 +25028,7 @@ impl PilotApp {
     /// 转录底部的「工作中 N 秒」行（streaming 时显示，1s ticker 刷新）。
     fn wechat_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let key = self.active_key()?;
-        let (started, waiting, retry, has_output) = {
+        let (started, waiting, retry, has_output, tool_name) = {
             let chat = self.chats.get(&key)?;
             let turn_start = chat
                 .messages
@@ -25022,6 +25044,14 @@ impl PilotApp {
                         message.kind == MsgKind::Tool || !message.text.trim().is_empty()
                     })
                 });
+            // O-3：本轮最后一条工具消息的名字，用来把「工作中」细分成按工具类别的短语。
+            // 单独一句而不是塞进上面的 any()：any 判的是「本轮有没有产出」，
+            // 这里要的是「最后一个是哪个工具」，两件事合进一次遍历会把语义搅在一起。
+            let tool_name = chat
+                .messages
+                .get(turn_start..)
+                .and_then(|messages| messages.iter().rev().find(|m| m.kind == MsgKind::Tool))
+                .map(|message| message.tool_name.clone());
             (
                 chat.turn_started,
                 !chat.permissions.is_empty()
@@ -25031,6 +25061,7 @@ impl PilotApp {
                     .as_ref()
                     .map(|retry| (retry.attempt, retry.max_retries, retry.reason.clone())),
                 has_output,
+                tool_name,
             )
         };
         if waiting {
@@ -25076,9 +25107,11 @@ impl PilotApp {
                             wechat_theme::chat_title()
                         })
                         .child(if retry.is_some() {
+                            // 重试优先于任何工具状态：重试时用户关心的是「在重试」，
+                            // 不是「上一个工具在干什么」。
                             i18n::t("重试中")
                         } else {
-                            i18n::t("工作中")
+                            working_phrase(tool_name.as_deref())
                         }),
                 )
                 .children(retry.as_ref().map(|(attempt, max_retries, _)| {
