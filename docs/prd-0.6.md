@@ -600,23 +600,23 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 
 | 步 | 动作 | 完成标志 |
 | --- | --- | --- |
-| ① 加规则 | 在 `scripts/ui-lint.ps1` 加第 5 条规则 `spacing_offtoken`：只检查 `.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m/.mx/.my/.mt/.mb/.ml/.mr` 的 `px(N)` 参数，`N` 属于 {4,8,12,16,24,32} 或在 `$SpacingTokens` 白名单内即通过；**`px(0.)` 一律放行**（它是 `min_w` / `min_h` 一类的容器约束，不是视觉间距）；规则名必须加进 `$order`，否则 `-Enforce` 根本不统计它 | `ui-lint.ps1` 能 grep 到 `spacing_offtoken`，且 `$order` 有 5 项 |
+| ① 加规则 | 在 `scripts/ui-lint.ps1` 加第 5 条规则 `spacing_offtoken`：只检查 `.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m/.mx/.my/.mt/.mb/.ml/.mr` 的 `px(N)` 参数，`N` 属于 {4,8,12,16,24,32} 或在 `$SpacingTokens` 白名单内即通过；**`px(0.)` 一律放行**（它是 `min_w` / `min_h` 一类的容器约束，不是视觉间距）；**规则结果进独立集合 `$spacing`，`-Enforce` 的 `$order` 保持 4 项不动**——进了 `$order` 当天 `-Enforce` 就红 232 条，六道门禁当场变红，等于 ②③④ 一步做完，④ 的「切换」也就没有意义了 | `ui-lint.ps1` 能 grep 到 `spacing_offtoken`；`$order` 仍是 4 项；`-Enforce` 读数与改动前一致；`-EnforceSpacing` 能单独让 `EXIT=1` |
 | ② 报基线 | 规则先以 **report-only** 上线（不计入 `-Enforce` 退出码），跑一次，把基线条数写进本文 §8 变更记录 | 一条带日期、数值取自脚本输出的基线记录 |
-| ③ 逐页清零 | 会话列表 → 聊天区 → 右栏 → 设置页，每页改完一张前 / 后截图 | 4 页共 8 张截图 |
-| ④ 切硬门禁 | 第 5 条规则从 report-only 切到 `-Enforce` | `ui-lint.ps1 -Enforce` 输出 `total violations: 0`，且规则清单里含 `spacing_offtoken` |
+| ③ 逐页清零 | **6 个区，不是 4 个页**：A 会话列表 7 / B1 聊天区 60 / B2 composer 13 / C 右栏 23 / D 设置页 49 / E 弹窗浮层 47 / F 其它 28 / `ui_kit.rs` 5 = 232。顺序 A → B1 → B2 → C（先 `side_panel` 一刀 20）→ D → E → F → `ui_kit`（全站复用，放最后）。每区改完一张前 / 后截图 | **合计降到 0**；分区数字与总数行一致（分档合计 ≠ 总数就是脚本 bug） |
+| ④ 切硬门禁 | 第 5 条规则从 report-only 切到 `-Enforce`，前提是 ③ 已清零 | `ui-lint.ps1 -Enforce` 输出 `total violations: 0`，且 `$order` 里此时才加入 `spacing_offtoken` |
 
 **明确不做**：不把 `px(0.)`、`.size()`、`.line_height()` 纳入第 5 条（后两类分别归字号规则与既有规则）；不为凑数把 `px(6)` 那 82 处一次性全改——先让规则上线报基线，再按页清零，否则一次性大改没人能看出视觉回归。
 
 **D-CUT 之后的实测基线（`b887ddd`，规则尚未上线，这是 ② 报基线时应记录的数）**：
 
 ```
-main.rs    总间距 425   在档 200  档外 225
-ui_kit.rs  总间距   5   在档   0  档外   5   ← gap(px(2.)) / py(px(1.))，令牌层自身
-全 src     总间距 430   在档 200  档外 230
-档外值分布：px(6) 82  px(10) 51  px(2) 41  px(14) 28  px(5) 7  px(9) 5  px(1) 5  px(7) 3  px(3) 3
+main.rs    档外 227
+ui_kit.rs  档外   5   ← gap(px(2.)) / py(px(1.))，令牌层自身的微间距
+全 src     档外 232   （= main.rs 227 + ui_kit.rs 5）
+档外值分布：px(6.) 82  px(10.) 52  px(2.) 45  px(14.) 29  px(5.) 7  px(1.) 6  px(9.) 5  px(3.) 3  px(7.) 3
 ```
 
-删除前全 src 是 545 / 274，D-CUT 带走约 44 处档外；**这也说明「删 classic 顺手把间距改干净」不成立**——删完还剩 230 处，O-5 仍是实打实的工作量。`ui_kit.rs` 那 5 处是令牌层自己的微间距（`gap(px(2.))`），要么进 `$SpacingTokens` 白名单、要么统一到 `S1`，**必须在 ① 之前定，否则 ④ 切 `-Enforce` 时会挡住自己**。
+删除前全 src 是 545 / 274，D-CUT 带走约 44 处档外；**这也说明「删 classic 顺手把间距改干净」不成立**——删完还剩 232 处，O-5 仍是实打实的工作量。`ui_kit.rs` 那 5 处是令牌层自己的微间距（`gap(px(2.))`），要么进 `$SpacingTokens` 白名单、要么统一到 `S1`，**必须在 ① 之前定，否则 ④ 切 `-Enforce` 时会挡住自己**。
 
 **@测试 的验收动作固定为一条命令**：`scripts/ui-lint.ps1 -Enforce`，要求输出里出现 `spacing_offtoken` 这一项且 `total violations: 0`。只看 `PASS` 不看规则名，会在第 5 条尚未上线时**假通过**——这是本项唯一必须防的坑。
 
