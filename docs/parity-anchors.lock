@@ -292,7 +292,9 @@ src/main.rs:2337|"task-reassign-{}"
 src/main.rs:23609|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
 src/main.rs:2380|"task-reassign-{}-{}"
 src/main.rs:23855|body = body.child(ui::section(i18n::t("待办"))).child(card);
+src/main.rs:24054|.filter(|id| live.as_deref() != Some(id.as_str()))
 src/main.rs:24074|.w_full()
+src/main.rs:24104|.id(SharedString::from(format!("chat-info-rename-{rename_row}")))
 src/main.rs:24164|.id("chat-info-memory-row")
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
 src/main.rs:24394|.id("wechat-new-session")
