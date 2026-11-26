@@ -210,100 +210,101 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10115|} => {
-src/main.rs:10187|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:10005|} => {
+src/main.rs:10077|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
 src/main.rs:1030|Compact
+src/main.rs:10381|"Run history · {title}"
 src/main.rs:1048|#[derive(Clone, PartialEq, Eq)]
-src/main.rs:10491|"Run history · {title}"
-src/main.rs:10684|&& self.settings_detail_input.is_none()
+src/main.rs:10574|&& self.settings_detail_input.is_none()
 src/main.rs:1080|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11106|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
-src/main.rs:11207|let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id
-src/main.rs:11313|member_ids
-src/main.rs:11494|.child(settings_group(vec![
-src/main.rs:11592|.child(
-src/main.rs:11774|} else {
-src/main.rs:11820|match crate::privacy::release_archive(&id) {
-src/main.rs:11824|Err(message) => this.toast(message, cx)
-src/main.rs:12350|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:12603|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
-src/main.rs:12963|.into_any_element()
-src/main.rs:13042|.as_ref()
-src/main.rs:13176|body = body.child(settings_empty(i18n::t(
-src/main.rs:13218|this.move_sidebar_section(&id_up, -1);
-src/main.rs:13270|this.delete_sidebar_section(&id_delete);
-src/main.rs:13438|let label = if bot.role.trim().is_empty() {
-src/main.rs:13537|if let Err(message) =
-src/main.rs:13837|.bg(ui_accent())
+src/main.rs:10996|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
+src/main.rs:11097|let (editing_id, name_text, instructions_text, memory_text, member_ids, admin_id
+src/main.rs:11203|member_ids
+src/main.rs:11384|.child(settings_group(vec![
+src/main.rs:11482|.child(
+src/main.rs:11664|} else {
+src/main.rs:11710|match crate::privacy::release_archive(&id) {
+src/main.rs:11714|Err(message) => this.toast(message, cx)
+src/main.rs:12240|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:12493|ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
+src/main.rs:12853|.into_any_element()
+src/main.rs:12932|.as_ref()
+src/main.rs:13066|body = body.child(settings_empty(i18n::t(
+src/main.rs:13108|this.move_sidebar_section(&id_up, -1);
+src/main.rs:13160|this.delete_sidebar_section(&id_delete);
+src/main.rs:13328|let label = if bot.role.trim().is_empty() {
+src/main.rs:13427|if let Err(message) =
+src/main.rs:13727|.bg(ui_accent())
+src/main.rs:13911|wechat_theme::panel_divider()
 src/main.rs:1400|div()
-src/main.rs:14021|wechat_theme::panel_divider()
-src/main.rs:14329|match im::set_group_activation(&group_root, &group_bot, activation) {
-src/main.rs:14769|.to_string()
-src/main.rs:15538|.on_click(cx.listener(move |this, _event, _window, cx| {
-src/main.rs:15542|this.usage_grouped_view = None;
-src/main.rs:15561|.on_click(cx.listener(move |this, _event, _window, cx| {
-src/main.rs:15572|.gap(px(ui::S2))
-src/main.rs:15594|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
+src/main.rs:14219|match im::set_group_activation(&group_root, &group_bot, activation) {
+src/main.rs:14659|.to_string()
+src/main.rs:15428|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:15432|this.usage_grouped_view = None;
+src/main.rs:15451|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:15462|.gap(px(ui::S2))
+src/main.rs:15484|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
+src/main.rs:15829|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
+src/main.rs:15831|i18n::t("电脑操控远程桌面")
 src/main.rs:1585|strip = strip.child(stage_action_chip(
-src/main.rs:15939|(i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入"))
-src/main.rs:15941|i18n::t("电脑操控远程桌面")
+src/main.rs:16061|div()
 src/main.rs:1611|strip = strip.child(stage_action_chip(
-src/main.rs:16171|div()
+src/main.rs:16289|bot_id: String
 src/main.rs:1632|strip = strip.child(stage_action_chip(
-src/main.rs:16399|bot_id: String
-src/main.rs:16456|i18n::t("创建副本").to_string()
+src/main.rs:16346|i18n::t("创建副本").to_string()
 src/main.rs:1676|.id(SharedString::from(format!(
-src/main.rs:17828|cx: &mut Context<Self>
-src/main.rs:18049|self.chats.remove(&group_key(group_id));
-src/main.rs:18161|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
-src/main.rs:18234|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
-src/main.rs:18382|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:18691|fn approval_note(level: &str) -> &'static str {
-src/main.rs:18862|WecomRow::ToolGroup {
-src/main.rs:19003|fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
-src/main.rs:19218|fn wechat_row_el(
-src/main.rs:19253|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
-src/main.rs:19315|.child(wechat_message_actions(
-src/main.rs:19379|.child(wechat_message_actions(
-src/main.rs:19504|WecomRow::ToolGroup {
-src/main.rs:19510|WecomRow::Compacting => compaction_status_row().into_any_element()
-src/main.rs:19653|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
-src/main.rs:19949|fn wechat_message_actions(
-src/main.rs:19977|.id(SharedString::from(format!("wecom-copy-{index}")))
-src/main.rs:19987|cx.write_to_clipboard(ClipboardItem::new_string(text));
-src/main.rs:19995|if let Some(code) = fenced_code(text) {
-src/main.rs:20009|cx.write_to_clipboard(ClipboardItem::new_string(code));
-src/main.rs:20230|"Bot团队"
-src/main.rs:20249|enum SettingsDetail {
-src/main.rs:20254|ProviderUrl {
-src/main.rs:20305|/// 某个模型的上下文窗口 / 输出上限（W4）。
-src/main.rs:20326|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
+src/main.rs:17718|cx: &mut Context<Self>
+src/main.rs:17939|self.chats.remove(&group_key(group_id));
+src/main.rs:18051|fn restore_draft(&mut self, key: &str, cx: &mut Context<Self>) {
+src/main.rs:18124|fn stage_attachment_paths(&mut self, paths: Vec<String>, cx: &mut Context<Self>)
+src/main.rs:18272|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+src/main.rs:18581|fn approval_note(level: &str) -> &'static str {
+src/main.rs:18752|WecomRow::ToolGroup {
+src/main.rs:18857|div()
+src/main.rs:18893|fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
+src/main.rs:19108|fn wechat_row_el(
+src/main.rs:19143|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
+src/main.rs:19205|.child(wechat_message_actions(
+src/main.rs:19269|.child(wechat_message_actions(
+src/main.rs:19394|WecomRow::ToolGroup {
+src/main.rs:19400|WecomRow::Compacting => compaction_status_row().into_any_element()
+src/main.rs:19543|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+src/main.rs:19839|fn wechat_message_actions(
+src/main.rs:19867|.id(SharedString::from(format!("wecom-copy-{index}")))
+src/main.rs:19877|cx.write_to_clipboard(ClipboardItem::new_string(text));
+src/main.rs:19885|if let Some(code) = fenced_code(text) {
+src/main.rs:19899|cx.write_to_clipboard(ClipboardItem::new_string(code));
+src/main.rs:20120|"Bot团队"
+src/main.rs:20139|enum SettingsDetail {
+src/main.rs:20144|ProviderUrl {
+src/main.rs:20195|/// 某个模型的上下文窗口 / 输出上限（W4）。
+src/main.rs:20216|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
 src/main.rs:2048|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:2092|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
-src/main.rs:21198|let wechat = wechat_theme::active();
-src/main.rs:21579|fn compaction_status_row() -> impl IntoElement {
-src/main.rs:21581|.id("chat-compaction-status")
-src/main.rs:21584|.items_center()
-src/main.rs:21699|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:21701|.selectable(true)
+src/main.rs:21088|let wechat = wechat_theme::active();
+src/main.rs:21469|fn compaction_status_row() -> impl IntoElement {
+src/main.rs:21471|.id("chat-compaction-status")
+src/main.rs:21474|.items_center()
+src/main.rs:21589|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:21591|.selectable(true)
 src/main.rs:2257|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:22995|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+src/main.rs:22885|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
 src/main.rs:2337|"task-reassign-{}"
-src/main.rs:23713|fn chat_info_panel(&mut self, window: &Window, cx: &mut Context<Self>) -> impl I
+src/main.rs:23603|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
 src/main.rs:2380|"task-reassign-{}-{}"
-src/main.rs:23929|body = body.child(ui::section(i18n::t("待办"))).child(card);
-src/main.rs:24146|.w_full()
-src/main.rs:24203|.id("chat-info-memory-row")
+src/main.rs:23838|body = body.child(ui::section(i18n::t("待办"))).child(card);
+src/main.rs:24057|.w_full()
+src/main.rs:24147|.id("chat-info-memory-row")
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:24445|.id("wechat-new-session")
-src/main.rs:24454|this.new_session_for_selected(cx);
-src/main.rs:24495|.children(self.queue_panel(cx))
+src/main.rs:24377|.id("wechat-new-session")
+src/main.rs:24386|this.new_session_for_selected(cx);
+src/main.rs:24427|.children(self.queue_panel(cx))
 src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24698|if chat.compacting == Some(true) {
-src/main.rs:25354|div()
-src/main.rs:25564|let plus_focus = self.tab_focus["composer-plus"].clone();
-src/main.rs:25571|&& !pending_approval
-src/main.rs:25582|} else {
+src/main.rs:24630|if chat.compacting == Some(true) {
+src/main.rs:25286|div()
+src/main.rs:25496|let plus_focus = self.tab_focus["composer-plus"].clone();
+src/main.rs:25503|&& !pending_approval
+src/main.rs:25514|} else {
 src/main.rs:2797|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2815|fn finish_member(&mut self, member: &str) {
 src/main.rs:2845|struct BotFormState {
@@ -343,15 +344,14 @@ src/main.rs:7904|cx: &mut Context<Self>
 src/main.rs:8350|div()
 src/main.rs:8582|if ALL_MENTION.to_lowercase().contains(&needle) {
 src/main.rs:864|queued: Vec<QueuedSend>
-src/main.rs:8834|fn chat_detail_panel(
-src/main.rs:9055|crate::model_limits::placeholder(&limits);
-src/main.rs:9295|.roster
-src/main.rs:9299|let entries = data::bot_memory_entries(&bot_id);
-src/main.rs:9342|.child(
-src/main.rs:9578|let specs: Vec<(&'static str, String)> = spec
-src/main.rs:9702|.cloned()
-src/main.rs:9719|label
-src/main.rs:9761|SharedString::from(format!("schedule-day-{index}"))
+src/main.rs:8945|crate::model_limits::placeholder(&limits);
+src/main.rs:9185|.roster
+src/main.rs:9189|let entries = data::bot_memory_entries(&bot_id);
+src/main.rs:9232|.child(
+src/main.rs:9468|let specs: Vec<(&'static str, String)> = spec
+src/main.rs:9592|.cloned()
+src/main.rs:9609|label
+src/main.rs:9651|SharedString::from(format!("schedule-day-{index}"))
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {

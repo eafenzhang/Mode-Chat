@@ -41,7 +41,7 @@
 ### 1.2 上下文压缩（compaction）— 半成品（隐式已有，UI 无感知）
 - rpi 侧默认开启：`rpi-harness/src/types.rs:325`（`DEFAULT_COMPACTION_SETTINGS { enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000 }`）
 - MC 没有覆盖该配置：`src/rpi_engine.rs:1137`（`AgentHarnessOptions::default()`）到 `:1158` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
-- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:21779`（`compact_tokens`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
+- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:21669`（`compact_tokens`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
 - 也没有 `/compact` 手动触发入口
 - 分类：**补实现**。接一个事件 + 一个命令项即可，1～2 小时。
 
@@ -88,7 +88,7 @@
 
 ### 2.4 Bot 私有记忆面板 — 半成品（缺页面）
 - DS：`ds-bot/src/client/memory-panel.js:325`（`MemoryDialog`，文件 449 行）
-- MC：只有团队记忆页 `src/main.rs:14761`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16167`（`group_memory_section`）
+- MC：只有团队记忆页 `src/main.rs:14651`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16057`（`group_memory_section`）
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
@@ -182,7 +182,7 @@
 - 分类：**无需改架构**。
 
 ### 7.2 创建 UI — 半成品（只有裸 cron）
-- MC：`src/main.rs:9655`（`SettingsDetail::NewSchedule` 面板 = 标题 + cron 输入框 + 指令 + 重复开关），默认值 `:9685` 的 `"0 9 * * *"`
+- MC：`src/main.rs:9545`（`SettingsDetail::NewSchedule` 面板 = 标题 + cron 输入框 + 指令 + 重复开关），默认值 `:9575` 的 `"0 9 * * *"`
 - DS：四种选择器 at / daily / weekly / every，`ds-bot/src/host/schedules.js:60`（`selectorOf`），有校验文案（"Pick a time in the future" 等）
 - 分类：**补实现**（纯 UI + 一个选择器→cron 的转换函数）。半天内可完成，性价比最高。
 
@@ -257,7 +257,7 @@
 
 ## 12. 用量
 
-- MC 已有：本会话 `src/rpi_engine.rs:1981`（`session_usage`）、总量 `:1993`（`usage_totals`）、按天 `:1692`（`usage_daily`），页面 `src/main.rs:14086`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
+- MC 已有：本会话 `src/rpi_engine.rs:1981`（`session_usage`）、总量 `:1993`（`usage_totals`）、按天 `:1692`（`usage_daily`），页面 `src/main.rs:13976`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
 - 缺：**按 Bot / 按模型分组**（DS：`ds-bot/src/host/usage.js:182` SQL `GROUP BY session, provider, model, kind, slot`，客户端 `usage-page.js` 732 行）；费用估算两边都没有价格表，不算差距
 - 分类：**补实现**。`UsageSummary`（`src/session_db.rs`）加 provider/model 维度聚合 + 页面加分组切换。半天。
 
@@ -293,12 +293,12 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 
 | 功能点 | MC 现状（证据） | DS 现状（证据） | 判定 | 类型 |
 |---|---|---|---|---|
-| 多语言 | 只有中/英两档：`src/i18n.rs:12`（`set_lang` 只认 `"en"`，其余中文），下拉只有两项 `src/main.rs:12140`（`language_row`） | 7 种：`ds-bot/src/client/i18n.js:1695`（zh-TW/ja/ko/es/fr/de + 默认中英），另有 6 份 locale 各 2270～2278 行 | 缺失 | 补实现（体力活） |
+| 多语言 | 只有中/英两档：`src/i18n.rs:12`（`set_lang` 只认 `"en"`，其余中文），下拉只有两项 `src/main.rs:12030`（`language_row`） | 7 种：`ds-bot/src/client/i18n.js:1695`（zh-TW/ja/ko/es/fr/de + 默认中英），另有 6 份 locale 各 2270～2278 行 | 缺失 | 补实现（体力活） |
 | 语音朗读 | 0 命中（`tts`/`speech`/`voice` 在 `src` 全为 0） | `ds-bot/src/client/voice.js:81`（`VoiceMode`）、`ds-bot/src/client/speech.js`(152)、`ds-bot/src/client/read-page.js:22`（`readPage`） | 缺失 | 框架性（接系统 TTS） |
 | 手机端 / 远程配对 | 0 命中（`pairing`/`PairCode`/`mobile` 全为 0） | `link/src/pairing.ts:55`（`pairingUri`）、`ds-bot/src/host/phone.js:18`、`ds-bot/src/host/mobile.js:160`、`mobile/`（React Native 整套） | 缺失 | 框架性（独立子系统，v0.6） |
 | 学习卡（技能自学习） | 0 命中（`learning` 全为 0） | `ds-bot/src/client/learning-card.js:164`（`LearningTurnTail`）、`ds-bot/src/host/learning.js:296`（install） | 缺失 | 框架性 |
-| 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:14494`（`settings_page_feedback`，内容是一段静态格式化串 `:14496`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
-| 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wechat_theme.rs`(236)、`src/main.rs:12156`（`accent_row`） | `client/themes.js`(124) | 已有 | — |
+| 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:14384`（`settings_page_feedback`，内容是一段静态格式化串 `:14386`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
+| 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wechat_theme.rs`(236)、`src/main.rs:12046`（`accent_row`） | `client/themes.js`(124) | 已有 | — |
 | 托盘 / 自启 / 自动更新 | 已有：`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs`(215) | 已有 | — |
 | 头像 / Bot 图标 | 已有：`src/avatar.rs`(262)、`bot_icon.rs`(120)、`agent_icons.rs`(70)、`brand_icons.rs`(307) | `client/avatar-library.js`(149)、`agent-logos.js`(52) | 已有 | — |
 | 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1030`（`FindState`）+ `:2859`（`find_dialog`）、隐私过滤 `:6527`、`src/rpi_engine.rs:1536`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
@@ -313,10 +313,10 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 |---|---|---|---|---|---|
 | 1 | Bot | 新建/编辑/删除 Bot | 已有 | `src/data.rs:117` / `:649` / `:598`；`src/main.rs:3737` | `ds-bot/src/host/tools.js:325/363` |
 | 2 | Bot | 头像与图标库 | 已有 | `src/avatar.rs`(262)、`src/bot_icon.rs`(120) | `ds-bot/src/client/avatar-library.js`(149) |
-| 3 | Bot | 每 Bot 模型选择 | 已有 | `src/main.rs:10266`（models 页）、`src/rpi_engine.rs:55` | `ds-bot/src/host/models.js:101` |
+| 3 | Bot | 每 Bot 模型选择 | 已有 | `src/main.rs:10156`（models 页）、`src/rpi_engine.rs:55` | `ds-bot/src/host/models.js:101` |
 | 4 | Bot | 工作目录切换 | 已有 | `src/data.rs:553` | `ds-bot/src/host/tools.js:363` |
 | 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:267`（approval_policy）、`:422`（hook） | `ds-bot/src/host/approvals.js`(110) |
-| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:14761`、`:14536` | `ds-bot/src/client/memory-panel.js:325` |
+| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:14651`、`:14426` | `ds-bot/src/client/memory-panel.js:325` |
 | 7 | Bot | 记忆写入工具 remember/forget/recall | 缺失 | 0 命中 | `ds-bot/src/host/memory.js:1075/1114/1151` |
 | 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:697`（interject）、`src/rpi_engine.rs:1244` | `ds-bot/src/host/steer.js`(255) |
 | 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:7795`（open_side） | `ds-bot/src/host/side.js`(377) |
@@ -357,13 +357,13 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 44 | 能力 | Skill 注入到引擎 | 缺失 | 0 命中（未设 resources） | `ds-bot/src/host/capabilities.js:125` |
 | 45 | 能力 | show_view（图表/表格/表单） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:726` |
 | 46 | Office | docx/pptx/xlsx 读写与渲染检查 | 缺失 | 只有 MIME：`crates/bots-service/src/media.rs:126` | `ds-bot/src/office/docx.js`(612) 等 9 个 |
-| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:1981/1993/1692`、`src/main.rs:14086` | `ds-bot/src/host/usage.js`(630) |
+| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:1981/1993/1692`、`src/main.rs:13976` | `ds-bot/src/host/usage.js`(630) |
 | 48 | 用量 | 按 Bot / 模型分组 | 缺失 | 未见聚合维度 | `ds-bot/src/host/usage.js:182` |
 | 49 | 记忆 | Markdown 记忆 + 索引 + 历史 + 撤销 | 已有 | `crates/bots-service/src/memory_store.rs:659/1224/1258` | `ds-bot/src/host/memory.js` |
 | 50 | 记忆 | 团队/群双作用域 | 已有 | `src/data.rs:380/396` | `ds-bot/src/host/memory.js:854` |
 | 51 | 记忆 | 上下文预算按模型窗口自适应 | 缺失（写死 4000） | `src/data.rs:384/401` | `ds-bot/src/host/memory-entries.js:75` |
 | 52 | 定时任务 | cron 引擎（五/六/七段） | 已有 | `crates/automation-schedule/src/cron.rs:49` | `ds-bot/src/host/schedules.js` / croner |
-| 53 | 定时任务 | 创建向导（at/daily/weekly/every） | 缺失（只有裸 cron） | `src/main.rs:9655` | `ds-bot/src/host/schedules.js:60` |
+| 53 | 定时任务 | 创建向导（at/daily/weekly/every） | 缺失（只有裸 cron） | `src/main.rs:9545` | `ds-bot/src/host/schedules.js:60` |
 | 54 | 定时任务 | Agent 侧创建/查询定时任务工具 | 已有 | `src/automation_tools.rs:71/89/124` | `ds-bot/src/host/schedules.js:211` |
 | 55 | ACP | 会话/权限卡/提问卡 | 已有 | `src/acp.rs:387/472/108` | `ds-bot/src/host/local-agents/acp.js` |
 | 56 | ACP | 断线重连 / 会话恢复 | 已有 | `src/acp.rs:167`（resume 走 session/load） | `ds-bot/src/host/resume.js`(451) |
@@ -371,7 +371,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 58 | 通用 | 多语言（>2） | 缺失 | `src/i18n.rs:12`（只 zh/en） | `ds-bot/src/client/i18n.js:1695` |
 | 59 | 通用 | 语音朗读 | 缺失 | 0 命中 | `ds-bot/src/client/voice.js:81`、`ds-bot/src/client/read-page.js:22` |
 | 60 | 通用 | 手机端 / 远程配对 | 缺失 | 0 命中 | `link/src/pairing.ts:55`、`ds-bot/src/host/mobile.js:160` |
-| 61 | 通用 | 诊断 / 反馈 | 半成品 | `src/main.rs:14494` | `ds-bot/src/client/diagnostics.js:42`、`ds-bot/src/client/feedback.js:46` |
+| 61 | 通用 | 诊断 / 反馈 | 半成品 | `src/main.rs:14384` | `ds-bot/src/client/diagnostics.js:42`、`ds-bot/src/client/feedback.js:46` |
 | 62 | 通用 | 主题 / 托盘 / 自启 / 自动更新 | 已有 | `src/theme.rs`、`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs` |
 | 63 | 通用 | 密钥库（只看已存名字） | 已有 | `src/secrets.rs:33/44` | `ds-bot/src/host/secrets.js`(553) |
 

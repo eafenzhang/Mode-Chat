@@ -84,13 +84,13 @@ Select-String -Path src\theme.rs -Pattern 'fn shadow_2|fn shadow_3|fn shadow_4|f
 
 **① A12「主卡位」：判定从 ✅ 降为 🟡，矩阵汇总 89/20/27 → 88/21/27。**
 
-实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`src/main.rs:18967`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
+实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`src/main.rs:18857`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
 
-所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `src/main.rs:22959`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
+所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `src/main.rs:22885`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
 
 同步改动：`docs/parity-matrix.md` 的汇总说明、A12 行、汇总表、A 域分域明细、文末「v0.5.1 的变动」表补一行。
 
-**② `chat_detail_panel`（D-CUT 前 109 行、第 9318–9426 行；HEAD 上在 `src/main.rs:8834`）：保留并接回微信壳，不删。**
+**② 运行状态面板（D-CUT 前 109 行、第 9318–9426 行；原函数 `chat_detail_panel` 已随本次改造删除）：不再单独渲染卡片，改为高亮右栏基础卡。** 理由是右栏基础卡已涵盖它的全部内容（引擎/模型/会话 ID/消息数/排队/待处理拆分/最近一轮/工作目录），再画一张就是同一数据出现两次；高亮挂在基础卡上、id 仍是 `chat-detail-run`，保证「面板本来就开着」时点击也有可见变化。
 
 现状是既有缺陷：`chat_detail` 只被 `chat_detail_panel` 内两处读（D-CUT 前第 9325 / 9420 行）、被 `DetailMenuAction::RunStatus` 写（D-CUT 前第 17460 行，微信壳的「⋯」也走这里），D-CUT 前唯一渲染点是 classic `right_panel`。也就是说**微信壳里点「⋯ → 运行状态」现在什么都不显示**。删 classic 会让它彻底没有渲染点。
 

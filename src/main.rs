@@ -8831,116 +8831,6 @@ impl PilotApp {
 
     /// 设置页的右侧详情面板（替代弹窗，规范 §7.2 / §8）。
     /// 会话右栏的详情面板：运行状态等只读明细。
-    fn chat_detail_panel(
-        &mut self,
-        _window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
-        use crate::ui_kit as ui;
-
-        let detail = self.chat_detail.clone()?;
-        let SettingsDetail::RunStatus { key } = detail else {
-            return None;
-        };
-
-        let bot_id = key.strip_prefix("bot:");
-        let group = key
-            .strip_prefix("group:")
-            .and_then(|id| self.roster.groups.iter().find(|group| group.id == id));
-        let title = bot_id
-            .and_then(|id| self.roster.bot_by_id(id))
-            .map(|bot| bot.name.clone())
-            .or_else(|| group.map(|group| group.name.clone()))
-            .unwrap_or_else(|| "Mode Chat".to_string());
-        let engine = bot_id
-            .and_then(|id| self.sessions.engine_of(id))
-            .unwrap_or("mode");
-        let engine_label = if group.is_some() {
-            i18n::t("群聊 · 按成员").to_string()
-        } else if engine.is_empty() || engine.eq_ignore_ascii_case("mode") {
-            tri!("Pi-Rust（内置）", "Pi-Rust (built-in)").to_string()
-        } else {
-            engine.to_string()
-        };
-        let model = bot_id
-            .and_then(|id| self.roster.bot_by_id(id))
-            .and_then(|bot| bot.model.as_ref())
-            .map(|model| model.label())
-            .unwrap_or_else(|| i18n::t("默认模型").to_string());
-        let workspace = bot_id
-            .and_then(|id| self.roster.bot_by_id(id))
-            .map(|bot| bot.directory.clone())
-            .or_else(|| group.and_then(|group| group.directory.clone()))
-            .filter(|path| !path.trim().is_empty())
-            .unwrap_or_else(|| i18n::t("未设置").to_string());
-        let chat = self.chats.get(&key);
-        let session = chat
-            .and_then(|chat| chat.session_id.as_deref())
-            .map(display_session_id)
-            .unwrap_or_else(|| i18n::t("尚未建立").to_string());
-        let status = chat
-            .map(|chat| {
-                if chat.streaming {
-                    i18n::t("运行中").to_string()
-                } else if chat.status.trim().is_empty() {
-                    i18n::t("就绪").to_string()
-                } else {
-                    chat.status.clone()
-                }
-            })
-            .unwrap_or_else(|| i18n::t("未连接").to_string());
-        let messages = chat.map(|chat| chat.messages.len()).unwrap_or(0);
-        let queued = chat.map(|chat| chat.queued.len()).unwrap_or(0);
-        let pending = chat
-            .map(|chat| chat.permissions.len() + chat.questions.len() + chat.elicitations.len())
-            .unwrap_or(0);
-        let turn = chat
-            .and_then(|chat| chat.last_turn.as_ref())
-            .map(|report| {
-                format!(
-                    "{} · ↑{} ↓{}",
-                    elapsed_label(report.duration_ms),
-                    compact_tokens(report.usage.input),
-                    compact_tokens(report.usage.output)
-                )
-            })
-            .unwrap_or_else(|| "—".to_string());
-
-        let rows = [
-            (i18n::t("会话").to_string(), title),
-            (i18n::t("引擎").to_string(), engine_label),
-            (i18n::t("模型").to_string(), model),
-            (i18n::t("工作目录").to_string(), workspace),
-            (i18n::t("会话 ID").to_string(), session),
-            (i18n::t("状态").to_string(), status),
-            (i18n::t("消息数").to_string(), messages.to_string()),
-            (i18n::t("排队消息").to_string(), queued.to_string()),
-            (i18n::t("待处理审批/提问").to_string(), pending.to_string()),
-            (i18n::t("最近一轮").to_string(), turn),
-        ];
-
-        let mut body = ui::card(vec![]);
-        let count = rows.len();
-        for (index, (label, value)) in rows.into_iter().enumerate() {
-            body = body.child(ui::card_row(
-                ui::stat_row(label, value),
-                index + 1 == count,
-            ));
-        }
-
-        let panel = ui::DetailPanel::new(i18n::t("运行状态"))
-            .subtitle(i18n::t("只读明细；不改变会话状态"))
-            .body(body)
-            .action(ui::button("chat-detail-close", i18n::t("关闭")).on_click(
-                cx.listener(move |this, _event, _window, cx| {
-                    this.chat_detail = None;
-                    cx.notify();
-                }),
-            ));
-
-        Some(panel.render(move |_window: &mut Window, _cx: &mut App| {}, cx))
-    }
-
     fn settings_detail_panel(
         &mut self,
         _window: &Window,
@@ -23710,7 +23600,7 @@ impl PilotApp {
     /// 会话右侧详情栏（DS bot 风格）：模型、引擎、运行状态、最近一轮用量。
     ///
     /// 与设置页的 `DetailPanel` 同一套视觉，但内容是会话实时状态而不是表单。
-    fn chat_info_panel(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::ui_kit as ui;
 
         let key = self.active_key().unwrap_or_default();
@@ -23794,6 +23684,25 @@ impl PilotApp {
         let mut card = ui::card(vec![]);
         for (index, row) in rows.into_iter().enumerate() {
             card = card.child(ui::card_row(row, index + 1 == count));
+        }
+        // 「⋯ → 运行状态」不再渲染第二张卡（右栏这张基础卡已经涵盖它的全部内容），
+        // 改为高亮这张卡：面板本来就开着时，只打开面板等于什么都没发生，
+        // 那正是 O-2 要修的原始缺陷。挂 id 供 §3.5 的 grep 判据用。
+        let highlighting = matches!(
+            self.chat_detail.as_ref(),
+            Some(SettingsDetail::RunStatus { key: target }) if target.as_str() == key.as_str()
+        );
+        let mut card = card.into_any_element();
+        if highlighting {
+            card = div()
+                .id("chat-detail-run")
+                .w_full()
+                .rounded(px(theme::RADIUS_CARD))
+                .border_2()
+                .border_color(theme::accent())
+                .overflow_hidden()
+                .child(card)
+                .into_any_element();
         }
 
         let mut body = div()
@@ -24138,6 +24047,8 @@ impl PilotApp {
                         .unwrap_or_else(|| display_session_id(&session_id));
                     let bot_id = bot.id.clone();
                     let target = session_id.clone();
+                    let rename_id = session_id.clone();
+                    let rename_row = session_id.clone();
                     rows.push(
                         div()
                             .id(SharedString::from(format!(
@@ -24165,9 +24076,42 @@ impl PilotApp {
                                     .min_w(px(0.))
                                     .truncate()
                                     .font_family(wechat_theme::FONT_FAMILY)
-                                    .text_size(px(11.))
+                                    .text_size(px(ui::T_LABEL))
                                     .text_color(wechat_theme::list_preview())
                                     .child(SharedString::from(label)),
+                            )
+                            .child(
+                                // D3：会话改名入口（classic 的「改名」随 sidebar 删掉了，
+                                // 这里接回来；stop_propagation 必须调，否则点改名会先切会话）
+                                div()
+                                    .id(SharedString::from(format!("chat-info-rename-{rename_row}")))
+                                    .flex_shrink_0()
+                                    .px(px(ui::S2))
+                                    .pointer()
+                                    .font_family(wechat_theme::FONT_FAMILY)
+                                    .text_size(px(ui::T_LABEL))
+                                    .text_color(wechat_theme::chat_subtitle())
+                                    .hover(|style| style.text_color(wechat_theme::chat_title()))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        cx.stop_propagation();
+                                        let current = this
+                                            .sessions
+                                            .title(&rename_id)
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        this.settings_detail =
+                                            Some(SettingsDetail::RenameSession {
+                                                session_id: rename_id.clone(),
+                                                current_title: current,
+                                            });
+                                        this.settings_detail_input = None;
+                                        // 切到设置页后右栏整块不再渲染，清理掉运行状态卡，
+                                        // 否则从设置返回时它会带着旧数据冒出来。
+                                        this.chat_detail = None;
+                                        this.settings_open = true;
+                                        cx.notify();
+                                    }))
+                                    .child(i18n::t("改名")),
                             )
                             .child(icons::icon(
                                 icons::Icon::ChevronRight,
@@ -24264,20 +24208,8 @@ impl PilotApp {
             );
         }
 
-        // 「⋯ → 运行状态」的只读明细：原先只在 classic 右栏渲染，classic 删除后
-        // 接回到这里，否则菜单项点了没有任何反馈（既有缺陷，随 D-CUT 顺手修好）。
-        if let Some(detail) = self.chat_detail_panel(window, cx) {
-            body = body.child(
-                div()
-                    .id("chat-detail-run")
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(ui::S2))
-                    .child(ui::section(i18n::t("运行状态")))
-                    .child(detail),
-            );
-        }
+        // 「⋯ → 运行状态」现在只高亮上面那张基础卡（见 card 构造处），
+        // 不再渲染第二张卡：右栏基础卡已经涵盖它的全部内容，再画一张就是同一数据出现两次。
 
         div()
             .relative()
