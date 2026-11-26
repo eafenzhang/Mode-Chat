@@ -31,9 +31,17 @@ $diffArgs = if ($To -eq 'WORKTREE') { @('diff', '-U0', $From, '--', 'src/main.rs
 foreach ($line in (& git @diffArgs)) {
     if ($line -match '^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@') {
         $os = [int]$Matches[1]
-        $oc = if ($Matches[2] -ne '') { [int]$Matches[2] } else { 1 }
+        # 判断「会不会存在第 N 组」必须用 ContainsKey，不能用 -ne ''，也不能用 .Success：
+        #   - hunk 头写 `@@ -8842 +8845 @@`（省略 ,N）时，$Matches 里根本没有第 2 组，
+        #     $Matches[2] 取出来是 $null，而 PowerShell 里 `$null -ne ''` 为 **True**，
+        #     于是走了「有值」分支，[int]$null = 0 —— 替换型 hunk 被当成「删 0 增 0」整个跳过。
+        #   - $Matches 是 hashtable，取出的元素是 string，取 `.Success` 恒为 $null（同样恒假）。
+        # 实测：本仓 +12/-4 的 diff 曾被解析成「删 0 增 8」，22 个受影响的锚点原地不动，
+        # 表现为 drifted=115，看起来像「代码动了锁没跟上」，实际是这里丢了行数。
+        # 省略 ,N 按 git 语义就是 1 行。
+        $oc = if ($Matches.ContainsKey(2) -and $Matches[2] -ne '') { [int]$Matches[2] } else { 1 }
         $ns = [int]$Matches[3]
-        $nc = if ($Matches[4] -ne '') { [int]$Matches[4] } else { 1 }
+        $nc = if ($Matches.ContainsKey(4) -and $Matches[4] -ne '') { [int]$Matches[4] } else { 1 }
         [void]$hunks.Add([pscustomobject]@{ OS = $os; OC = $oc; NS = $ns; NC = $nc })
     }
 }

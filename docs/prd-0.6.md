@@ -84,9 +84,9 @@ Select-String -Path src\theme.rs -Pattern 'fn shadow_2|fn shadow_3|fn shadow_4|f
 
 **① A12「主卡位」：判定从 ✅ 降为 🟡，矩阵汇总 89/20/27 → 88/21/27。**
 
-实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`src/main.rs:18857`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
+实测依据：`main_bot_card`（已随 D-CUT 删除）原只被 `sidebar` 调用；微信壳区间 `25799-29000` 内 `is_chief` / `is_main` / `chief` **0 命中**；侧栏行 `wechat_list_row`（`src/main.rs:18899`）只画头像、名字、时间、未读点，没有「这是 Main bot」的视觉位。
 
-所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `src/main.rs:22885`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
+所以删除后**用户看不到「谁是主 Bot」的突出标识**——这是真实的功能损失，不是锚点问题。判定 🟡，锚点落到 `src/main.rs:22891`（`fn wechat_nav`），差距列写「微信壳只有平铺列表，无主卡位；补主卡位记 v0.7」。
 
 同步改动：`docs/parity-matrix.md` 的汇总说明、A12 行、汇总表、A 域分域明细、文末「v0.5.1 的变动」表补一行。
 
@@ -200,7 +200,25 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 - 深色主题 · 群聊：新开一个群，0 条消息 → 九宫格成员头像 + 「群名 · N 人」+ 成员名单 + 「成员：…。发消息开始群聊对话；用 @成员名 点名。」
 - 浅色主题 · 群聊：同上。
 
-**实测映射（`021eb99`，`docs/testing/shots/`）**：`250-o1-chat-dark`、`254-o1-chat-light`、`251-o1-group-dark`、`253-o1-group-light` 是四张必出项；`252-o2-run-status-dark`（O-2 运行状态卡片八行明细）、`255-o1-chip-clicked-light`（点 chip 后输入框填入并聚焦）是附加证据。**截图前必须确认 exe 编译时间晚于最后一个 `src/` 提交**——`0706ebb` 之前编的二进制截群聊只会得到白屏，@前端 实际踩过这一坑（02:57:55 的 exe 对 03:01:04 的提交）。
+**实测映射（当前 `eb941a2`，`docs/testing/shots/`）**：
+
+| 截图 | 对应判据 | 说明 |
+| --- | --- | --- |
+| `250-o1-chat-dark` / `254-o1-chat-light` | §3.4 单聊 | 头像、欢迎语、三条 chip；浅色那张还验了“点 chip 后填入输入框” |
+| `251-o1-group-dark` / `253-o1-group-light` | §3.4 群聊 | 九宫格 + 「群名 · N 位成员」+ 成员名单 |
+| `255-o1-chip-clicked-light` | §3.4 交互 | 点 chip 后输入框 = 建议文字、发送钮变绿 |
+| `260-o2-3a-group-title-full` | §3.5 **3a** | 群聊选中 + 右栏打开，标题「前端走查群」完整、badge「就绪」，左栏选中项可见 |
+| `261-o2-highlight-with-title` | §3.5 **判据 1 + 4a** | 「运行状态」标题 + 基础卡绿描边（判据 1 由 0 处变 1 处） |
+| `257-o2-4b-after-collapse-reopen` | §3.5 **4b** | 折叠再展开后描边消失 |
+| `258-o2-4c-switched-away` | §3.5 **4c 第二步** | 切到 bot 13，无描边 |
+| `262-o2-4c-real-switchback` | §3.5 **4c 第三步** | 真实切回 bot 12（12:32:55，晚于 `258` 的 10:31:48），无描边；SHA256 `B5F37295… ≠ 257 的 DF68AE34…` |
+
+**两张已作废、不要引用**：
+
+- `252-o2-run-status-dark` —— 拍的是旧三层嵌套方案（`ui::DetailPanel` 外壳：重复标题、死「返回」、右缘裁 44px），`dda719d` 已否决该方案，由 `261` 取代；
+- `259-o2-4c-switched-back` —— **已删除**。它与 `257` 的 SHA256 完全相同（`DF68AE34…`）、时间戳同为 10:28:31，是另存拷贝，不能作为 4c 第三步的证据；`eb941a2` 用真实拍摄的 `262` 替换。
+
+**截图前必须确认 exe 编译时间晚于最后一个 `src/` 提交**——`0706ebb` 之前编的二进制截群聊只会得到白屏，@前端 实际踩过（02:57:55 的 exe 对 03:01:04 的提交）；`eb941a2` 三张图的 exe 编译于 12:16:32，晚于 `6930a4a`。
 
 **群聊空态是 D-CUT 引出的功能回退，不是「本来就没有」**：classic 的 `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行）随 classic 一起被删了，它调用 `empty_state_badged(Some(channel_avatar(...)), "{group.name} · {count_members}", "成员：…。发消息开始群聊对话；用 @成员名 点名。")`。删掉后微信壳群聊 0 条消息只剩裸 `div()`。**已补齐**：`0f9b4b5` 修单聊（`wechat_welcome`），`0706ebb` 补群聊（`wechat_group_welcome`，id `wechat-group-welcome`，九宫格 + 「群名 · N 位成员」+ 成员名单）。验收仍**单聊、群聊分开记**，四张截图缺一不可。
 
@@ -296,7 +314,7 @@ Select-String -Path src\main.rs -Pattern 'fn chat_detail_panel'     # 期望 0�
 
 **为什么必须换**：`theme::accent()` 在用户没选自定义色时返回 `DARK_ACCENT`/`LIGHT_ACCENT`——**那是蓝色**，不是微信绿。`chat_info_panel` 区间内 `wechat_theme::` **33 处**、`theme::` **2 处**（就是这两行新写的），所以不换的话，会给基础卡套一个蓝色边框，而周围全是微信绿系。用户选自定义主题色时更明显：周围跟着变，只有描边不变。
 
-**顺带纠正一个数**：`ui_kit::R_CARD` 已经是 12 且 `ui_kit.rs:948` 断言它等于 `theme::RADIUS_MENU`，所以直接写 `ui::R_CARD`，不要写裸 `12.`。
+**顺带纠正一个数**：`ui_kit::R_CARD` 已经是 12 且 `src/ui_kit.rs:948` 断言它等于 `theme::RADIUS_MENU`，所以直接写 `ui::R_CARD`，不要写裸 `12.`。
 
 **同批要清的两条尾巴（不影响判据，但会误导下一个读代码的人）**：
 
