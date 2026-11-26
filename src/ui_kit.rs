@@ -403,7 +403,22 @@ pub fn stat_card(value: impl Into<SharedString>, label_text: impl Into<SharedStr
 
 /// 文本按钮：30 高、胶囊、`hover` 底。
 pub fn button(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> Stateful<Div> {
-    div()
+    button_state(id, text, false)
+}
+
+/// 可禁用形态的文本按钮（O-7 / U-04）。
+///
+/// 为什么不写成 `.disabled(bool)` 这样的链式 trait：`cursor_pointer` 和 `hover`
+/// 是在构造时逐条加在 `Style` 上的，事后追加一个 `.cursor(Arrow)` / `.hover(|s| s)`
+/// 并不能可靠地把它们「覆盖掉」——hover 是叠加的，后加的那条只是又叠了一层，
+/// 能不能盖住取决于内部合并顺序。**「看起来不可用」必须和「实际不可用」由同一处决定**，
+/// 所以这里把整段样式按 `disabled` 分两支写，而不是最后再改一点。
+pub fn button_state(
+    id: impl Into<gpui::ElementId>,
+    text: impl Into<SharedString>,
+    disabled: bool,
+) -> Stateful<Div> {
+    let base = div()
         .id(id)
         .h(px(30.))
         .rounded_full()
@@ -416,65 +431,55 @@ pub fn button(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> 
         .flex()
         .items_center()
         .justify_center()
-        .cursor_pointer()
-        .hover(|style| style.bg(theme::raised_hover()))
         .child(
             div()
                 .font_family(font())
                 .text_size(px(T_BODY))
                 .line_height(px(T_BODY_LH))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(ink())
+                .text_color(if disabled { ink_tertiary() } else { ink() })
                 .child(text.into()),
-        )
+        );
+    if disabled {
+        // 置灰、默认光标、不挂 hover、不挂点击态背景。
+        base.opacity(0.55).cursor(gpui::CursorStyle::Arrow)
+    } else {
+        base.cursor_pointer()
+            .hover(|style| style.bg(theme::raised_hover()))
+    }
 }
 
 /// 轻量文本按钮：无底色，只换文字色（卡片内的次级动作）。
 pub fn button_ghost(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> Stateful<Div> {
-    div()
+    button_ghost_state(id, text, false)
+}
+
+/// 可禁用形态的轻量按钮（O-7 / U-04），分支写法同 `button_state`。
+pub fn button_ghost_state(
+    id: impl Into<gpui::ElementId>,
+    text: impl Into<SharedString>,
+    disabled: bool,
+) -> Stateful<Div> {
+    let base = div()
         .id(id)
         .h(px(22.))
         .px(px(S1))
         .flex()
         .items_center()
-        .cursor_pointer()
         .font_family(font())
         .text_size(px(T_LABEL))
         .line_height(px(T_LABEL_LH))
-        .text_color(ink_secondary())
-        .hover(|style| style.text_color(accent()))
-        .child(text.into())
-}
-
-/// 按钮的禁用形态（O-7 / U-04）。
-///
-/// `ui_kit` 的 `button` / `button_ghost` 返回的是裸 `div`，没有「不可用」这个概念：
-/// 调用方要么干脆不挂 `on_click`，要么挂了再自己判断一次——前者看起来还是可点的，
-/// 后者要求每个调用点重复写守卫。这个 trait 把「置灰 + 去手型」一次做掉，
-/// 让「看起来不可用」和「实际不可用」由同一处决定。
-///
-/// 用法：
-/// ```ignore
-/// ui::button("im-delete", "删除机器人").disabled(im_delete.is_none())
-/// ```
-///
-/// 注意它**不会**替调用方摘掉 `on_click`——handler 仍在，只是视觉与光标变了。
-/// 需要真正拦住的场景，仍要在 handler 里守一次（本仓的卡片式交互都要求这样）。
-pub trait Disabled: Sized {
-    /// `true` 时置灰、去掉手型光标、不挂 hover。
-    fn disabled(self, disabled: bool) -> Self;
-}
-
-impl Disabled for Stateful<Div> {
-    fn disabled(self, disabled: bool) -> Self {
-        if !disabled {
-            return self;
-        }
-        // 去手型：`cursor_pointer` 已由构造函数加上，这里改回默认光标。
-        // gpui 的 `Stateful<Div>` 没有「移除样式」的方法，只能覆盖成 default。
-        self.cursor(gpui::CursorStyle::Arrow)
-            .opacity(0.45)
-            .hover(|style| style)
+        .text_color(if disabled {
+            ink_tertiary()
+        } else {
+            ink_secondary()
+        })
+        .child(text.into());
+    if disabled {
+        base.opacity(0.55).cursor(gpui::CursorStyle::Arrow)
+    } else {
+        base.cursor_pointer()
+            .hover(|style| style.text_color(accent()))
     }
 }
 
