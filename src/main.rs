@@ -3880,6 +3880,8 @@ impl PilotApp {
         self.stash_draft(cx);
         self.selection = Some(Selection::Bot(index));
         self.chat_find = None;
+        // 运行状态高亮只对「当前正在看的那一个会话」有效，切会话就清掉。
+        self.chat_detail = None;
         if let Some(bot) = self.roster.bots.get(index) {
             let key = bot_key(&bot.id);
             if let Some(chat) = self.chats.get_mut(&key) {
@@ -4140,6 +4142,7 @@ impl PilotApp {
         self.stash_draft(cx);
         self.selection = Some(Selection::Group(index));
         self.chat_find = None;
+        self.chat_detail = None;
         if let Some(group) = self.roster.groups.get(index) {
             let key = group_key(&group.id);
             let group_id = group.id.clone();
@@ -8839,7 +8842,7 @@ impl PilotApp {
         use crate::ui_kit as ui;
 
         let detail = self.settings_detail.clone()?;
-        // 会话专用的两种形态由 chat_detail_panel 渲染，这里不处理。
+        // `chat_detail_panel` 已删除：运行状态改成高亮右栏基础卡，不走设置详情面板。
         if matches!(detail, SettingsDetail::RunStatus { .. }) {
             return None;
         }
@@ -11247,6 +11250,9 @@ impl PilotApp {
             let target = panel_target_width(current, false, self.panel_restore_width, PANEL_WIDTH);
             self.right_panel_open = false;
             self.panel_restore_width = None;
+            // 运行状态高亮是瞬时 UI 状态，不是跨会话设置：关栏就清掉，
+            // 否则下次展开会留下一个来源不明的描边。
+            self.chat_detail = None;
             apply_panel_width(window, target);
         }
         // 开合状态落盘，下次启动保持用户的选择。
@@ -20154,7 +20160,7 @@ enum SettingsDetail {
         key: String,
     },
     /// 重命名会话（单输入）。
-    #[allow(dead_code)]     // v0.7 decision: session rename, no wechat-shell entry point yet.
+    // RenameSession 已有入口（微信壳最近会话行的「改名」按钮），不再需要 dead_code 豁免。
     RenameSession {
         session_id: String,
         current_title: String,
@@ -23697,9 +23703,11 @@ impl PilotApp {
             card = div()
                 .id("chat-detail-run")
                 .w_full()
-                .rounded(px(theme::RADIUS_CARD))
+                // 圆角/配色都走微信壳令牌：这一段其余 13 处配色都是 wechat_theme::，
+                // 用 theme:: 会在用户自定义主题色时和周围不同步。R_CARD = 12 见规范 §4。
+                .rounded(px(ui::R_CARD))
                 .border_2()
-                .border_color(theme::accent())
+                .border_color(wechat_theme::accent())
                 .overflow_hidden()
                 .child(card)
                 .into_any_element();
