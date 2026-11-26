@@ -298,7 +298,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "需要你的回答" => Some("Needs your answer"),
         "工具" => Some("Tool"),
         "工作中" => Some("Working"),
-    "未支持" => Some("Unsupported"),
+        "未支持" => Some("Unsupported"),
         // O-3：状态行按 ToolFamily 分档后的五个短语（Other 档沿用上面的「工作中」）。
         "正在执行命令" => Some("Running a command"),
         "正在改文件" => Some("Editing files"),

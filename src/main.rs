@@ -14037,7 +14037,8 @@ impl PilotApp {
                         cx,
                     )),
             )
-            // 两张「暂不支持」的卡：明确不可用，不打开创建页（见 im_platform_card_planned）。// 不要写「计划 vX.Y」——发版当天承诺下一版，等于把没做的事变成欠条。
+            // 两张「暂不支持」的卡：明确不可用，不打开创建页（见 im_platform_card_planned）。
+            // 不要写「计划 vX.Y」——发版当天承诺下一版，等于把没做的事变成欠条。
             .child(
                 div()
                     .flex()
@@ -24823,7 +24824,12 @@ impl PilotApp {
                         .justify_center()
                         .pointer()
                         .when(!enabled, |el| el.opacity(0.35))
-                        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+                        // 禁用时 hover 也要关：只降透明度的话，鼠标移上去仍变底色，
+                        // 视觉上更像可点。导航类控件的 handler 自带边界判断，幂等，
+                        // 所以「视觉禁用但逻辑仍可点」在这里不会产生副作用。
+                        .when(enabled, |el| {
+                            el.hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+                        })
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             if previous {
                                 if this.wechat_turn_cursor > 0 {

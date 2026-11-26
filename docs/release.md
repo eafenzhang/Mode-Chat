@@ -19,7 +19,7 @@
   （push `main` 和 push tag 会各触发一次，`concurrency` 只保证串行不保证合并；
   所以「HEAD 已带 tag 就用那个版本」这一步必须有，否则同一次发版会多出一个空 patch Release）
 - 门禁（任一失败直接 exit 1，不进 Package）：
-  1. `cargo test --locked`
+  1. `cargo test --workspace --locked --no-fail-fast`（`--workspace` 才跑全部 crate；`--no-fail-fast` 保证失败时总数仍为 577 而不是随执行顺序变）
   2. `cargo clippy --all-targets --locked -- -D warnings`
   3. `scripts\ui-lint.ps1 -Enforce`（UI 令牌）
   4. `scripts\verify-parity-anchors.ps1`（对标矩阵/PRD 锚点 + 指纹锁 + 汇总数字）
