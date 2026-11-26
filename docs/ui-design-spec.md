@@ -234,6 +234,37 @@
 可复用边界：这段只属于「空会话首屏」，**不要抽成通用卡片**。气泡的 `max_w 460` 与
 第三行的引导语都是首屏专属；抽成组件后每个页面都要带一份无用参数。
 
+## 9.2 右栏运行状态高亮（2026-11-26 新增，O-2）
+
+「⋯ → 运行状态」不再渲染第二张统计卡（那张卡的 10 行与右栏基础卡完全重复），
+改为**高亮右栏基础卡**：`chat_detail = Some(RunStatus{key})` 只作高亮标记，
+`chat_info_panel` 在 `key` 与当前会话匹配时，给基础卡包一层 `R_Card` 圆角 +
+`wechat_theme::accent()` 描边，并在外面挂一行 `ui::section("运行状态")` 与 id `chat-detail-run`。
+
+**为什么必须高亮而不能只是「打开右栏」**：右栏本来就开着时，只打开面板等于什么都没发生，
+用户照样觉得「点了没反应」——那正是 O-2 要修的原始缺陷。
+
+**为什么必须带标题**：只有一圈绿边，用户读不出自己在看什么。
+把判据放宽成「0 处标题」等于认可「有反应但说不出反应什么」，缺陷只是换了形态。
+
+**高亮是瞬时 UI 状态，不跨会话、不落盘。** `chat_detail` 现在有五个清空点，
+**新增任何「打开右栏」或「切会话」的入口，必须同时补一处清空**：
+
+| 入口 | 位置 |
+| --- | --- |
+| 切 Bot | `select_bot` |
+| 切群 | `select_group` |
+| 折叠右栏 | `set_right_panel(open=false)` 的 `else` 分支 |
+| 点「改名」跳设置页 | 改名按钮 handler |
+| 切历史会话 | `switch_to_history_session` |
+
+漏一处的表现是：切走再切回来，描边又亮起，像这个会话有某种状态。
+`chat_detail` 不进磁盘（`save_ui_prefs` 只存 `muted / topmost / pinned_settings / right_panel_open`），
+所以重启不会带出描边。
+
+**同一个「瞬时 UI 状态」还有 `chat.quote`（引用）**：它目前全仓没有写入点，
+v0.7 做引用条时必须同时补写入点、渲染点、以及同样这五处清空点——只做渲染等于做一个永远为空的控件。
+
 ## 10. 审查结论（2026-11-23）
 
 需要改造的页面，按「裸样式密度」排序：
@@ -353,7 +384,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1
 
 # 门禁模式（CI 用，有违规即 exit 1）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
+
+# 间距档单独收紧（O-5 第 ④ 步之后才用；现在跑会红，因为基线还有 232 处）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -EnforceSpacing
 ```
+
+**三个开关的结论互不相同，结项说明里必须写清楚**（2026-11-26 补，O-5 ①）：
+
+| 命令 | 现在的结果 | 含义 |
+| --- | --- | --- |
+| `-Enforce` | PASS / exit 0 | 前四条令牌规则 0 违规 |
+| `-EnforceSpacing` | **FAIL / exit 1** | 间距档还有 232 处档外，**不代表阶段没通过** |
+| 两个都带 | FAIL / exit 1 | 前四条干净但间距没清零 |
+
+**只看 `-Enforce` 的 PASS 就说「间距合规」是错的**：第 5 条不在它的统计范围内。
+反过来，跑了 `-EnforceSpacing` 看到红也不能当作回归——那是 O-5 ③ 尚未开始。
+
+**第 5 条自身的有效性靠增量验，不靠退出码**（2026-11-26 实测）：
+基线 232 → 临时注入一处 `gap(px(6.))` → 233 → 删掉 → 232。两次都要记数。
+`exit 1` 在「抓到 232 条」和「抓到 1 条」时是同一个值，分不开。
 
 收敛完成后把 release.yml 的调用改成 `-Enforce`，违规即阻断发布。
 
