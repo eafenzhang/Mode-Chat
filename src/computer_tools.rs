@@ -1034,8 +1034,54 @@ fn coords(params: &Value) -> Result<(i32, i32), rpi_agent::AgentError> {
 mod tests {
     use super::*;
 
+    /// 探测「本进程此刻能不能抓桌面」，用于给失败用例一句能读懂的原因。
+    ///
+    /// 这里**不提供 skip 语义**，原因很硬：Rust 的 libtest 没有 skip 概念，
+    /// 「探测不到就 `return`」在 `test result` 里会被记成 `ok` 并计入 `passed`，
+    /// 于是「总数 577 / failed=0 / passed 575」三个口径在**一条断言都没跑**时全部满足。
+    /// 本轮已经栽过一次同构的坑（`reanchor-from-lock.ps1` 少扫 48 条仍然报绿），
+    /// 所以这类「跳过了但看起来通过」的形态一律不要。
+    ///
+    /// 也不加 `#[ignore]`：那是无条件豁免，真有桌面的机器上也永远不跑。
+    ///
+    /// 结论：锁屏时这两条**就应该是红的**。红是对的——它说明「这一轮没有验证桌面捕获」，
+    /// 而不是让 `passed` 偷偷凑满。桌面恢复后它们自动恢复执行，不需要改任何配置。
+    fn detail_desktop_unavailable() -> Option<&'static str> {
+        // SAFETY: 句柄在同一段内成对释放；1x1 位图不读像素，只验证 BitBlt 是否成功。
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            if screen.is_null() {
+                return Some("拿不到屏幕 DC（当前无交互桌面）");
+            }
+            let mem = CreateCompatibleDC(screen);
+            let bitmap = CreateCompatibleBitmap(screen, 1, 1);
+            let previous = SelectObject(mem, bitmap);
+            let copied = BitBlt(mem, 0, 0, 1, 1, screen, 0, 0, SRCCOPY);
+            SelectObject(mem, previous);
+            DeleteObject(bitmap);
+            DeleteDC(mem);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            if copied == 0 {
+                return Some("BitBlt 返回 0（锁屏 / 远程会话断开 / 无交互桌面）");
+            }
+            None
+        }
+    }
+
+    /// 抓屏类用例的统一前置断言：不可捕获就**失败**，并把环境原因写清楚。
+    fn require_desktop_capture() {
+        if let Some(reason) = detail_desktop_unavailable() {
+            panic!(
+                "桌面不可捕获：{reason}。这是环境问题，不是代码回归——\
+                 解锁桌面或在交互式会话里重跑即可；不要用 #[ignore] 或 `--skip` 绕过，\
+                 那会让这两条在能跑的机器上也不再验证任何东西。"
+            );
+        }
+    }
+
     #[test]
     fn capture_screen_encodes_png() {
+        require_desktop_capture();
         let (width, height, rgba) = capture_screen().expect("screen capture");
         assert!(width > 0 && height > 0);
         let png = encode_png(width, height, &rgba).expect("png");
@@ -1044,6 +1090,7 @@ mod tests {
 
     #[test]
     fn windows_and_cursor_are_readable() {
+        require_desktop_capture();
         assert!(!list_windows().is_empty(), "至少应有可见窗口");
         cursor_pos().expect("cursor position");
     }
