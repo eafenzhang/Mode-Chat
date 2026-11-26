@@ -24332,6 +24332,9 @@ impl PilotApp {
             session_id,
             self.sessions.engine_of(&bot_id).map(str::to_string),
         );
+        // 切到另一个历史会话：运行状态高亮和切 Bot / 切群一样是瞬时 UI 状态，跟着清掉。
+        // 不清的话，切走再切回会看到一道说不清来源的描边（4c 必失败）。
+        self.chat_detail = None;
         self.scroll.scroll_to_bottom();
         cx.notify();
     }
