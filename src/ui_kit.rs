@@ -446,6 +446,38 @@ pub fn button_ghost(id: impl Into<gpui::ElementId>, text: impl Into<SharedString
         .child(text.into())
 }
 
+/// 按钮的禁用形态（O-7 / U-04）。
+///
+/// `ui_kit` 的 `button` / `button_ghost` 返回的是裸 `div`，没有「不可用」这个概念：
+/// 调用方要么干脆不挂 `on_click`，要么挂了再自己判断一次——前者看起来还是可点的，
+/// 后者要求每个调用点重复写守卫。这个 trait 把「置灰 + 去手型」一次做掉，
+/// 让「看起来不可用」和「实际不可用」由同一处决定。
+///
+/// 用法：
+/// ```ignore
+/// ui::button("im-delete", "删除机器人").disabled(im_delete.is_none())
+/// ```
+///
+/// 注意它**不会**替调用方摘掉 `on_click`——handler 仍在，只是视觉与光标变了。
+/// 需要真正拦住的场景，仍要在 handler 里守一次（本仓的卡片式交互都要求这样）。
+pub trait Disabled: Sized {
+    /// `true` 时置灰、去掉手型光标、不挂 hover。
+    fn disabled(self, disabled: bool) -> Self;
+}
+
+impl Disabled for Stateful<Div> {
+    fn disabled(self, disabled: bool) -> Self {
+        if !disabled {
+            return self;
+        }
+        // 去手型：`cursor_pointer` 已由构造函数加上，这里改回默认光标。
+        // gpui 的 `Stateful<Div>` 没有「移除样式」的方法，只能覆盖成 default。
+        self.cursor(gpui::CursorStyle::Arrow)
+            .opacity(0.45)
+            .hover(|style| style)
+    }
+}
+
 /// 筛选 chip：胶囊，选中用强调色底。
 pub fn chip(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, active: bool) -> Stateful<Div> {
     div()
