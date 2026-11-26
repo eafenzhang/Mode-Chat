@@ -220,6 +220,7 @@ src/main.rs:1080|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>)
 src/main.rs:10999|fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>)
 src/main.rs:11097|.filter(|bot| !bot.is_private)
 src/main.rs:11206|member_ids
+src/main.rs:11255|self.chat_detail = None;
 src/main.rs:11390|.child(settings_group(vec![
 src/main.rs:11488|.child(
 src/main.rs:11670|} else {
