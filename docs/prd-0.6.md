@@ -218,16 +218,19 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 ### 3.5 运行状态面板接回（grep + 截图）
 
 ```powershell
-Select-String -Path src\main.rs -Pattern 'chat-detail-run'      # 期望 1（高亮容器的 id）
-Select-String -Path src\main.rs -Pattern 'chat-detail-close'    # 期望 0（关闭按钮已并入右上角折叠）
-Select-String -Path src\main.rs -Pattern 'detail-back'          # 期望 0（DetailPanel 的「返回」不该出现）
-Select-String -Path src\main.rs -Pattern 'chat_detail_panel'    # 期望 0（函数已删除）
+Select-String -Path src\main.rs -Pattern 'chat-detail-run'          # 期望 1（高亮容器的 id）
+Select-String -Path src\main.rs -Pattern 'chat-detail-close'        # 期望 0（关闭按钮已并入右上角折叠）
+Select-String -Path src\main.rs -Pattern 'detail-back'              # 期望 0（DetailPanel 的「返回」不该出现）
+Select-String -Path src\main.rs -Pattern 'fn chat_detail_panel'     # 期望 0（函数已删除）
 ```
 
-> `chat-detail-close` 的期望值是 **0**，不是 1：`dda719d` 决定删掉那个独立关闭按钮，因为基础卡右上角已有 `chat-info-collapse` 折叠按钮。前一版 PRD 在这里写「期望 1 处」与决定自相矛盾，按判据跑必然不过。
+> 两条容易误判的期望值：
+> - `chat-detail-close` 期望 **0**，不是 1：`dda719d` 决定删掉那个独立关闭按钮，因为基础卡右上角已有 `chat-info-collapse` 折叠按钮。前一版 PRD 写「期望 1 处」与决定自相矛盾，按判据跑必然不过。
+> - `fn chat_detail_panel` 必须带 `fn ` 前缀。只写 `chat_detail_panel` 会命中 `:8845` 那句说明「`chat_detail_panel` 已删除」的注释，判据就红了——**判据要排除「解释自己已删除」的注释**。
 
 截图（**判据四条，缺一条不算过**）：微信壳「⋯ → 运行状态」→ 右栏打开，基础卡带高亮
-1. **页面上只有一处「运行状态」字样**，且**不再有第二张统计卡**（`chat_detail_panel` 不得再返回 card）；
+1. **有一处「运行状态」标题**（在基础卡上方，随高亮一起出现），且**不再有第二张统计卡**（`fn chat_detail_panel` 不得存在）。
+   > 这一条前一版写成「只有一处」，实测是 **0 处**：`727a626` 删第二张卡时，外层 `ui::section("运行状态")` 也一起删了。结果是用户点「运行状态」→ 右栏只多一圈绿边、**没有任何文字说明他在看什么**。「点了有反应」要成立，**反应还得能读出来**。所以这里不是把判据放宽到 0，而是**把标题加回来**——只在高亮时渲染，正常状态不占版面。
 2. **没有「返回」按钮**（`detail-back` 属 `DetailPanel::render`，接错层级时才会出现），也**没有第二个关闭按钮**（折叠按钮 `chat-info-collapse` 已存在）；
 3. **宽度不再被裁 44px**，分两条验（`727a626` 删掉第二张卡后，原「会话」行**已不存在**，旧判据无法验证，改写如下）：
    - **3a** 右栏顶部标题行**完整显示会话名**（例 `前端走查群` 不出现半个字被切），右侧 badge 显示「就绪」；
@@ -236,6 +239,12 @@ Select-String -Path src\main.rs -Pattern 'chat_detail_panel'    # 期望 0（函
    - **4a** 右栏已打开时点「⋯ → 运行状态」→ 基础卡出现 accent 描边；
    - **4b** 折叠右栏再展开 → 描边消失（`set_right_panel(false)` 必须清 `chat_detail`）；
    - **4c** 切到另一个 **Bot**（或群）再切回 → 描边不回来。**判据按「换 Bot」验，不按「换会话」验**——`RunStatus` 的 key 是 bot 级 `bot:<id>`，换 session 时 key 不变，测出来的「不亮」是假象。
+
+**四张截图必须互不相同（对「截图证据」的硬要求）**：`4a` 一张、`4b` 一张、`4c` 的两步各一张，共 4 张。**每张的 SHA256 必须互不相同**，并且 `4c` 切回那张的时间戳必须晚于切走那张。
+
+> 出处：`259-o2-4c-switched-back.png` 与 `257-o2-4b-after-collapse-reopen.png` 曾经是**字节级完全相同**（同一 SHA256、同一时间戳 10:28:31），还比「切走」那张 `258` 早 3 分钟。也就是说 4c 的第三步根本没有截图，只有一张复用图。**验收动作里必须写「比对 SHA256」，不能只看文件名齐不齐**——文件名齐是最容易伪造的证据形态。
+
+**3a 的截图必须让左栏选中项可见**：判据是「右栏顶部标题行完整显示会话名」，所以要拍**群聊被选中、右栏同时打开**的状态。只有右栏、左栏看不到选中项时，无法证明标题显示的是哪一个会话的名字。
 
 **4b / 4c 的实现要求（`e659eb7` 已补齐，实测见下）**：`chat_detail` 是 `Option<SettingsDetail>`，`RunStatus` 的 key 是 **bot 级** `bot:<id>`（`bot_key()`，`:16337`），**不含 session_id**。所以「切会话」时 key 不变，`matches!` 一直命中——这一条不看代码会想当然以为「切走就自然不亮」。
 
