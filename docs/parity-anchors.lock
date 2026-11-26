@@ -280,6 +280,7 @@ src/main.rs:20150|ProviderUrl {
 src/main.rs:20201|/// 某个模型的上下文窗口 / 输出上限（W4）。
 src/main.rs:20222|/// 新建/编辑 Bot（图标网格 + 6 字段 + 3 开关）。
 src/main.rs:2048|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
+src/main.rs:205|fn panel_target_width(
 src/main.rs:2092|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:21094|let wechat = wechat_theme::active();
 src/main.rs:21475|fn compaction_status_row() -> impl IntoElement {
@@ -287,6 +288,7 @@ src/main.rs:21477|.id("chat-compaction-status")
 src/main.rs:21480|.items_center()
 src/main.rs:21595|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
 src/main.rs:21597|.selectable(true)
+src/main.rs:221|}
 src/main.rs:2257|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:22891|fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
 src/main.rs:2337|"task-reassign-{}"
