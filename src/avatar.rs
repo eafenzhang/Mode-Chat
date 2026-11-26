@@ -84,9 +84,9 @@ fn icon_layers(
         ))
 }
 
-/// App 图标（矢量版）：近黑圆角底 + K1 绿色机器人，任意尺寸都清晰。
+/// App 图标（矢量版）：微信绿圆角底 + 白色气泡，任意尺寸都清晰。
 pub fn app_icon(size: f32, radius: f32) -> AnyElement {
-    // 矢量分层：渐变底 + 白气泡/尾巴 + 绿面罩 + 白眼睛。
+    // 矢量分层：绿底 + 白气泡/尾巴 + 绿内窗 + 白眼睛（与 app.png / app.ico 同源）。
     // 不缩放位图，36/26/18px 下也保持锐利。
     let side = px(size);
     let layer = |bytes: &'static [u8], color: Rgba| {
@@ -104,20 +104,19 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
         .flex_shrink_0()
         .rounded(px(radius))
         .overflow_hidden()
-        // 白底黑标：与 app.png / app.ico 完全一致。
-        // 深色任务栏上白方块本身就是强对比，符号识别度比深底白符号更高。
-        .bg(gpui::rgb(0xffffff))
+        // 微信绿底白标：与 app.png / app.ico 完全一致（#07C160）。
+        .bg(gpui::rgb(0x07c160))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-bubble.svg"),
-            gpui::rgb(0x1a1a1c),
-        ))
-        .child(layer(
-            include_bytes!("../assets/icons/app-layer-visor.svg"),
             gpui::rgb(0xffffff),
         ))
         .child(layer(
+            include_bytes!("../assets/icons/app-layer-visor.svg"),
+            gpui::rgb(0x07c160),
+        ))
+        .child(layer(
             include_bytes!("../assets/icons/app-layer-eyes.svg"),
-            gpui::rgb(0x1a1a1c),
+            gpui::rgb(0xffffff),
         ))
         .into_any_element()
 }

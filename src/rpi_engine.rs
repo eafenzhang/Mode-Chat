@@ -810,6 +810,56 @@ fn tool_detail(content: &[rpi_agent::TextContentOrImage]) -> String {
     }
 }
 
+/// 把 provider 的原始错误正文压缩成一句可读文案。
+///
+/// 典型形态：`http error 402: {"type":"error","error":{"type":"billing_error",
+/// "message":"Insufficient Balance","request_id":"..."}}`。原样铺在气泡里
+/// 是一整段 JSON，用户读不出「哪里错了、该怎么办」。这里只做两件事：
+/// 取出 `error.message`、给常见类别补一句处置建议；拿不到就原样返回。
+fn friendly_error_detail(detail: &str) -> String {
+    let (status, body) = match detail.split_once(": ") {
+        Some((prefix, body)) if prefix.starts_with("http error ") => {
+            (Some(prefix.trim_start_matches("http error ").trim()), body)
+        }
+        _ => (None, detail),
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return detail.to_string();
+    };
+    let Some(message) = value
+        .pointer("/error/message")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    else {
+        return detail.to_string();
+    };
+    let kind = value
+        .pointer("/error/type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let request = value
+        .pointer("/error/request_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| value.pointer("/request_id").and_then(|v| v.as_str()));
+    let mut out = String::new();
+    if let Some(status) = status {
+        out.push_str(&format!("HTTP {status} · "));
+    }
+    out.push_str(message);
+    if kind == "billing_error" {
+        out.push_str(if crate::i18n::is_en() {
+            " (insufficient balance: top up or switch provider)"
+        } else {
+            "（账户余额不足：请充值或换一个 provider）"
+        });
+    }
+    if let Some(request) = request {
+        out.push_str(&format!(" · request_id {request}"));
+    }
+    out
+}
+
 /// 判断这一轮是否以失败收场；失败时返回给用户看的错误文案。
 ///
 /// pi-agent 在 provider 报错时**不会**抛错，而是把 `stop_reason` 置成 `Error`、
@@ -829,7 +879,10 @@ fn agent_end_failure(messages: &[rpi_agent::AgentMessage]) -> Option<String> {
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
                     .unwrap_or("模型请求失败，未返回具体原因");
-                return Some(format!("{}（可用「重试」再发一次）", detail));
+                return Some(format!(
+                    "{}（可用「重试」再发一次）",
+                    friendly_error_detail(detail)
+                ));
             }
             // Aborted = 用户主动停止；Pending/Deferred 是中间态，都不该报错。
             rpi_ai::StopReason::Aborted

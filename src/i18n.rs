@@ -131,7 +131,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "后台通知" => Some("Background notifications"),
         "否" => Some("No"),
         "启动与后台" => Some("Launch and background"),
-        "启动后 5 秒检查，之后每 4 小时一次" => Some("Checks 5 seconds after launch, then every 4 hours"),
+        "启动后检查，之后每 4 小时一次" => Some("Checks after launch, then every 4 hours"),
         "启用" => Some("Enable"),
         "启用机器人" => Some("Enable bot"),
         "回合" => Some("Turns"),
@@ -263,7 +263,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "待扫码" => Some("Waiting for scan"),
         "待机" => Some("Idle"),
         "微信" => Some("WeChat"),
-        "微信/企微扫码后，请在对应聊天里给 Bot 发一条消息激活。" => Some("After scanning, send one message to the bot in that chat to activate it."),
+        "扫码后给 Bot 发一条消息激活。" => Some("Send the bot one message after scanning to activate it."),
         "心跳间隔需要是非负整数（0 = 关闭）" => Some("The heartbeat interval must be a non-negative integer (0 = off)."),
         "必填，输入回答…" => Some("Required; type an answer…"),
         "思考中…" => Some("Thinking…"),
@@ -466,9 +466,11 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "允许 Bot 操控这台电脑" => Some("Allow bots to control this computer"),
         "允许这个 Bot 操控这台电脑" => Some("Allow this bot to control this computer"),
         "关闭后已打开的会话立即停用；重新开启对新会话生效" => Some("Turning off applies immediately; turning on applies to new sessions"),
-        "外部 ACP 引擎使用其自带工具，不受这里限制。" => Some("External ACP engines use their own tools and are not affected."),
-        "包括截屏、鼠标键盘、窗口、剪贴板与 UI 自动化；外部 ACP 引擎不受这里限制。" => Some("Includes screenshots, mouse, keyboard, windows, clipboard, and UI Automation; external ACP engines are not affected."),
+        "截屏、鼠标键盘、窗口、剪贴板与 UI 自动化。" => Some("Screenshots, mouse, keyboard, windows, clipboard, and UI Automation."),
         "还没有 Bot" => Some("No bots yet"),
+        "还没有 Bot；点左上角 + 新建" => Some("No bots yet; click + at the top left to create one"),
+        "还没有 IM 频道；在 设置 → IM 频道 新建机器人" => Some("No IM channels yet; create a bot in Settings → IM channels"),
+        "还没有会话；点左上角 + 新建" => Some("No chats yet; click + at the top left to create one"),
         "消息" => Some("Chats"),
         "深色" => Some("Dark"),
         "添加" => Some("Add"),
@@ -477,7 +479,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "强调色" => Some("Accent color"),
         "全部" => Some("All"),
         "主题" => Some("Theme"),
-        "暂未接入插件宿主；MCP 连接器见「连接器」。" => Some("No plugin host yet; use Connectors for MCP."),
+        "MCP 连接器见「连接器」。" => Some("MCP connectors live under Connectors."),
         "已设置 key" => Some("Key set"),
         "未设置 key" => Some("No key"),
         "命令面板" => Some("Command palette"),
@@ -520,7 +522,6 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "未连接" => Some("Not connected"),
         "获取密钥" => Some("Get key"),
         "清除" => Some("Clear"),
-        "点一个机器人查看详情：扫码、启停、访问模式与绑定码。" => Some("Select a bot to view its QR login, enable state, access mode, and bind code."),
         "点击任意处或按 Esc 关闭" => Some("Click anywhere or press Esc to close"),
         "点击切换" => Some("Click to switch"),
         "版本" => Some("Version"),
@@ -575,7 +576,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "群" => Some("Group"),
         "群任务" => Some("Group tasks"),
         "群任务树" => Some("Group task tree"),
-        "群回合结束 5s 后由管理员模型整理群聊记忆。" => Some("5 seconds after a group turn, the admin model consolidates group chat memory."),
+        "回合结束后自动整理。" => Some("Consolidated automatically after each turn."),
         "群目标" => Some("Group goal"),
         "群聊" => Some("Group chat"),
         "群聊方式" => Some("Group reply mode"),
@@ -596,7 +597,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "诊断信息已复制" => Some("Diagnostics copied"),
         "试点状态文件" => Some("Pilot state file"),
         "该任务已有排队/运行中的立即运行" => Some("This task already has a queued or running immediate run"),
-        "该通道的运行时尚未移植到 GPUI；如需继续使用，请暂用已安装的 0.0.42 主程序。" => Some("This group chat runtime is not ported to GPUI yet; keep using the installed 0.0.42 app for now."),
+        "该通道暂未支持；请暂用 0.0.42 主程序。" => Some("This channel is not supported yet; keep using 0.0.42 for now."),
         "详情" => Some("Details"),
         "语音转写" => Some("Voice transcription"),
         "说明" => Some("Description"),
@@ -621,7 +622,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "运行时未移植" => Some("Runtime not ported"),
         "运行状态" => Some("Runtime status"),
         "还没有任务记录" => Some("No task records yet"),
-        "还没有分组；新建后可在会话 ⋯ 菜单里把 Bot/群聊移入" => Some("No sections yet; create one, then move bots/group chats in from the chat ⋯ menu."),
+        "还没有分组" => Some("No sections yet"),
         "还没有可加入的 Bot" => Some("No bots available to join"),
         "还没有条目" => Some("No entries yet"),
         "还没有运行记录" => Some("No runs yet"),
@@ -656,6 +657,7 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "阶段标题不能为空" => Some("Stage title cannot be empty"),
         "阶段（至少一个）" => Some("Stages (at least one)"),
         "隐藏" => Some("Hide"),
+        "隐藏到托盘；退出请用托盘图标的右键菜单" => Some("Hides to the tray; quit from the tray icon's right-click menu"),
         "静默运行" => Some("Quiet runs"),
         "群聊 quiet 与跨会话整轮合并通知。" => Some("Group chat quiet mode and whole-turn merged notifications across sessions."),
         "先从左侧选择一个 Bot 或群聊" => Some("Pick a bot or group chat on the left first."),
@@ -675,7 +677,6 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "+ 模型" => Some("+ Model"),
         "1 到 10080 分钟" => Some("1 to 10080 minutes"),
         "API Key" => Some("API key"),
-        "Agent 插件工具可驱动浏览器；workspace 开关见下" => Some("Agent plugin tools can drive the browser; the workspace switch is below"),
         "Bot 私有记忆" => Some("Bot private memory"),
         "Bot 记忆" => Some("Bot memory"),
         "Bot团队" => Some("Bot team"),
@@ -854,14 +855,11 @@ fn lookup(zh: &str) -> Option<&'static str> {
         "只校验格式；模型是否真实存在请用「测试」按钮验证。" => {
             Some("Format is validated only; use Test to verify the model actually exists.")
         }
-        "每个 Bot 使用独立浏览器配置，登录状态互不影响；配置文件保留在 runtime/browser-profiles/<bot>。" => {
-            Some("Each bot uses its own browser profile, so sign-ins do not affect each other; profiles stay in runtime/browser-profiles/<bot>.")
+        "每个 Bot 独立配置，登录状态互不影响。" => {
+            Some("Each bot has its own profile; sign-ins do not affect each other.")
         }
-        "删除隐私 Bot 后目录继续受保护；解除后其他 Bot 可读。" => {
-            Some("Deleting a private bot keeps its directory protected; other bots can read it only after you unprotect it.")
-        }
-        "创建后请在对应聊天里给 Bot 发一条消息激活。" => {
-            Some("After creating it, send the bot a message in its chat to activate it.")
+        "解除后其他 Bot 可读。" => {
+            Some("Other bots can read it after you unprotect it.")
         }
         "从左侧列表选择 Bot 或群聊，或点右上角 + 新建。" => {
             Some("Pick a bot or group chat from the list on the left, or click + at the top right to create one.")

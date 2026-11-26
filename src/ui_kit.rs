@@ -14,7 +14,7 @@ use gpui::{
     div, px, AnyElement, Div, Hsla, IntoElement, ParentElement, Rgba, SharedString, Stateful,
 };
 
-use gpui::{App, Context, Entity, Window};
+use gpui::{Context, Entity, Window};
 
 use crate::i18n;
 use crate::simple_input::SimpleInput;
@@ -730,7 +730,16 @@ pub struct DetailPanel {
     body: Vec<AnyElement>,
     actions: Vec<AnyElement>,
     error: Option<SharedString>,
+    /// `Some` = 居中弹窗模式（不画左侧分隔线，宽度按传入值）；
+    /// `None` = 侧栏模式（`PANEL_W` 宽、左侧 1px 分隔、全高）。
+    width: Option<f32>,
+    /// 右上角 ✕ 的点击回调；不传时 ✕ 只是装饰（历史行为，正在淘汰）。
+    on_close: Option<DetailCloseHandler>,
 }
+
+/// 详情面板右上角 ✕ 的回调签名。
+type DetailCloseHandler =
+    Box<dyn Fn(&mut crate::PilotApp, &mut Window, &mut Context<crate::PilotApp>)>;
 
 
 /// 详情面板右上角的关闭按钮（点击交给面板自己处理）。
@@ -743,6 +752,8 @@ fn ui_close_button() -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
+        // cursor_pointer() 与 button_ghost 一致：它同时建立命中区，
+        // 只挂 pointer() 时实测点不到。
         .cursor_pointer()
         .hover(|style| style.bg(theme::hover()))
         .child(crate::icons::icon(
@@ -760,7 +771,24 @@ impl DetailPanel {
             body: Vec::new(),
             actions: Vec::new(),
             error: None,
+            width: None,
+            on_close: None,
         }
+    }
+
+    /// 居中弹窗模式：宽度按传入值，去掉侧栏的左侧分隔线。
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// 右上角 ✕ 的点击行为（居中弹窗必须传，否则 ✕ 点了没反应）。
+    pub fn on_close(
+        mut self,
+        handler: impl Fn(&mut crate::PilotApp, &mut Window, &mut Context<crate::PilotApp>) + 'static,
+    ) -> Self {
+        self.on_close = Some(Box::new(handler));
+        self
     }
 
     /// 校验失败的红字提示（贴在底部动作之上）。
@@ -787,14 +815,20 @@ impl DetailPanel {
     /// 渲染成右侧栏（宽度 `PANEL_W`，左侧 1px 分隔）。
     pub fn render(
         self,
-        on_back: impl Fn(&mut Window, &mut App) + 'static,
+        on_back: impl Fn(&mut crate::PilotApp, &mut Window, &mut Context<crate::PilotApp>) + 'static,
         cx: &mut Context<crate::PilotApp>,
     ) -> AnyElement {
         // render(self) 拿走所有权后，先把字段取成局部变量：
         // 否则 `title` 会解析到模块级 fn title()。
         let caption = self.title.clone();
         let subtitle = self.subtitle.clone();
-        let close_button = ui_close_button();
+        let modal_width = self.width;
+        let on_close = self.on_close;
+        let close_button = match on_close {
+            Some(handler) => ui_close_button()
+                .on_click(cx.listener(move |this, _event, window, cx| handler(this, window, cx))),
+            None => ui_close_button(),
+        };
         let head = div()
             .flex_shrink_0()
             .px(px(S3))
@@ -806,8 +840,8 @@ impl DetailPanel {
             .border_color(edge())
             .child(
                 button_ghost("detail-back", i18n::t("返回"))
-                    .on_click(cx.listener(move |_this, _event, window, cx| {
-                        on_back(window, cx);
+                    .on_click(cx.listener(move |this, _event, window, cx| {
+                        on_back(this, window, cx);
                     })),
             )
             .child(
@@ -849,19 +883,20 @@ impl DetailPanel {
             body = body.child(element);
         }
 
-        // 真正的第三列（不是浮层）：设置卡在面板打开时会同步加宽，
-        // 主内容因此能重排，右侧按钮不会被盖住。
-        let mut panel = div()
-            .id("detail-panel")
-            .w(px(PANEL_W))
-            .flex_shrink_0()
-            .h_full()
-            .border_l_1()
-            .border_color(edge())
-            .bg(card_bg())
-            .flex()
-            .flex_col()
-            .child(head);
+        // 两种形态：
+        // - 侧栏（`width = None`）：`PANEL_W` 固定宽、全高、左侧 1px 分隔；
+        // - 居中弹窗（`width = Some(w)`）：按调用方给的宽，外框由调用方的遮罩/卡片负责。
+        let mut panel = div().id("detail-panel").w(px(modal_width.unwrap_or(PANEL_W)));
+        if modal_width.is_some() {
+            panel = panel.flex_1().min_h(px(0.));
+        } else {
+            panel = panel
+                .flex_shrink_0()
+                .h_full()
+                .border_l_1()
+                .border_color(edge());
+        }
+        let mut panel = panel.bg(card_bg()).flex().flex_col().child(head);
         panel = panel.child(body);
         if let Some(error) = self.error.clone() {
             panel = panel.child(
