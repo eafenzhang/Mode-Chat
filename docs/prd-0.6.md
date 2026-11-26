@@ -208,9 +208,21 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 ```powershell
 Select-String -Path src\main.rs -Pattern 'chat-detail-run'
 # 期望：命中 1 处（chat_info_panel 里的渲染点 id）
+Select-String -Path src\main.rs -Pattern 'chat-detail-close'
+# 期望：命中 1 处（关闭按钮 id，清除 chat_detail）
 ```
 
-截图：微信壳「⋯ → 运行状态」→ 右栏出现运行状态卡片（不是点了没反应）。
+截图（**判据四条，缺一条不算过**）：微信壳「⋯ → 运行状态」→ 右栏出现运行状态卡片
+1. **页面上只有一处「运行状态」字样**（内层 `DetailPanel` 的 caption 不能再出现）；
+2. **没有「返回」按钮**（那是 `DetailPanel::render` 内的 `detail-back`，接错层级时才会出现）；
+3. **「会话」行的值完整显示**（例：`前端走查群` 不被右缘裁切）、「状态」显示「就绪」；
+4. 关闭按钮可点，点完卡片消失（`chat_detail` 能被清空，不是只写不读）。
+
+**这一节踩过的坑，写下来防止重犯**：`f904043` 只补了 id `chat-detail-run` 让 grep 判据通过，**但没人真点开看过**。第一次截图（`252`）才暴露出三层叠加：外层 `ui::section("运行状态")` + 内层 `ui::DetailPanel` 的 caption（第二个「运行状态」）+ `DetailPanel` 自带的 `PANEL_W=340` 被塞进 `chat_info_panel` 的 `320-24=296` 可用宽，右缘整块裁掉 44px，`detail-back` 还是个空闭包的死按钮。
+
+根因一句话：**`ui::DetailPanel` 是「横向第三列」的骨架（`ui_kit.rs` 注释自己写着「侧栏详情面板」），`settings_detail_panel` 挂到 `body` 上位置是对的；`chat_detail_panel` 的返回值被挂进右栏内部的 body，位置是错的。** 修法是换挂载方式（去掉 `DetailPanel` 外壳、只返回 `ui::card` + `stat_row` 内容），不是调宽度。
+
+因此本项的经验已上升为全局规则：**判据写成 grep 的项，必须同时给一张能证伪的截图**——grep 只证明「有代码」，不证明「用户能走到、且看到的是对的」。
 
 ### 3.6 行数
 
@@ -301,7 +313,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
 | **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript` 的欢迎区（头像 / 欢迎语 / `welcome-suggestion-{i}`，D-CUT 前第 19535–19664 行）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行：九宫格头像 + 「群名 · N 人」+ 成员名单）。**两条路径均已完成**：单聊 `0f9b4b5`（`wechat_welcome`），群聊 `0706ebb`（`wechat_group_welcome`，id `wechat-group-welcome`） | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。群聊：`wechat_welcome` 同时接 Bot / Group，群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members`，文案走 `tri!`（**未用 `empty_state_badged`**：它只接 `Option<AnyElement>` + 两行文案，套进来要覆盖内边距，所以群欢迎区结构直接写在 `wechat_group_welcome` 里） | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | **已完成**（`0f9b4b5` 单聊 / `0706ebb` 群聊，六张截图 `021eb99`） |
-| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（第 17460 行 → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：grep `chat-detail-run` = 1；**行号不写死**（见 §5.3） |
+| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（第 17460 行 → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；**只返回卡片内容**（`ui::card` + `ui::stat_row`），不套 `ui::DetailPanel`（它自带 `PANEL_W=340`，塞进 296 可用宽会裁掉 44px）；另加 `chat-detail-close-{key}` 关闭按钮，否则 `chat_detail` 只写不读 | §3.5 的 grep + **四条截图判据**（见 §3.5） | **grep 通过（`c93ef4a`）+ 三层 UI 嵌套已修（待提交）**；行号不写死（见 §5.3）。**教训：只凭 grep 判过，漏掉了重复标题 / 死「返回」/ 右缘裁切** |
 | **O-3** | 工作中状态行的文案分档 | 现状 `i18n::t("重试中")` / `i18n::t("工作中")` 两档，没有按工具名分短语；DS Bot `ds-bot/src/client/cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `ds-bot/src/client/cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
 | **O-5** | 间距统一归入 4px 档（U-01） | `0.5.1-ui-review.md` U-01；标准见 `docs/ui-design-spec.md` 第 2 节「只用这六档」（4 / 8 / 12 / 16 / 24 / 32），同节末「废弃 5 / 10 / 14 / 18」。实测量级：`.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m*` 共 **560** 处，档外 **276** 处（`px(6)` 95、`px(10)` 64、`px(2)` 50、`px(14)` 33、`px(5)` 9、`px(1)` 6、`px(9)` 6、`px(3)` 3、`px(7)` 3、`px(56)` 1）。**数字只作量级参考，不进 AC**（理由见 §5.2） | 见 §5.2：先给 `scripts/ui-lint.ps1` 加第 5 条规则并以 report-only 跑出基线，再按页清零（会话列表 → 聊天区 → 右栏 → 设置页），每页改完前后各一张截图 | 见 §5.2：唯一判据是第 5 条规则在 `-Enforce` 下 **0 违规**；基线数值以脚本输出为准，不写手数的数字 | P1 |
