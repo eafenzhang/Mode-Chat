@@ -188,13 +188,15 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 - 深色主题 · 群聊：新开一个群，0 条消息 → 九宫格成员头像 + 「群名 · N 人」+ 成员名单 + 「成员：…。发消息开始群聊对话；用 @成员名 点名。」
 - 浅色主题 · 群聊：同上。
 
+**实测映射（`021eb99`，`docs/testing/shots/`）**：`250-o1-chat-dark`、`254-o1-chat-light`、`251-o1-group-dark`、`253-o1-group-light` 是四张必出项；`252-o2-run-status-dark`（O-2 运行状态卡片八行明细）、`255-o1-chip-clicked-light`（点 chip 后输入框填入并聚焦）是附加证据。**截图前必须确认 exe 编译时间晚于最后一个 `src/` 提交**——`0706ebb` 之前编的二进制截群聊只会得到白屏，@前端 实际踩过这一坑（02:57:55 的 exe 对 03:01:04 的提交）。
+
 **群聊空态是 D-CUT 引出的功能回退，不是「本来就没有」**：classic 的 `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行）随 classic 一起被删了，它调用 `empty_state_badged(Some(channel_avatar(...)), "{group.name} · {count_members}", "成员：…。发消息开始群聊对话；用 @成员名 点名。")`。删掉后微信壳群聊 0 条消息只剩裸 `div()`。**已补齐**：`0f9b4b5` 修单聊（`wechat_welcome`），`0706ebb` 补群聊（`wechat_group_welcome`，id `wechat-group-welcome`，九宫格 + 「群名 · N 位成员」+ 成员名单）。验收仍**单聊、群聊分开记**，四张截图缺一不可。
 
 **本条属 D3，不属于 D-CUT 的验收**。classic `transcript` 删除后，「0 条消息且 `ready=true`」这条分支在微信壳里返回裸 `div()`（微信壳自身代码，与 classic 无关），屏幕上就是一片空白。**D-CUT 提交时这块空白是预期状态，按空白判阶段 2 失败是误判；D3 做完仍空白才算失败。** 两个阶段的判据分开：
 
 > 行号口径：`if chat.messages.is_empty()` 在 D-CUT 前是第 27783 行、裸 `return div()` 在 27795；D-CUT 后分别是第 24542 行与第 24554 行（`c93ef4a` 起）。**这几个是历史/现状描述，不写成「文件:行号」的锚点形式**——那样会被 parity 当成当前 HEAD 的锚点去校验，而 27783 在 HEAD 上已不存在。
 >
-> **`0f9b4b5` 之后**，这条分支已改调 `self.wechat_welcome(bot, group, cx)`（`0706ebb` 起群聊也接上了），欢迎区实现在 `wechat_welcome`、`wechat_group_welcome` 两个函数里，chip id 前缀 `wechat-welcome-suggestion-`。所以本节上面那段「D-CUT 后是裸 div」描述的是 `c93ef4a`~`0f9b4b4` 这段时间的状态。
+> **`0f9b4b5` 之后**，这条分支已改调 `self.wechat_welcome(bot.as_ref(), group.as_ref(), cx)`（`0706ebb` 起群聊也接上了），欢迎区实现在 `wechat_welcome`、`wechat_group_welcome` 两个函数里，chip id 前缀 `wechat-welcome-suggestion-`。所以本节上面那段「D-CUT 后是裸 div」描述的是 `c93ef4a`~`0f9b4b4` 这段时间的状态。
 
 | 阶段 | 判据 | 空会话截图 |
 | --- | --- | --- |
@@ -298,7 +300,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
-| **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript` 的欢迎区（头像 / 欢迎语 / `welcome-suggestion-{i}`，D-CUT 前第 19535–19664 行）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行：九宫格头像 + 「群名 · N 人」+ 成员名单）。**两条路径均已完成**：单聊 `0f9b4b5`（`wechat_welcome`），群聊 `0706ebb`（`wechat_group_welcome`，id `wechat-group-welcome`） | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。群聊：`wechat_welcome` 同时接 Bot / Group，群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members` / `empty_state_badged`，文案走 `tri!` | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | P0（D3） |
+| **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript` 的欢迎区（头像 / 欢迎语 / `welcome-suggestion-{i}`，D-CUT 前第 19535–19664 行）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行：九宫格头像 + 「群名 · N 人」+ 成员名单）。**两条路径均已完成**：单聊 `0f9b4b5`（`wechat_welcome`），群聊 `0706ebb`（`wechat_group_welcome`，id `wechat-group-welcome`） | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。群聊：`wechat_welcome` 同时接 Bot / Group，群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members`，文案走 `tri!`（**未用 `empty_state_badged`**：它只接 `Option<AnyElement>` + 两行文案，套进来要覆盖内边距，所以群欢迎区结构直接写在 `wechat_group_welcome` 里） | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | **已完成**（`0f9b4b5` 单聊 / `0706ebb` 群聊，六张截图 `021eb99`） |
 | **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（第 17460 行 → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；样式复用 `ui::card` / `ui::stat_row` | §3.5 的 grep + 截图 | **已完成（`c93ef4a`）**：grep `chat-detail-run` = 1；**行号不写死**（见 §5.3） |
 | **O-3** | 工作中状态行的文案分档 | 现状 `i18n::t("重试中")` / `i18n::t("工作中")` 两档，没有按工具名分短语；DS Bot `ds-bot/src/client/cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `ds-bot/src/client/cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
