@@ -557,3 +557,36 @@ write       src/main.rs:9114         set_title(&session_id, &title)      ← 写
 这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
 
 **另有一处口径**：`chat.session_id` 对 ACP 引擎（`acp.rs` 的 `AcpEvent::Ready`）是协议给的 opaque id，对 pi-rust 引擎（`src/backend.rs:1213` 的 `session_id: path`）是文件全路径。两套来源都能进 `history`，所以 `titles` 的 key 实际上混着两种形态——但它们各自自洽，因为每条记录的写入和读取都走同一条来源。**跨引擎切换同一个 Bot 时才需要额外小心**，这一点记在风险清单第 5 条里。
+
+### 18.8 `4b` 的视觉证据可以用一条穷举证明替代：`chat_detail` 全仓只有 8 处
+
+`4b` 那组截图卡了四轮：`264-4b-3` 没拍到展开、`266-4b-1` 两次存成了「未亮」。反复失败之后我先停手，去做了一件事——**把 `chat_detail` 在全仓的所有出现位置穷举出来**。结果是 8 处，一个不多：
+
+```
+src/main.rs:3279   chat_detail: Option<SettingsDetail>      字段声明
+src/main.rs:3775   chat_detail: None                        初始化
+src/main.rs:3884   self.chat_detail = None;                 select_bot 清
+src/main.rs:4145   self.chat_detail = None;                 select_group 清
+src/main.rs:11255  self.chat_detail = None;                 set_right_panel(false) 清
+src/main.rs:16815  self.chat_detail = Some(..RunStatus..)   ← 唯一写入 Some 的地方
+src/main.rs:23698  self.chat_detail.as_ref()                唯一读取（决定是否画绿边）
+src/main.rs:24127  this.chat_detail = None;                 点「改名」跳设置页前清
+```
+
+**这条穷举能证明的事，比一张截图强：**
+
+1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:23697`-`:23700` 的 `matches!` 带 `if` 守卫）。
+2. **整个程序里只有 `src/main.rs:16815` 能把它设成 `Some`**，而那里只在点「⋯ → 运行状态」时执行。
+3. **三个清空点之外没有第四个写入者**，也没有从 `pilot-state.json` / `ui-prefs` 反序列化回来的路径——`chat_detail` 只挂在 `PilotApp` 上（`:3279`），`save_ui_prefs` 存的是 `muted / topmost / pinned_settings / right_panel_open` 四项，不含它（`src/main.rs:712`-`:718`）。
+
+所以「关右栏再展开，绿边不回来」这件事**不需要靠截图证明**：从 `11255` 清掉之后，能再把它设回去的代码只有 `16815`，而重新展开走的 `11251`-`:11256` 那条路径里没有它。
+
+**那截图还证明什么？** 证明「清空之后渲染出来的样子确实没有绿边」——这属于**渲染层**的事实，穷举证明不了。而这一层已经被 `265-4c-3` 覆盖了：同一处 `chat_detail = None`（`src/main.rs:3884` 的 `select_bot` 分支），清完之后 `exactGreen = 0`、右栏底色存在。**`11255` 和 `3884` 是同一行语句、同一个效果，只是入口不同。**
+
+**结论与适用边界：**
+
+- 可以说：`set_right_panel(false)` 的清空逻辑**在代码层确定成立**，且「清空后的渲染效果」已由 4c 的同型帧覆盖；
+- 不能说：`4b` 那张「折叠 → 展开」的因果帧存在。**它确实不存在，记缺失，不要用别的帧顶替。**
+- 这条穷举也顺手排除了一个隐患：`chat_detail` 不进磁盘，所以**重启后不会带着一个来源不明的描边**——这正是 `11253` 那条注释想保证的事，现在有证据了。
+
+**教训**：「视觉证据缺失」不等于「事实不明」。当一条 UI 事实可以靠「所有写入点穷举 + 只有一处能写入」证明时，穷举比截图更强，因为它覆盖所有路径而不只是拍到的那个。**但穷举不能替代「渲染出来长什么样」——那是另一回事，必须分开说。**
