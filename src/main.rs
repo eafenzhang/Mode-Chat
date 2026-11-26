@@ -8842,7 +8842,7 @@ impl PilotApp {
         use crate::ui_kit as ui;
 
         let detail = self.settings_detail.clone()?;
-        // `chat_detail_panel` 已删除：运行状态改成高亮右栏基础卡，不走设置详情面板。
+        // RunStatus 已不在这里处理：原 ChatDetail 面板函数（见 git 历史）随 O-2 高亮方案删除。
         if matches!(detail, SettingsDetail::RunStatus { .. }) {
             return None;
         }
@@ -23700,16 +23700,25 @@ impl PilotApp {
         );
         let mut card = card.into_any_element();
         if highlighting {
-            card = div()
-                .id("chat-detail-run")
+            let bordered = div()
                 .w_full()
-                // 圆角/配色都走微信壳令牌：这一段其余 13 处配色都是 wechat_theme::，
+                // 圆角/配色都走微信壳令牌：这一段其余配色都是 wechat_theme::，
                 // 用 theme:: 会在用户自定义主题色时和周围不同步。R_CARD = 12 见规范 §4。
                 .rounded(px(ui::R_CARD))
                 .border_2()
                 .border_color(wechat_theme::accent())
                 .overflow_hidden()
                 .child(card)
+                .into_any_element();
+            // 高亮必须能被读出来：只有一圈绿边，用户不知道自己在看什么。
+            card = div()
+                .id("chat-detail-run")
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(ui::S2))
+                .child(ui::section(i18n::t("运行状态")))
+                .child(bordered)
                 .into_any_element();
         }
 
