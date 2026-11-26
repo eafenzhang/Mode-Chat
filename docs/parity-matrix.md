@@ -32,7 +32,7 @@
 | A09 | 侧栏分组（section）归组/折叠/染色 | `ds-bot/src/client/folder-menu.js`、`host/folders.js` | ✅ | `src/main.rs:13072`（`fn sidebar_sections_section`，分组 CRUD）、`:13114`（`section-up-*`）、`:13166`（`section-delete-*`）、`src/main.rs:701`（`sidebar_section_dot` 染色辅助） | 无 |
 | A10 | 置顶 / 隐藏 / 恢复显示 | `ds-bot/src/client/sidebar.js`（pushpin） | ✅ | `src/data.rs:40`（`pinned`）、`:79`（`hidden_bots`）、`src/data.rs:815`（`set_bot_flags`）、`src/main.rs:16362`（「隐藏」菜单项）、`:13338`（「已隐藏」区） | 无 |
 | A11 | Bot 实时状态（正在做什么） | `ds-bot/src/client/member-status.js`、`host/feed.js` | 🟡 | `src/backend.rs:191`（`SessionEvent::Delta` 带 `member`，成员状态事件）、`src/main.rs:2798`（`push_member_delta`） | 只有“正在输出”，没有“正在做什么/在哪一步” 〔降级 v0.6〕 |
-| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | 🟡 | `src/data.rs:37`（`is_main` / `is_chief` 字段在）；微信壳 `fn wechat_nav`（`src/main.rs`，唯一侧栏） | v0.6 删 classic 后，`main_bot_card` 随 `sidebar` 一并删除；微信壳侧栏内 `is_chief`/`is_main`/`chief` **0 命中**，侧栏行 `fn wechat_list_row`（`src/main.rs:18909`）只画头像/名字/时间/未读点，**无「谁是主 Bot」的视觉位**。〔降级 v0.7：补主卡位〕 |
+| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | 🟡 | `src/data.rs:37`（`is_main` / `is_chief` 字段在）；微信壳 `fn wechat_nav`（`src/main.rs`，唯一侧栏） | v0.6 删 classic 后，`main_bot_card` 随 `sidebar` 一并删除；微信壳侧栏内 `is_chief`/`is_main`/`chief` **0 命中**，侧栏行 `fn wechat_list_row`（`src/main.rs`）只画头像/名字/时间/未读点，**无「谁是主 Bot」的视觉位**。〔降级 v0.7：补主卡位〕 |
 | A13 | Bot 详情页用量/待办 | `ds-bot/src/client/usage-page.js` | ✅ | `src/main.rs:23891`（`ui::section(i18n::t("待办"))`，微信壳详情栏；classic 的 `bot_details` 已随 v0.6 D-CUT 删除）、`:14229`（`im-group-activation-{label}`，用量） | 无 |
 
 ## B. Main bot 与权限（5 项）
