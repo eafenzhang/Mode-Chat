@@ -62,9 +62,14 @@ function Probe-One([string]$file) {
     # --- 2) 右栏内的精确描边色计数 ----------------------------------------
     # 只数 0x07C160 精确值：就绪 badge 用 rgb(217,255,217) 浅 tint，
     # 用「绿像素 < N」这种阈值写法会把它算进去，换个阈值就换个结论。
+    #
+    # 纵向必须同样限定在 $y0..$y1：只限 x 不够。
+    # 实测踩过：composer 右下角的「发送」按钮在输入框有字时会变成 0x07C160，
+    # 而它正落在右栏的 x 区间里（x >= 0.72W），于是「输入框有字」会被读成
+    # 「右栏高亮存在」。这两个状态在像素上一样，只能靠 y 范围分开。
     $exactGreen = 0
     if ($panelPresent) {
-      for ($y = 0; $y -lt $h; $y++) {
+      for ($y = $y0; $y -le $y1; $y++) {
         for ($x = $panelLeft; $x -lt $w; $x++) {
           $c = $bmp.GetPixel($x, $y)
           if ($c.R -eq 7 -and $c.G -eq 193 -and $c.B -eq 96) { $exactGreen++ }
