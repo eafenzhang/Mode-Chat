@@ -685,3 +685,30 @@ src/data.rs:72                    src/main.rs:221           src/rpi_engine.rs:37
 判据：**带非 ASCII 的 `.ps1` 必须存 UTF-8 BOM，并且要有一条「无管道直调」的实跑记录**——`EXIT=0` 且输出里出现数字。`git show` 里能看到这个文件，什么都证明不了。
 
 顺带一条读退出码的规矩：脚本输出接进管道后，`$LASTEXITCODE` 取到的可能是管道末端命令的。同一份脚本，直调拿到 0、接管道拿到 1，两个数都「真」，但只有一个说明脚本自己。**判退出码要在无管道直调之后立刻取。**
+
+### 18.12 同一份脚本，三种读法给出三个退出码——只有一种说明脚本自己
+
+18.11 说带非 ASCII 的 `.ps1` 必须存 UTF-8 BOM。这里补一个更麻烦的事实：**即使脚本是对的，退出码也会因为「怎么读」而变成不同的数。**
+
+同一个 `scripts/shot-probe.ps1`（工作区版，UTF-8 有 BOM，语法自检 0 错误），同一条命令，三种读法：
+
+```
+直接跑、把输出接管道后取 $LASTEXITCODE
+    powershell ... -File scripts\shot-probe.ps1 <图> 2>$null | Select-Object -First 2
+    → 输出正确（panel=present left=953 exactGreen=2248），但 EXIT=-1
+
+先跑一个子 pwsh，再由它 exit $LASTEXITCODE
+    powershell -Command "& <脚本> <图>; exit $LASTEXITCODE"
+    → EXIT=1
+
+Start-Process -Wait -PassThru，stdout/stderr 各自重定向到文件
+    → EXIT=0，stderr 为空
+```
+
+**三个数里只有 `0` 是脚本自己的。** `-1` 和 `1` 都不是：前者是 piped `$LASTEXITCODE` 的取值行为，后者是外层 `-Command` 的包装把自己失败也算了进去。
+
+**这就是「判据里的常量不能随环境变」在退出码上的同一个病**：`EXIT=0` 这个结论本身没错，但「怎么取到它」有讲究，而这一点在最常用的写法（接管道、看最后一行）里恰好不成立。
+
+可执行的规矩只有一条：**要判退出码，就用 `Start-Process -PassThru -Wait`，输出重定向到文件再读；不要接管道、不要套 `-Command`。** 顺带一条：`EXIT=-196608` 这类大负数表示「PowerShell 自己起不来」（本机实测是 `-File` 指向的路径不存在），不是脚本返回的退出码，看见就先去查路径。
+
+**和 18.6 的关系**：`EXIT=0` 是一个单点读数。它只在「脚本被正确启动、输出没被管道截断」这个前提下有意义。换个读法，同一个脚本会报失败——**不是因为脚本坏了，是因为读的人换了秤。**
