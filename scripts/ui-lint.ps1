@@ -135,8 +135,13 @@ Write-Output ("[{0}] {1,-28} {2,5}   (规则 5 · 间距档, {3})" -f `
     $(if ($EnforceSpacing) { '-EnforceSpacing 生效' } else { 'report-only' }))
 if ($spacingTotal -gt 0 -and $Top -gt 0) {
   Write-Output '         档外值分布：'
-  $spacing | Group-Object Value | Sort-Object Count -Descending | Select-Object -First $Top |
-    ForEach-Object { Write-Output ("         {0,-8} {1,4}" -f ("px(" + $_.Name + ")"), $_.Count) }
+  $groups = $spacing | Group-Object Value | Sort-Object Count -Descending
+  # 分档全量输出，不用 -Top 截断：显示的合计必须等于上面的总数，
+  # 否则「总数 232 / 分档合计 229」并排出现，差额没人认领。
+  foreach ($g in $groups) {
+    Write-Output ("         {0,-8} {1,4}" -f ("px(" + $g.Name + ")"), $g.Count)
+  }
+  Write-Output ("         {0,-8} {1,4}   (合计)" -f '合计', $spacingTotal)
   $byFile = $spacing | Group-Object File | Sort-Object Count -Descending | Select-Object -First $Top
   Write-Output '         按文件：'
   foreach ($g in $byFile) { Write-Output ("         {0,-24} {1,4}" -f $g.Name, $g.Count) }
