@@ -403,42 +403,47 @@ scripts\verify-arch-anchors.ps1            anchors=143 ok=92 bad=0
 
 **测试数只允许上升或不变**：`composer_radius` 的单测随函数一起删（D-CUT 前它在第 29536–29546 行），所以基线从 `576` 变成 `575 passed`；此时必须由新增的欢迎区/运行状态测试补回来，`passed` 不低于 575。低于 575 且 `skipped` 没增多，说明有人顺手删了别的测试。
 
-**「本机跑不了」允许探测式跳过，但有一条硬约束**：`computer_tools` 的 `capture_screen_encodes_png` / `windows_and_cursor_are_readable` 依赖交互桌面（锁屏或远程会话断开时 `BitBlt` 必然返回 0、`GetLastWin32Error = 203`）。本版拍板：**允许改成运行时探测，探测不到就打印明确原因后 skip，不计入 `failed`**；**禁止用 `#[ignore]` 无条件豁免**。区别在于：`#[ignore]` 在能被截屏的机器上也永久不跑，等于把真实缺陷藏起来；探测式跳过只在「本机确实拿不到桌面」时让开，换一台能截屏的机器这两条仍然真跑。
+**「本机跑不了」不搞跳过，锁屏就让它红（本版最终拍板，替代此前「探测式 skip」那一版）**：`computer_tools` 的 `capture_screen_encodes_png` / `windows_and_cursor_are_readable` 依赖交互桌面（锁屏或远程会话断开时 `BitBlt` 必然返回 0、`GetLastWin32Error = 203`）。
 
-对数字的影响——**这里有个陷阱，是本轮实测出来的**：探测式 skip 是「提前 `return`」，不是 `#[ignore]`，所以 libtest 把它记成 **`ok`**，`passed` **不会掉**。实测（`M src/computer_tools.rs`，桌面不可捕获）：
+曾经有两个方案，**本版选第三个**：
+
+| 方案 | 结果 | 判定 |
+| --- | --- | --- |
+| `#[ignore]` | 任何机器上都永久不跑 | **否**——无条件豁免，把真实缺陷藏起来 |
+| 探测不到就 `return`（skip） | libtest 记成 `ok`、计入 `passed`，一条断言没跑却全绿 | **否**——这就是本轮反复抓的「看起来绿了、实际少扫」，与 `reanchor-from-lock.ps1` 少扫 48 条同构 |
+| **探测不到就 `panic!`** | 锁屏时这两条**变红**，`failed=2` | **采纳**（架构最终实现，`src/computer_tools.rs` 的 `require_desktop_capture`） |
+
+**理由**：锁屏时红是**正确信息**，它说明「这一轮没有验证桌面捕获」，而不是让 `passed` 偷偷凑满。桌面恢复后自动恢复执行，不需要改任何配置。产品接受这会让「锁屏状态下门禁不可能全绿」——**这不是降低标准，是把环境不具备如实暴露出来**；发布前要求的是「在解锁的交互桌面上跑一次，并贴出 `575 passed / 0 failed`」，而不是「让它在锁屏时也绿」。
+
+实测（当前工作区，桌面不可捕获）：
 
 ```
+cargo test --workspace --locked computer_tools
+passed=1  failed=2   EXIT=101
+panicked at src\computer_tools.rs:1074  桌面不可捕获：BitBlt 返回 0（锁屏 / 远程会话断开 / 无交互桌面）
+```
+
+**对数字的影响，以及为什么「skip」这条路必须否掉**：探测到不可捕获就 `return`（skip）在 libtest 里会被记成 **`ok`**，直接计入 `passed`。本轮实测过那个状态：
+
+```
+（架构改 panic! 之前的 skip 实现）
 cargo test --workspace --locked -- --nocapture
 passed=575  failed=0  ignored=2  total=577   SKIP 行=2   EXIT=0
 ```
 
-也就是说：**两条用例一条断言都没跑，`passed` 仍是 575，`failed` 仍是 0，`total` 仍是 577，`EXIT` 仍是 0**。上面那三口径在这个状态下会全部判绿——这正是「看起来绿了、实际少扫」那一类，和 `reanchor-from-lock.ps1` 少扫 48 条同构。所以**三口径不够，必须再加一条，并且跳过数要单列**：
+**两条用例一条断言都没跑，`failed` 仍是 0、`total` 仍是 577、`EXIT` 仍是 0**——所有表面计数全部满足。要把它分辨出来，只能靠 `SKIP` 行计数，而 `SKIP` 默认被 libtest 吞掉（不带 `--nocapture` 计数为 **0**，带才是 2），于是最糟的状态恰好长得最像完美状态。**这就是放弃 skip 方案的原因**：一个需要靠易失真的旁路信号才能发现的假绿，不如让它在锁屏时直接红。
 
-| # | 判据 | 当前期望值（桌面不可捕获） | 桌面可用时 |
+改 `panic!` 之后的判据（**简单得多，也拦得住**）：
+
+| # | 判据 | 桌面可捕获（发布前必须达到） | 桌面不可捕获（锁屏） |
 | --- | --- | --- | --- |
-| 1 | `failed` | 0 | 0 |
+| 1 | `failed` | **0** | **2**（且 panic 信息写明「桌面不可捕获」） |
 | 2 | `total = passed + failed + ignored` | 577 | 577 |
-| 3 | `passed` | 575 | 575 |
-| 4 | **`SKIP` 行计数** | **2** | **0** |
-| 5 | **有效覆盖 = `passed` − `SKIP` 计数** | **573** | **575** |
+| 3 | `passed` | **575** | 573 |
 
-**第 3 条单独看没有约束力，这一点必须记下**：锁屏时 `passed` 靠两条空用例凑满 575，不锁屏时也是 575，所以「`passed` ≥575」在两种状态**都成立**，拦不住任何东西。真正有分辨力的是**第 4 条（跳过数）**和**第 5 条（有效覆盖）**。验收报告必须同时写「名义 `passed` 575 / 实际有效 573 / 跳过 2」，只写 575 视为无效结论。
+**判读规则**：`failed=0 且 passed=575` → 桌面捕获真跑了，通过；`failed=2` 且两条 panic 信息都指向「桌面不可捕获」→ **环境不具备，不是回归，但这一轮不能签「门禁全绿」**，必须解锁后在交互桌面上重跑并贴出 `575 passed / 0 failed` 才算过；`failed` 为其它数值、或 panic 信息不是那一句 → 真回归，立即查。
 
-**计数细节（实测过，别踩）**：
-
-- `SKIP` 这个前缀用**全角或半角冒号都能数到**（实测 `SKIP：` 与 `SKIP` 各命中 2 条），所以不必依赖全角冒号；但**必须带 `--nocapture`**——不带时计数是 **0**（实测：不带 0 条 / 带 2 条），因为 `eprintln!` 被 libtest 吞掉。这就是第 4 条唯一可能失真的地方：**忘了带 `--nocapture` 会看到「跳过 0 条」，看起来完美，实际最糟**。
-- 因此第 4 条**不能单独当结论用**，要和第 2 条对照：`total=577` 且 `SKIP` 计数为 0，才允许说「桌面捕获两条真的跑了」。若 `total=577` 但你自己也不确定有没有带 `--nocapture`，**改跑 `cargo test --workspace --locked computer_tools -- --nocapture` 单测这一个目标**，它的输出里 `3 passed` 与 `SKIP` 两行同屏，一眼可辨。
-
-**所以验收命令固定写成**：
-
-```powershell
-cargo test --workspace --locked -- --nocapture 2>&1 | Tee-Object -Variable out
-($out | Select-String 'SKIP').Count      # 桌面不可捕获时 = 2；桌面可用时必须 = 0
-```
-
-**读法（不要只看 `EXIT=0`）**：`SKIP` 计数为 0 → 575 条全部真跑，正常；`SKIP` 计数为 2 → 实际只测了 573 条，`passed=575` 里的 2 条是「空跑 pass」，**必须在报告里写明「实际有效 573 / 跳过 2」**，不许直接引用 575。跳过数不为 0 或不为 2（比如变成 1、3）→ 立即查，说明探测逻辑或环境出错了。
-
-**D-CUT 实测（`c93ef4a`）**：`575 passed / 0 failed / 2 ignored`（合计 **577 条**），六道门禁全 `EXIT=0`，`parity` 双口径 `drifted=0 unlocked=0`、锁 **412 条**（原 419，随 classic 一起死掉 7 条）。**D3 加欢迎区与改名入口后，总条数必须 ≥577、`failed` 必须 0；`passed` 必须 ≥575——但 `passed` 达标必须配合上表第 4 条一起读：`SKIP` 计数不为 0 时，`passed` 里含空跑项，要扣掉才算真实覆盖。**
+**发布前的要求因此变成一句话**：v0.6.0 的测试证据必须是**在解锁的交互桌面上**跑出来的 `575 passed / 0 failed / 2 ignored`，而不是锁屏状态下的任何数字。锁屏时 `failed=2` 是如实反映，**不接受为了让它变绿而改成 skip**。
 
 ### 3.8 文档与锁
 
