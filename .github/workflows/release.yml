@@ -52,7 +52,13 @@ jobs:
           node-version: 24
 
       - name: Test
-        run: cargo test --locked
+        # `--workspace`：CI 原来写的是 `cargo test --locked`，只跑默认成员，不是全 workspace。
+        # `--no-fail-fast`：cargo 默认在第一个失败的 target 处停止，后面的 crate 一个都不跑。
+        #   实测本仓锁屏时 bot-gpui-pilot 第一个失败 -> 只跑了 13/37 个 test binary、
+        #   passed 合计 225（真实 573），而 PRD 的判据写的是 total = 577。
+        #   失败时总数取决于 cargo 的 crate 执行顺序，顺序不在我们手里，所以必须显式关掉 fail-fast，
+        #   让「total = 577」在任何失败场景下都成立。
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
