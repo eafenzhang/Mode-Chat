@@ -213,10 +213,11 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 | `258-o2-4c-switched-away` | §3.5 **4c 第二步** | 切到 bot 13，无描边 |
 | `262-o2-4c-real-switchback` | §3.5 **4c 第三步** | 真实切回 bot 12（12:32:55，晚于 `258` 的 10:31:48），无描边；SHA256 `B5F37295… ≠ 257 的 DF68AE34…` |
 
-**两张已作废、不要引用**：
+**三张已作废、不要引用**：
 
 - `252-o2-run-status-dark` —— 拍的是旧三层嵌套方案（`ui::DetailPanel` 外壳：重复标题、死「返回」、右缘裁 44px），`dda719d` 已否决该方案，由 `261` 取代；
 - `259-o2-4c-switched-back` —— **已删除**。它与 `257` 的 SHA256 完全相同（`DF68AE34…`）、时间戳同为 10:28:31，是另存拷贝，不能作为 4c 第三步的证据；`eb941a2` 用真实拍摄的 `262` 替换。
+- `256-o2-4a-highlight.png` —— 摄于 10:27:20，早于 `6930a4a`（补回「运行状态」标题）。它只有绿描边、**没有标题**，因此证明不了判据 1，由 `261` 取代（`261` 摄于 12:27:29，exe 编译于 12:16:32）。它唯一还有价值的用途是「4a 只加描边不加标题」这一缺陷形态的前后对照。
 
 **截图前必须确认 exe 编译时间晚于最后一个 `src/` 提交**——`0706ebb` 之前编的二进制截群聊只会得到白屏，@前端 实际踩过（02:57:55 的 exe 对 03:01:04 的提交）；`eb941a2` 三张图的 exe 编译于 12:16:32，晚于 `6930a4a`。
 
@@ -231,7 +232,15 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 | 阶段 | 判据 | 空会话截图 |
 | --- | --- | --- |
 | D-CUT（阶段 2） | §3.1 / §3.2 / §3.3 的 grep + §3.6 行数 + §3.7 六道门禁 + 测试数 ≥575 | 不拍；拍了必然是空白，不作判据 |
-| D3（阶段 3） | 本节 grep（`wechat-welcome-suggestion-` ≥1）+ 上面四张截图（单聊深浅 ×2、群聊深浅 ×2） | 必拍；任一路径空白即失败 |
+| D3（阶段 3） | 本节 grep（`wechat-welcome-suggestion-` ≥1）+ 上面四张截图（单聊深浅 ×2、群聊深浅 ×2）+ **改名实机图三张**（见下） | 必拍；任一路径空白即失败 |
+
+**改名实机图（D3 第三项，单独立判据）**：`e659eb7` 已把入口接回（`chat-info-rename` = 1、`SettingsDetail::RenameSession` 构造点 2 处），但**没有实机截图就还不算闭环**。必须三张、同一个实例连续拍，顺序不能倒：
+
+1. **点之前**——右栏「最近会话」那一行，标题是旧名，可见「改名」按钮（左栏选中项也要在画面里，否则看不出改的是哪一行）；
+2. **弹窗**——点「改名」后出现「重命名会话」弹窗，输入框里预填的是旧名（证明走的是 `SettingsDetail::RenameSession`，不是别的入口）；
+3. **改完之后**——名字改成新值并保存，**那一行文案已经变成新名**，且右栏没有残留绿边。
+
+判据可证伪：第 3 张若那行仍是旧名，说明只弹了窗没落盘（`sessions.set_title` / `sessions.save()` 链路断了）；若三张同 SHA256，就是复用图。这三张**不进**上面「四张互不相同」的集合，各自单独比对。
 
 ### 3.5 运行状态面板接回（grep + 截图）
 
@@ -418,7 +427,7 @@ Select-String -Path docs\parity-matrix.md,docs\testing\0.5.1-anchor-label-propos
 | # | 项 | 参照证据（现状 / DS Bot） | 微信风怎么落 | 验收怎么验 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
 | **O-1** | 空会话欢迎区 + 三条建议 chip（**单聊 + 群聊两条路径**） | classic `transcript` 的欢迎区（头像 / 欢迎语 / `welcome-suggestion-{i}`，D-CUT 前第 19535–19664 行）；群聊侧 classic `group_placeholder`（`c93ef4a~1` 的第 21439–21460 行：九宫格头像 + 「群名 · N 人」+ 成员名单）。**两条路径均已完成**：单聊 `0f9b4b5`（`wechat_welcome`），群聊 `0706ebb`（`wechat_group_welcome`，id `wechat-group-welcome`） | 单聊：复用 `avatar` + `tri!` 三语；气泡用 `wechat_theme` assistant 气泡色；chip 28px、`RADIUS_TAG`、hover `nav_item_hover_bg()`；点击 `input.set_content` + 聚焦。群聊：`wechat_welcome` 同时接 Bot / Group，群分支复用 `wechat_group_avatar` / `wechat_channel_avatar` / `count_members` / `visible_group_members`，文案走 `tri!`（**未用 `empty_state_badged`**：它只接 `Option<AnyElement>` + 两行文案，套进来要覆盖内边距，所以群欢迎区结构直接写在 `wechat_group_welcome` 里） | §3.4 的 grep + **四张截图**（单聊深浅 ×2、群聊深浅 ×2） | **已完成**（`0f9b4b5` 单聊 / `0706ebb` 群聊）：截图 `250`/`254` 单聊深浅、`251`/`253` 群聊深浅、`255` 点 chip 后填入。**注意 `253` 摄于 09:24:59（修复前），只能作对照，不作当前代码通关证据** |
-| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（第 17460 行 → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 顶部按 `self.chat_detail.is_some()` 渲染一张卡，id `chat-detail-run`；**只返回卡片内容**（`ui::card` + `ui::stat_row`），不套 `ui::DetailPanel`（它自带 `PANEL_W=340`，塞进 296 可用宽会裁掉 44px）；另加 `chat-detail-close-{key}` 关闭按钮，否则 `chat_detail` 只写不读 | §3.5 的 grep + **四条截图判据**（见 §3.5） | **已完成**（`c93ef4a` 补 id → `dda719d` 改高亮方案 → `6930a4a` 补回标题 → `eb941a2` 真截图）：grep 四项通过（`chat-detail-run`=1、`chat-detail-close`=0、`detail-back`=0、`fn chat_detail_panel`=0），截图 `261`（标题 + 绿描边）/ `257`（4b）/ `258`+`262`（4c 两步）。**教训：只凭 grep 判过，漏掉了重复标题 / 死「返回」/ 右缘裁切；`259` 还出过与 `257` 同 SHA256 的假证据** |
+| **O-2** | 运行状态面板接回 | 现状（D-CUT 前）：「⋯ → 运行状态」设了状态但无渲染点（第 17460 行 → `chat_detail`，`chat_info_panel` 不读） | 在 `chat_info_panel` 里读 `self.chat_detail`，**不另建第二张卡**：`dda719d` 最终拍板为「基础卡加 accent 描边 + 仅高亮时挂一行 `ui::section("运行状态")`」，id `chat-detail-run` 挂在带描边的基础卡上。理由是第二张卡的 10 行里 7 行与基础卡完全重复，删卡不删功能。**不套 `ui::DetailPanel`**（它自带 `PANEL_W=340`，塞进 296 可用宽会裁掉 44px）。**不设 `chat-detail-close` 独立关闭按钮**：卡片右上角已有 `chat-info-collapse` 折叠按钮，多一个关闭按钮就是只写不读；高亮的清除靠 4b（折叠再展开）/ 4c（换 Bot）两个入口，`chat_detail = None` 共 4 处（`3884` / `4145` / `11255` / `24118`） | §3.5 的 grep + **四条截图判据**（见 §3.5） | **已完成**（`c93ef4a` 补 id → `dda719d` 改高亮方案 → `6930a4a` 补回标题 → `eb941a2` 真截图）：grep 四项通过（`chat-detail-run`=1、`chat-detail-close`=0、`detail-back`=0、`fn chat_detail_panel`=0），截图 `261`（标题 + 绿描边）/ `257`（4b）/ `258`+`262`（4c 两步）。**教训：只凭 grep 判过，漏掉了重复标题 / 死「返回」/ 右缘裁切；`259` 还出过与 `257` 同 SHA256 的假证据** |
 | **O-3** | 工作中状态行的文案分档 | 现状 `i18n::t("重试中")` / `i18n::t("工作中")` 两档，没有按工具名分短语；DS Bot `ds-bot/src/client/cells.js:854-867` 按工具名给短语（`TOOL_PHRASES` 8 类正则 → Searching online / Running shell commands / Opening a file …） | 一行 12px 次级色 + spinner，短语按工具类别取；**不引 DS 的英文池**，写中文短句（「正在检索网页」「正在执行命令」「正在读文件」）；未知工具回落到「工作中」 | 截图两张：分别触发浏览器工具与 shell 工具，状态行文案不同；`grep` 短语常量表存在 | P1 |
 | **O-4** | 计时器每秒自跳 | 现状 `elapsed_label(elapsed)` 在重渲染时取值；DS Bot `ds-bot/src/client/cells.js:837-850` 的 `Elapsed` 用 `setTimeout(1000 - ((now-at)%1000))` 对齐整秒自跳，父组件不重渲染 | 用 `cx.spawn` + `window.defer` 每秒 `cx.notify()`，不引入新依赖、不整页重绘 | 截图两张（间隔 ≥3 秒），秒数确实变化；`BOT_PILOT_DEBUG=1` 下渲染耗时打点不因它暴涨 | P1 |
 | **O-5** | 间距统一归入 4px 档（U-01） | `0.5.1-ui-review.md` U-01；标准见 `docs/ui-design-spec.md` 第 2 节「只用这六档」（4 / 8 / 12 / 16 / 24 / 32），同节末「废弃 5 / 10 / 14 / 18」。实测量级：`.p/.px/.py/.pt/.pb/.pl/.pr/.gap/.m*` 共 **560** 处，档外 **276** 处（`px(6)` 95、`px(10)` 64、`px(2)` 50、`px(14)` 33、`px(5)` 9、`px(1)` 6、`px(9)` 6、`px(3)` 3、`px(7)` 3、`px(56)` 1）。**数字只作量级参考，不进 AC**（理由见 §5.2） | 见 §5.2：先给 `scripts/ui-lint.ps1` 加第 5 条规则并以 report-only 跑出基线，再按页清零（会话列表 → 聊天区 → 右栏 → 设置页），每页改完前后各一张截图 | 见 §5.2：唯一判据是第 5 条规则在 `-Enforce` 下 **0 违规**；基线数值以脚本输出为准，不写手数的数字 | P1 |
