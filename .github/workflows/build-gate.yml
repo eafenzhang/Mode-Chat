@@ -1,0 +1,75 @@
+# 提交到 main 的编译/测试门禁。
+#
+# 为什么需要这个文件：`release.yml` 从 2026-11-26 起只在 tag 上触发（push main 不再发版，
+# 见 `docs/release.md`「CI（首选）」一节）。原来是「push main 就发版」，所以每笔提交
+# 都顺带跑了 cargo test / clippy / ui-lint；改成只在 tag 上触发之后，**main 上就没有
+# 任何人在跑编译和测试了**，只有 `anchor-gate.yml` 跑锚点校验。
+#
+# 这个 workflow 把那三道门禁单独留下，绑定在「改了代码」的推送/PR 上：
+#   cargo test --workspace --locked --no-fail-fast
+#   cargo clippy --all-targets --locked -- -D warnings
+#   scripts\ui-lint.ps1 -Enforce
+#
+# 只在 `src/**` `crates/**` `Cargo.toml` `Cargo.lock` 变化时触发：只改文档的提交
+# 不该跑 3 分钟编译。发版时 `release.yml` 会再跑一遍（那里是硬性要求），重复是有意的——
+# 发版门禁不能依赖「上游某次 CI 绿过」。
+name: Build gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".github/workflows/build-gate.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".github/workflows/build-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      # `--no-fail-fast` 不只是「跑完所有 crate」：cargo 默认在第一个失败的 target 停，
+      # 失败时 passed 合计会随 crate 执行顺序变化。关掉它，失败场景下的总数才稳定。
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: UI design-token gate
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ui-lint.ps1 -Enforce
+          if ($LASTEXITCODE -ne 0) { exit 1 }

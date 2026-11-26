@@ -14,10 +14,21 @@
 
 `.github/workflows/release.yml`：
 
-- 触发：push `main` / tag `v*` / 手动
-- 版本：手动输入 > tag > **HEAD 上已有的 `v*` tag** > 最近 tag 的 patch+1
-  （push `main` 和 push tag 会各触发一次，`concurrency` 只保证串行不保证合并；
-  所以「HEAD 已带 tag 就用那个版本」这一步必须有，否则同一次发版会多出一个空 patch Release）
+- **触发：只有 tag `v*`（以及手动 `workflow_dispatch`）。push `main` 不发版。**
+  - 2026-11-26 之前是「push `main` 也发版，用 `paths-ignore` 挡文档改动」。
+    这条路挡不住一切：v0.6.1 就是「推了一笔 `scripts/shot-probe.ps1`」自动算出
+    patch+1 发出去的，成了一版「只有文档和自查脚本变化」的发布。
+    `paths-ignore` 是白名单，新目录一出现就漏；而且它表达不了「改了代码但先不发版」。
+  - 所以现在是：**发版 = 打 tag**。`git tag v0.x.y && git push chat v0.x.y`。
+    push `main` 只跑 `anchor-gate.yml`（锚点门禁），不发版。
+- 版本：手动输入 > tag >（手动触发时）HEAD 上已有的 `v*` tag > 最近 tag 的 patch+1
+- **版本号必须与 `Cargo.toml` 的 `[package].version` 一致**，不一致时 `Resolve version`
+  直接 `exit 1`，不打包。理由：包内版本是打包时注入的 `MODE_BOT_VERSION`，源码版本是
+  `Cargo.toml`；两者不一致时「从 tag 重建」会得到另一个版本号的包，这个 release 不可复现。
+  v0.6.1 就是这种事故（tag `v0.6.1` → `02bb019`，而那个提交里 `Cargo.toml` 仍是 `0.6.0`，
+  包自报 `0.6.1`）——该版本已发布、不撤，由后续版本把版本号对齐。
+  读版本必须读 `[package]` 段：`[workspace.package]` 里也有一个 `version`，`head -n1` 会取到它，
+  那样这条校验在「两个值碰巧相同」时放行、在「只改了一个」时误拦截，等于没有分辨力。
 - 门禁（任一失败直接 exit 1，不进 Package）：
   1. `cargo test --workspace --locked --no-fail-fast`（`--workspace` 才跑全部 crate；`--no-fail-fast` 保证失败时总数仍为 577 而不是随执行顺序变）
   2. `cargo clippy --all-targets --locked -- -D warnings`
@@ -67,20 +78,24 @@ git push chat v0.2.1
 
 ```
 tag  v0.6.0   eef7055   = 发版内容
-main          > eef7055  tag 之后又落了若干笔，全部在 docs/ 与 scripts/
-                        src/ 与 crates/ 零改动（git diff --stat v0.6.0..HEAD 可核）
+main          > eef7055  tag 之后又落了若干笔
 ```
 
-**这里不写死「多几笔」**：那个数字每补一次文档就变一次（写「四笔」的时候还是四笔，
-补完验收文档就成了五笔）。**数量是会变的量，性质才是判据。**
+**这里不写死「多几笔」、也不写死「改了哪些目录」**：两个都会变。写「四笔」的时候还是四笔，
+补完验收文档就成了五笔；写「只有 docs/scripts」的时候是对的，`d6b1c0a` 之后就不再成立。
+**数量、路径集合都是会变的量，性质才是判据。**
 
 性质说明：tag 之后的所有提交都是**发版之后**按反馈补的——发布说明补第 5 条（探针未限 y 区间）、
-修那个探针、把第 5 条末句改成事实、验收文档补两处证据缺口。**不是** v0.5.1 那种
-「先打 tag 后推 docs」造成的意外脱节。
+修那个探针、把第 5 条末句改成事实、验收文档补证据缺口、`release.md` 补这节自身、
+`parity-matrix.md` 标题对齐版本号，以及**引用条**（`d6b1c0a`，tag 之后第一笔含 `src/` 的提交，
+标题带 `[skip release]`，随 v0.7 发版）。**不是** v0.5.1 那种「先打 tag 后推 docs」造成的意外脱节。
 
 两者在 git 图谱上看起来一样（tag 落后于 main），但一个是**发布后按反馈善后**，
 一个是**发版顺序搞错**。看图谱的人需要能分清，否则会以为这一版又出了一次同类事故。
 已发布的 tag 不重打，按既定规矩。
+
+**所以判断这一节时不要用「src 是否零改动」当判据**——它只在不含功能提交时成立。
+真正该看的是每笔提交的标题和 message：带 `[skip release]` 的就是不随本版发布的内容。
 
 ## 版本演进
 

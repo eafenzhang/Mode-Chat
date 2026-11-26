@@ -1,18 +1,17 @@
 name: Mode Chat Release (Windows)
 
 on:
+  # 只在打 tag 时发版。
+  #
+  # 以前是「push main 也发版，用 paths-ignore 挡文档改动」，那条路挡不住一切：
+  # v0.6.1 就是 push main（只改了 `scripts/shot-probe.ps1`）自动算出 patch+1 发出的，
+  # 于是出现了一个「只有文档与自查脚本变化」的版本。
+  # 白名单式的 paths-ignore 只能挡住列出来的目录，新目录一出现就漏；而且
+  # 「src 改了但没打算发版」这种情况它根本表达不了（v0.6.0 之后 main 上的引用条就是）。
+  #
+  # 现在：**发版 = 打 tag**。push main 只跑 CI（`anchor-gate.yml`），不发版。
+  # 要发版就 `git tag v0.x.y && git push chat v0.x.y`；手动发版走 workflow_dispatch。
   push:
-    branches: [main]
-    # 只改文档 / 图标许可 / 忽略文件时不需要发版，否则每推一次就多一个 patch 版本。
-    # 要发版就改代码，或用 workflow_dispatch 显式指定版本。
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "scripts/**"
-      - ".github/**"
-      - "LICENSE*"
-      - ".gitignore"
-      - "assets/icons/LICENSE*"
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -93,10 +92,14 @@ jobs:
         run: |
           set -euo pipefail
           version=""
-          # 仓库里声明的版本（Cargo.toml [package].version）。发版版本不能低于它：
-          # 版本号已经手工升到 0.5.0 时，即使这次是 push main 触发、HEAD 上还没有
-          # tag，也不该再去发一个 0.4.1。
-          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          # 仓库里声明的版本（`[package].version`）。
+          #
+          # 必须读 `[package]` 段，不能 `head -n1` 取第一个 `version = "..."`：
+          # Cargo.toml 里 `[workspace.package]` 也有一个 `version`，而且排在上面。
+          # 而 exe 的 `CARGO_PKG_VERSION` 读的是**当前包的** `[package].version`。
+          # 取错段会让这条校验在「两个值碰巧相同」时放行、在「只改了一个」时误拦截，
+          # 也就是判据没有分辨力。
+          cargo_version="$(awk '/^\[package\]/{f=1} f && /^version = "/{gsub(/^version = "|"$/,""); print; exit}' Cargo.toml)"
           # 语义化比较：a 大于 b 时返回 0（true）。
           newer_than() {
             local a="$1" b="$2"
@@ -117,7 +120,7 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
           else
-            # push main 与 push tag 会各触发一次（concurrency 串行，但都会跑完）。
+            # 只有 workflow_dispatch 且没填版本时走到这里（push 已经只在 tag 上触发了）。
             # 若当前提交本身已被打上 v* tag，就用那个版本，别再算 patch+1，
             # 否则同一次发版会多出一个 patch Release（v0.5.0 + v0.5.1）。
             on_head="$(git tag --points-at HEAD --list 'v*' --sort=-v:refname | head -n1 || true)"
@@ -149,9 +152,9 @@ jobs:
           # 源码里的版本是 Cargo.toml 的 [package].version。两者不一致时，「从 tag 重建」
           # 会得到另一个版本号，这个包就不可复现。
           #
-          # v0.6.1 就是这么产生的：tag v0.6.1 → 02bb019，而那个提交里 Cargo.toml 仍是 0.6.0，
-          # 包自报 0.6.1。源码与已发布产物对不上，只能把这个版本撤掉。
-          # 所以这里不再「取两者较大值」了事，不一致就直接挡住发版。
+          # v0.6.1 就是这类事故：tag v0.6.1 → 02bb019，那个提交里 Cargo.toml 仍是 0.6.0，
+          # 包自报 0.6.1。该版本**已发布、不撤**（撤了会留下指向它的 tag 与已升级的客户端），
+          # 由后续版本把版本号对齐。这道校验是为了不再产生第二个。
           if [ "$version" != "$cargo_version" ]; then
             echo "::error::版本号与源码不一致：本次要发 v$version，Cargo.toml 里是 ${cargo_version:-（读不到）}。"
             echo "::error::请先把 Cargo.toml 的 [package].version 改成 $version 再发版，否则从 tag 重建会得到 ${cargo_version:-另一个} 的包。"
