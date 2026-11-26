@@ -2242,6 +2242,7 @@ impl Render for GroupTasksState {
                             .gap(px(6.))
                             .child(
                                 div()
+                                    .min_w(px(0.))
                                     .flex_1()
                                     .truncate()
                                     .font_family(theme::FONT_FAMILY)
@@ -12710,7 +12711,10 @@ impl PilotApp {
                         .items_center()
                         .gap(px(ui::S2))
                         .py(px(ui::S1))
-                        .child(ui::body_muted(model.model_id.clone()).truncate())
+                        // O-6：模型名可能很长（`deepseek-v4.1-flash` 这类），
+                        // 父是 flex 行且右侧跟着「已启用/停用」等按钮，
+                        // 不给 min_w 会把右侧按钮挤出这一行。
+                        .child(ui::body_muted(model.model_id.clone()).min_w(px(0.)).truncate())
                         .child(div().flex_1())
                         .child(ui::badge(
                             if enabled {
