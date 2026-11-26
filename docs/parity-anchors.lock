@@ -300,6 +300,9 @@ src/main.rs:24403|this.new_session_for_selected(cx);
 src/main.rs:24444|.children(self.queue_panel(cx))
 src/main.rs:2451|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:24647|if chat.compacting == Some(true) {
+src/main.rs:25007|fn wechat_working_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElem
+src/main.rs:25011|let turn_start = chat
+src/main.rs:25017|let has_output = chat
 src/main.rs:25303|div()
 src/main.rs:25513|let plus_focus = self.tab_focus["composer-plus"].clone();
 src/main.rs:25520|&& !pending_approval
