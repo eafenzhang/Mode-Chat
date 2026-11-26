@@ -409,3 +409,80 @@ CompactionSettings|HarnessEvent::Compaction     0
 AgentHarnessResources                           0
 ComputerLease|allowed_apps|app_allowlist        0
 ```
+
+---
+
+## 18. 锚点门禁的能力边界（已用负向用例实测，别当成"全都能拦"）
+
+这一节写的不是"门禁做了什么"，而是**它拦不住什么**。每条都附了一个实测过的漏检用例。
+
+### 18.1 `remap-anchors-from-diff.ps1` 的 token 自检只守"脚本自己不吃 token"
+
+自检比较的是**同一次运行内**改写前后的 token 总数：
+
+```
+$beforeTotal = Measure-MainTokens          # 运行前
+... 改写 ...
+$afterTotal  = Measure-MainTokens          # 运行后
+$expected    = $beforeTotal - $deleted + $added
+SELF-CHECK OK ⇔ $afterTotal -eq $expected
+```
+
+负向用例：先手工删掉一个锚点 token 再跑脚本 → 输出 `SELF-CHECK OK`。因为 before / after 一起变小，等式仍然成立。
+
+**结论：它证明的是"这次改写没有净丢 token"，不是"文档里的锚点一个不少"。** 后者只能靠指纹锁的 `unlocked` / `stale-in-lock`，以及人工核 `anchors checked` 的基数。
+
+实测（`727a626 → f79768a` 干跑）：
+
+```
+hunks 9   删 6   增 23
+tokens remapped 220
+tokens before=343 deleted=0 expected=343 actual=343
+SELF-CHECK OK
+```
+
+同一脚本修 bug 前的错误输出留档：真实 `+23/−6`，旧版本报"删 0 增 8"——hunk 头省略 `,N` 时 `$Matches[2]` 是 `$null`，而 `$null -ne ''` 为 True，于是 `[int]$null = 0`，整条替换型 hunk 被跳过。别用 `$Matches[2].Success` 判（`$Matches` 是 hashtable，取出元素是 string，`.Success` 恒为 `$null`）。
+
+### 18.2 裸行号 `:N` 的归属是"同行最近的前置完整锚点"，不是语义归属
+
+回填规则只看位置：同一行里、在 `:N` 之前**最近**的那个完整锚点。所以一行里出现多个文件时，裸行号会被归给紧邻的那一个，哪怕它语义上属于更早提到的文件。
+
+真实的漏检（`docs/prd-0.6.md` 的 O-3 那一行）：句子先写"`wechat_working_row`，`src/main.rs:25007` 起"，中间插了一个 `tool_render.rs` 的 `:26` 引用，后面的裸 `:25011` / `:25017` 就被归给 `tool_render.rs`：
+
+```
+src/tool_render.rs :25011 (裸行号) -> OUT OF RANGE (max 434)
+src/tool_render.rs :25017 (裸行号) -> OUT OF RANGE (max 434)
+```
+
+**这次是运气好——越界才报错。** 如果 `tool_render.rs` 有 3 万行，它会拿到 `tool_render.rs` 里某个无关代码行，判据照样绿。
+
+修法是**在文档里补 `src/main.rs:` 前缀**（`5959f99`），不是让脚本去猜语义：语义归属无法自动推断，猜错会把别人的锚点指到错文件上，那是比漏检更坏的错。
+
+### 18.3 `drifted` 只比"这一行的内容"，重复行会假一致
+
+指纹锁存的是一行去空白后的内容摘要。同一段文本在文件里出现多次时，位移后内容比对**必然通过**，但语义已经指错了地方。
+
+实例：`.github/workflows/release.yml` 里 `if ($LASTEXITCODE -ne 0) { exit 1 }` 出现三次（ui-lint 步、parity 步、arch 步），另有 bash 的 `if [ -z "$latest" ]; then` 只出现一次。前者位移后 `drifted` 报不出来，后者能精确报出来。
+
+2026-11-26 那一轮就是靠"唯一那条能报的"定位到 `cfd5805` 给 workflow 插了 6 行，再人工逐条核出正确位置是 `54 / 85 / 127`。**所以 `drifted: 0` 不等于锚点都对，只等于"没有一条位移后的内容变了"。**
+
+### 18.4 `reanchor-from-lock` 这类"自动重指"会把区间压成单 token
+
+我自己写了一半就删了：apply 阶段把 `a.rs` 的 `:100-120`、`:100/110/120` 这类区间/多位置写法压成一个 token，`anchors checked` 从 248 掉到 200——**悄悄少扫 48 条，而 `RESULT` 仍然全绿**。
+
+判据：重建锚点前后必须比对 `anchors checked` 的基数，掉数就是少扫，不是"干净了"。
+
+### 18.5 门禁扫哪些文档是写死的
+
+`verify-parity-anchors.ps1` 的 `$docs` 只有三个文件：
+
+```
+docs/parity-matrix.md
+docs/prd-0.5.md
+docs/prd-0.6.md
+```
+
+所以：
+
+- `docs/plans/**`、`docs/testing/**` 里的锚点**完全不校验**——按今天 HEAD 去改历史快照等于篡改，这是有意排除，不是遗漏；
+- 本文档（`docs/parity-arch-notes.md`）只被 `verify-arch-anchors.ps1` 扫，那是**弱校验**：文件存在 + 行号不越界 + 该行非空 + 符号名在 ±20 行内出现。**没有指纹锁**，所以本文件里的行号漂了不会被 `drifted` 抓到，只能靠每次跑 `verify-arch-anchors.ps1` 时的 `bad=0`。
