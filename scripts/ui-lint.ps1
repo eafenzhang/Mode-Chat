@@ -1,4 +1,4 @@
-# UI design-token gate (Q02 / PRD P0-6 AC5)
+﻿# UI design-token gate (Q02 / PRD P0-6 AC5)
 #
 # Default "report mode": prints violations, never changes exit code -- used while
 # the frontend cleans up (W10). After cleanup, CI calls it with -Enforce, so any
@@ -22,6 +22,12 @@
 [CmdletBinding()]
 param(
   [switch]$Enforce,
+  # O-5（U-01 间距档）单独一个开关，不走 -Enforce：
+  # PRD §5.2 的四步里，第 ② 步是「报基线」，第 ④ 步才是「切硬门禁」。
+  # 如果直接把它挂进 -Enforce，清零工作还没做完、六道门禁就先红了；
+  # 但它又必须**真的在跑**，否则「规则存在」和「规则生效」会再次脱节
+  # （本轮已经在 MALFORMED 只校验特定行、spacing_offtoken 零命中上栽过两次）。
+  [switch]$EnforceSpacing,
   [int]$Top = 8,
   [string]$Root = ''
 )
@@ -36,6 +42,11 @@ if ($Root -eq '') {
 # T_PAGE 15 / T_METRIC 22. Writing one of these numbers literally is a violation.
 $FontTokens = @('11.', '12.', '13.', '15.', '22.')
 
+# 间距档（docs/ui-design-spec.md 第 2 节）：只允许这六档。
+# px(0.) 不在此列是有意的 —— 它是容器约束（min_w(0.) / flex 收缩），不是视觉间距，
+# 所以规则里单独放行，而不是塞进白名单。
+$SpacingTokens = @('4.', '8.', '12.', '16.', '24.', '32.')
+
 $CursorAllow = @('ui_kit.rs')
 $RadiusAllow = @('ui_kit.rs', 'theme.rs')
 # Brand-tint icon files may use rgb() (docs/ui-design-spec.md 10.1).
@@ -48,6 +59,8 @@ $files = @(Get-ChildItem -Path $Root -Recurse -File -Include *.rs)
 if ($files.Count -eq 0) { throw "no .rs files under: $Root" }
 
 $all = New-Object System.Collections.ArrayList
+# 规则 5 单独收集：它由 -EnforceSpacing 控制，不参与 -Enforce 的退出码（见 param 注释）。
+$spacing = New-Object System.Collections.ArrayList
 
 foreach ($f in $files) {
   $name = $f.Name
@@ -71,6 +84,15 @@ foreach ($f in $files) {
     }
     if ($line -match 'rgb\(' -and $RgbAllow -notcontains $name) {
       [void]$all.Add([pscustomobject]@{ Rule = 'rgb'; File = $name; Line = $ln })
+    }
+    # 规则 5：间距档。只查内边距 / 外边距 / 间隔这四类方法，且只认数字字面量
+    # （令牌 ui::S1..S6 本来就不是数字，天然不匹配）。px(0.) 放行。
+    foreach ($m in [regex]::Matches($line, '\.(?:p|px|py|pt|pb|pl|pr|gap|m|mx|my|mt|mb|ml|mr)\(px\(\s*([0-9]+(?:\.[0-9]+)?)\.?\s*\)\)')) {
+      $value = $m.Groups[1].Value + '.'
+      if ($value -eq '0.') { continue }
+      if ($SpacingTokens -notcontains $value) {
+        [void]$spacing.Add([pscustomobject]@{ Rule = 'spacing_offtoken'; File = $name; Line = $ln; Value = $value })
+      }
     }
   }
 }
@@ -105,12 +127,32 @@ Write-Output ('-' * 72)
 Write-Output ("total violations: {0}" -f $total)
 Write-Output ''
 
+# ---- 规则 5：间距档（O-5）。默认 report-only，-EnforceSpacing 才计退出码 ----
+$spacingTotal = $spacing.Count
+$spacingStatus = if ($spacingTotal -gt 0) { 'FAIL' } else { 'OK  ' }
+Write-Output ("[{0}] {1,-28} {2,5}   (规则 5 · 间距档, {3})" -f `
+    $spacingStatus, 'spacing(px(non-token))', $spacingTotal,
+    $(if ($EnforceSpacing) { '-EnforceSpacing 生效' } else { 'report-only' }))
+if ($spacingTotal -gt 0 -and $Top -gt 0) {
+  Write-Output '         档外值分布：'
+  $spacing | Group-Object Value | Sort-Object Count -Descending | Select-Object -First $Top |
+    ForEach-Object { Write-Output ("         {0,-8} {1,4}" -f ("px(" + $_.Name + ")"), $_.Count) }
+  $byFile = $spacing | Group-Object File | Sort-Object Count -Descending | Select-Object -First $Top
+  Write-Output '         按文件：'
+  foreach ($g in $byFile) { Write-Output ("         {0,-24} {1,4}" -f $g.Name, $g.Count) }
+}
+Write-Output ('-' * 72)
+
 if ($Enforce -and $total -gt 0) {
   Write-Output 'RESULT: FAIL (-Enforce, exit 1)'
   exit 1
 }
+if ($EnforceSpacing -and $spacingTotal -gt 0) {
+  Write-Output ("RESULT: FAIL (-EnforceSpacing, exit 1, spacing_offtoken={0})" -f $spacingTotal)
+  exit 1
+}
 if ($Enforce) {
-  Write-Output 'RESULT: PASS'
+  Write-Output ('RESULT: PASS' + $(if ($EnforceSpacing) { ' (+spacing)' } else { '' }))
   exit 0
 }
 Write-Output 'RESULT: report-only (no -Enforce, exit 0)'
