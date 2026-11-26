@@ -393,7 +393,7 @@ src/avatar.rs     281 ->    190   (-91)
 
 ```
 cargo check --workspace --all-targets --locked
-cargo test  --workspace --locked -- --nocapture   （基线 577 条 = 575 passed / 0 failed / 2 ignored；跳过数单列，见下）
+cargo test  --workspace --locked --no-fail-fast   （基线 577 条 = 575 passed / 0 failed / 2 ignored；判据见下）
 cargo clippy --all-targets --locked -- -D warnings
 scripts\ui-lint.ps1 -Enforce              0 violations / PASS
 scripts\verify-parity-anchors.ps1 -Baseline Head        drifted=0 unlocked=0
@@ -441,9 +441,41 @@ passed=575  failed=0  ignored=2  total=577   SKIP 行=2   EXIT=0
 | 2 | `total = passed + failed + ignored` | 577 | 577 |
 | 3 | `passed` | **575** | 573 |
 
-**判读规则**：`failed=0 且 passed=575` → 桌面捕获真跑了，通过；`failed=2` 且两条 panic 信息都指向「桌面不可捕获」→ **环境不具备，不是回归，但这一轮不能签「门禁全绿」**，必须解锁后在交互桌面上重跑并贴出 `575 passed / 0 failed` 才算过；`failed` 为其它数值、或 panic 信息不是那一句 → 真回归，立即查。
+**验收命令必须带 `--workspace` 和 `--no-fail-fast`**（两个都不能漏，漏哪个都会让判据失真）：
 
-**发布前的要求因此变成一句话**：v0.6.0 的测试证据必须是**在解锁的交互桌面上**跑出来的 `575 passed / 0 failed / 2 ignored`，而不是锁屏状态下的任何数字。锁屏时 `failed=2` 是如实反映，**不接受为了让它变绿而改成 skip**。
+```powershell
+cargo test --workspace --locked --no-fail-fast
+  桌面可捕获    passed=575  failed=0  ignored=2  total=577     ← 发布前必须达到
+  桌面不可捕获  passed=573  failed=2  ignored=2  total=577     ← EXIT=101
+```
+
+**漏掉参数会怎样（两个都实测过，比预想的更糟）**：
+
+| 命令 | 实测 | 问题 |
+| --- | --- | --- |
+| `cargo test --workspace --locked` | `total=229`，只跑前几个 binary | 第一个失败 target 就中止，后面的不再跑 |
+| **`cargo test --locked`（= `.github/workflows/release.yml` 在 `cfd5805` 之前的老写法）** | **`passed=3`，1 个 binary** | **既漏 `--workspace`（只测默认成员）、又漏 `--no-fail-fast`，几乎什么都没测** |
+
+所以 CI 那条命令必须改（已在 `cfd5805` 改掉），否则本 PRD 的第 2 条判据（`total = 577`）在 CI 日志上**永远对不上**：
+
+```yaml
+# .github/workflows/release.yml   旧写法（错，cfd5805 之前）
+run: cargo test --locked
+# 现在（cfd5805 已落地，该步骤在 .github/workflows/release.yml 里）
+run: cargo test --workspace --locked --no-fail-fast
+```
+
+**`total=577` 这个判据只在 `--workspace --locked --no-fail-fast` 下成立**，CI 已同步（`cfd5805`；该步骤在 `.github/workflows/release.yml` 里）。**验收时先确认 CI 那行命令是这三个参数，再去核 `total`**——否则拿 CI 日志核对永远对不上，而原因不在代码、在命令。
+
+**踩过的坑（必须记住，别只留在 workflow 注释里）**：`.github/workflows/release.yml` 在 `cfd5805` 之前写的是 `cargo test --locked`，**CI 因此只跑了 1 个 test binary**。`bot-gpui-pilot` 是 workspace 的 root package，`cargo test` 不带 `--workspace` 就只测它，那 12 个 `crates/*` 里约 380 条测试**从来没在 CI 里执行过**——v0.5.1 那次 CI 全绿，但它验证的东西比我们以为的少得多。**这比锁屏那两条严重得多：锁屏至少会红，漏跑是真绿。**它和 `reanchor-from-lock.ps1` 少扫 48 条、和 skip 伪装成 `passed`，是同一类问题（本轮一共抓出三次）。
+
+副作用预警：`cfd5805` 之后 CI 会**第一次真正跑全 35+ 个 test binary**。如果那时冒出新的红，**很可能是早就存在、只是从未被执行过的失败，不是本轮引入的**——处理时先按这个假设排查。顺带一条：`--no-fail-fast` 下 `EXIT=101` 是 cargo 对「测试失败」的明确定义码，不是管道造成的。
+
+**判读规则**：`failed=0 且 passed=575 且 total=577` → 桌面捕获真跑了，通过；`failed=2` 且两条 panic 信息都指向「桌面不可捕获」→ **环境不具备，不是回归，但这一轮不能签「门禁全绿」**，必须解锁后在交互桌面上重跑并贴出 `575 passed / 0 failed` 才算过；`failed` 为其它数值、或 panic 信息不是那一句 → 真回归，立即查；`total≠577` → **先怀疑命令漏了参数，不要怀疑测试被删**。
+
+**发布前的要求因此变成一句话**：v0.6.0 的测试证据必须是**在解锁的交互桌面上、带 `--no-fail-fast`** 跑出来的 `575 passed / 0 failed / 2 ignored`（`total=577`），而不是锁屏状态下的任何数字。锁屏时 `failed=2` 是如实反映，**不接受为了让它变绿而改成 skip**。
+
+**代码 review 硬规定（比上面三条计数判据更靠前，也更便宜）**：三个数字——`total` / `failed` / `passed`——**都分辨不出「真跑了」和「一条断言都没跑」**。唯一能分辨的是代码形态。所以：**任何 PR 里出现 `if !xxx_available() { return; }` 这类「探测不到就静默返回」的写法，一律拒绝合入**，必须改成 `require_xxx()` 前置断言（失败并说明环境原因）。这条在 review 阶段就能拦住，不用等跑完测试才发现；它也是 `5d71ad0` 的由来——那张表里「有人把跳过改回 `return`」这一行，计数与全绿行完全相同（575 / 0 / 2 / 577），只有代码形态看得出来。
 
 ### 3.8 文档与锁
 
