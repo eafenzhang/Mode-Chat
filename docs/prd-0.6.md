@@ -227,7 +227,9 @@ Select-String -Path src\main.rs -Pattern 'chat-detail-close'
 截图（**判据四条，缺一条不算过**）：微信壳「⋯ → 运行状态」→ 右栏打开，基础卡带高亮
 1. **页面上只有一处「运行状态」字样**，且**不再有第二张统计卡**（`chat_detail_panel` 不得再返回 card）；
 2. **没有「返回」按钮**（`detail-back` 属 `DetailPanel::render`，接错层级时才会出现），也**没有第二个关闭按钮**（折叠按钮 `chat-info-collapse` 已存在）；
-3. **「会话」行值完整显示**、「状态」显示「就绪」——基础卡的宽度不再被裁 44px；
+3. **宽度不再被裁 44px**，分两条验（`727a626` 删掉第二张卡后，原「会话」行**已不存在**，旧判据无法验证，改写如下）：
+   - **3a** 右栏顶部标题行**完整显示会话名**（例 `前端走查群` 不出现半个字被切），右侧 badge 显示「就绪」；
+   - **3b** 「会话 ID」行**按设计截断**（`truncate()` + 省略号，36 字符长 ID 在 296px 内放不下），判据是**右侧没有整块被裁**、省略号出现在文字末尾而不是中途消失。
 4. **高亮是瞬时状态，三个动作分别验**（缺一条不算过）：
    - **4a** 右栏已打开时点「⋯ → 运行状态」→ 基础卡出现 accent 描边；
    - **4b** 折叠右栏再展开 → 描边消失（`set_right_panel(false)` 必须清 `chat_detail`）；
@@ -261,16 +263,23 @@ Select-String -Path src\main.rs -Pattern 'chat-detail-close'
 
 **为什么不能只是「打开右栏、不加高亮」**：右栏已经打开时点「运行状态」，界面没有任何变化，用户仍会认为「点了没反应」——那正是 O-2 要修的原始缺陷。高亮是让「点了有反应」在右栏已开时也成立的最小改动。
 
-**高亮的配色与圆角只能用 `wechat_theme`**（`727a626` 用了 `theme::` 令牌，新引入的不一致）：
+**高亮的配色与圆角只能用微信壳令牌**（`727a626` 首版用了 `theme::`，是这一段唯一的不一致）：
 
 ```
 ✗ .rounded(px(theme::RADIUS_CARD))     ← 14，classic 令牌
-✗ .border_color(theme::accent())      ← theme 的 accent，不跟微信主题色变
-✓ .rounded(px(12.))                   ← docs/ui-design-spec.md:54 的 R_Card = 12
-✓ .border_color(wechat_theme::accent())
+✗ .border_color(theme::accent())      ← 默认蓝：DARK_ACCENT = 0x1084fe / LIGHT_ACCENT = 0x4d6bfe
+✓ .rounded(px(ui::R_CARD))            ← 12，ui_kit.rs:45，规范 §4 的 R_Card
+✓ .border_color(wechat_theme::accent())  ← 默认微信绿 0x07c160（wechat_theme.rs）
 ```
 
-`chat_info_panel` 那一段其他配色全走 `wechat_theme::`，只有这两行新写的是 `theme::`。**后果**：用户选了自定义主题色时，微信壳其他元素跟着变色、唯独这个描边不变，看起来像渲染错误。圆角同理——规范 `:58` 要求「新增 `R_Card = 12`，统一到 12」，新代码不该再用 14。
+**为什么必须换**：`theme::accent()` 在用户没选自定义色时返回 `DARK_ACCENT`/`LIGHT_ACCENT`——**那是蓝色**，不是微信绿。`chat_info_panel` 区间内 `wechat_theme::` **33 处**、`theme::` **2 处**（就是这两行新写的），所以不换的话，会给基础卡套一个蓝色边框，而周围全是微信绿系。用户选自定义主题色时更明显：周围跟着变，只有描边不变。
+
+**顺带纠正一个数**：`ui_kit::R_CARD` 已经是 12 且 `ui_kit.rs:948` 断言它等于 `theme::RADIUS_MENU`，所以直接写 `ui::R_CARD`，不要写裸 `12.`。
+
+**同批要清的两条尾巴（不影响判据，但会误导下一个读代码的人）**：
+
+1. `settings_detail_panel` 开头的注释「会话专用的两种形态由 `chat_detail_panel` 渲染，这里不处理」——**该函数在 `727a626` 已整个删除**，注释指向一个不存在的函数。`RunStatus` 的 `return None` 分支本身要保留（`RunStatus` 仍不能被设置页渲染），只改注释。
+2. `SettingsDetail::RenameSession` 上的 `#[allow(dead_code)] // v0.7 decision: session rename, no wechat-shell entry point yet.`——**入口已经有了**（`chat-info-rename`，`727a626`），这条 allow 的理由不成立。删掉这条 allow（如果 clippy 仍报，说明入口没接对，那才是真问题），顺带删掉它那句过时的理由注释。
 
 **明确不做**：不新增基础卡没有的字段（上下文窗口、token 累计等），那是新功能，v0.7。
 
