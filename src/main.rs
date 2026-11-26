@@ -3879,17 +3879,26 @@ impl PilotApp {
             eprintln!("[ui] select_bot {index}");
         }
         self.stash_draft(cx);
+        // 引用条是「我正看着这条消息、现在要回它」的瞬时动作：切走即作废。
+        // 必须清**离开的**那个会话——只清目标会话等于没清（目标本来就是空的），
+        // 切回来引用条还在、发出去仍带引用，而用户在文本上看不出错。
+        let leaving = self.active_key();
         self.selection = Some(Selection::Bot(index));
         self.chat_find = None;
         // 运行状态高亮只对「当前正在看的那一个会话」有效，切会话就清掉。
         self.chat_detail = None;
         if let Some(bot) = self.roster.bots.get(index) {
             let key = bot_key(&bot.id);
+            // 点同一行（key 不变）时不清：用户刚点完引用又点了这个会话，
+            // 那一下不该把引用抹掉。
+            if leaving.as_deref() != Some(key.as_str())
+                && let Some(prev) = leaving
+                && let Some(chat) = self.chats.get_mut(&prev)
+            {
+                chat.quote = None;
+            }
             if let Some(chat) = self.chats.get_mut(&key) {
                 chat.unread = 0;
-                // 引用条同属瞬时 UI 状态：跨会话留着会让用户引用到上一个会话
-                // 的消息，而发出去之后从文本上看不出错。
-                chat.quote = None;
             }
             if !self.browser_recents.contains_key(&bot.id) {
                 let recents = load_browser_recents(&bot.id);
@@ -4144,15 +4153,22 @@ impl PilotApp {
             eprintln!("[ui] select_group {index}");
         }
         self.stash_draft(cx);
+        // 同 select_bot：清离开的会话，让「切走即作废」对切群也成立。
+        let leaving = self.active_key();
         self.selection = Some(Selection::Group(index));
         self.chat_find = None;
         self.chat_detail = None;
         if let Some(group) = self.roster.groups.get(index) {
             let key = group_key(&group.id);
             let group_id = group.id.clone();
+            if leaving.as_deref() != Some(key.as_str())
+                && let Some(prev) = leaving
+                && let Some(chat) = self.chats.get_mut(&prev)
+            {
+                chat.quote = None;
+            }
             if let Some(chat) = self.chats.get_mut(&key) {
                 chat.unread = 0;
-                chat.quote = None;
             }
             self.restore_draft(&key, cx);
             self.refresh_group_task_bar(&group_id);

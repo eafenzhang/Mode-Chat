@@ -78,7 +78,7 @@ function Probe-One([string]$file) {
     }
 
     # --- 3) 左栏选中绿带的 y 区间 ----------------------------------------
-    # 「选中 12」和「选中 13」在标题文字上量不出差别（都是两个字符），
+    # 「选中 12」和「选中 13」在标题度量不出差别（都是两个字符），
     # 但选中项有整行绿底，行位置不同 —— 用它判当前在哪个会话。
     $bandTop = -1
     $bandBottom = -1
@@ -94,12 +94,34 @@ function Probe-One([string]$file) {
       }
     }
 
+    # --- 4) 引用条（O-5）-------------------------------------------------
+    # 上面三组量都看不见它：引用条是 composer 顶部一条 28px 横条，颜色是
+    # chip_bg（浅色主题 0xE8E8E8 = 232,232,232），不在右栏也不产生绿边。
+    # 拿 panel/exactGreen 判引用条会得到「有无两种状态同读数」的假通过。
+    #
+    # 只扫 composer 上方 200px、中栏 x 区间：横幅要成片（>=100 像素/行）才算，
+    # 文本抗锯齿偶尔出现同色像素不会误判成条。
+    $quoteBandTop = -1
+    $quoteBandBottom = -1
+    for ($y = [Math]::Max(0, $h - 200); $y -lt $h; $y++) {
+      $rowHits = 0
+      for ($x = 260; $x -lt [Math]::Max(261, $w - 350); $x++) {
+        $c = $bmp.GetPixel($x, $y)
+        if ($c.R -eq 232 -and $c.G -eq 232 -and $c.B -eq 232) { $rowHits++ }
+      }
+      if ($rowHits -ge 100) {
+        if ($quoteBandTop -lt 0) { $quoteBandTop = $y }
+        $quoteBandBottom = $y
+      }
+    }
+
     [pscustomobject]@{
       File        = Split-Path -Leaf $file
       Size        = "${w}x${h}"
       Panel       = if ($panelPresent) { "present (left=$panelLeft)" } else { 'ABSENT' }
       ExactGreen  = $exactGreen
       LeftBand    = if ($bandTop -ge 0) { "y=$bandTop..$bandBottom" } else { 'none' }
+      QuoteBar    = if ($quoteBandTop -ge 0) { "y=$quoteBandTop..$quoteBandBottom h=$($quoteBandBottom - $quoteBandTop + 1)" } else { 'ABSENT' }
     }
   } finally {
     $bmp.Dispose()
@@ -126,8 +148,8 @@ $results = @()
 foreach ($f in $files) {
   $r = Probe-One $f
   $results += $r
-  Write-Output ('{0,-34} {1,-10} panel={2,-22} exactGreen={3,-6} leftBand={4}' -f `
-      $r.File, $r.Size, $r.Panel, $r.ExactGreen, $r.LeftBand)
+  Write-Output ('{0,-34} {1,-10} panel={2,-22} exactGreen={3,-6} leftBand={4,-14} quoteBar={5}' -f `
+      $r.File, $r.Size, $r.Panel, $r.ExactGreen, $r.LeftBand, $r.QuoteBar)
 }
 
 Write-Output ''
@@ -140,3 +162,6 @@ Write-Output '  4c-2/3 无高亮  panel=present  exactGreen = 0     leftBand 分
 Write-Output ''
 Write-Output '注意：panel 与 exactGreen 必须一起看。只看 exactGreen = 0，'
 Write-Output '      分不清「折叠」和「展开后已清」——这一轮 264-4b-3 就是这样误判的。'
+Write-Output ''
+Write-Output '判读（O-5 引用条）：只认 quoteBar —— 有引用条 = 一段 h≈28 的横带，无 = ABSENT。'
+Write-Output '      panel / exactGreen 对引用条没有区分力（两种状态读数相同），不要拿来判它。'
