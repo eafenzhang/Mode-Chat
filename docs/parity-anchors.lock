@@ -260,11 +260,11 @@ src/main.rs:18288|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mu
 src/main.rs:18597|fn approval_note(level: &str) -> &'static str {
 src/main.rs:18758|find_hit
 src/main.rs:18909|fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
+src/main.rs:19116|WecomRow::Compacting => mix(1)
 src/main.rs:19124|fn wechat_row_el(
 src/main.rs:19159|chat.transcript_limit.saturating_add(TRANSCRIPT_WINDOW);
 src/main.rs:19275|.relative()
 src/main.rs:19400|.child(block);
-src/main.rs:19416|WecomRow::Compacting => compaction_status_row().into_any_element()
 src/main.rs:19559|let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
 src/main.rs:19855|fn wechat_message_actions(
 src/main.rs:19883|.id(SharedString::from(format!("wecom-copy-{index}")))
@@ -294,10 +294,9 @@ src/main.rs:23891|body = body.child(ui::section(i18n::t("待办"))).child(card);
 src/main.rs:24108|"panel-history-{target}"
 src/main.rs:24164|this.settings_open = true;
 src/main.rs:243|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:24403|el.child(
 src/main.rs:2452|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:24647|&& message.attachments.is_empty()
-src/main.rs:25603|.children(self.mention_panel(cx))
+src/main.rs:24686|if chat.compacting == Some(true) {
+src/main.rs:25639|.id("composer-plus")
 src/main.rs:2798|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2816|fn finish_member(&mut self, member: &str) {
 src/main.rs:2846|struct BotFormState {
