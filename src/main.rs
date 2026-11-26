@@ -23804,7 +23804,11 @@ impl PilotApp {
 
         // ---- DS bot 右栏的其余分区 ----
         // 1) 待处理：审批 / 提问 / 表单
-        if pending > 0 {
+        //
+        // 高亮（点了「⋯ → 运行状态」）时即使三项都是 0 也要渲染：右栏已经开着的情况下，
+        // 「点了什么都不多出来」正是 O-2 要修的原始缺陷。基础卡里已经有「待处理」合计，
+        // 这三行是把它拆开后的增量信息，0 值本身也是有效信息（说明没有在等用户）。
+        if pending > 0 || highlighting {
             let mut pending_rows = vec![
                 ui::stat_row(i18n::t("审批"), chat.map(|c| c.permissions.len()).unwrap_or(0).to_string())
                     .into_any_element(),
