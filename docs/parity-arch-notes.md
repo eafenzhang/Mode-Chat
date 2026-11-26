@@ -739,3 +739,27 @@ stale(external)     指向 ds-bot / rpi-rust、本机够不到的
 三者之和才等于锁总数，**而且每一个都能从 `git diff` 里数出来对上**：`converted: 26` 加 `demoted: 6`、按内容重指 82 条，分别对应文档里被改写的行数。**能对上 git diff 的分解才是判据，自洽的等式不是。**
 
 **推论一条，适用于所有门禁**：报「A + B = C」之前，先问一句「A、B、C 里有没有两个是我从同一个循环里数出来的」。若是，这个等式证明的只是循环跑完了，不是内容对得上。
+
+### 18.14 门禁脚本必须有判决行——只有读数时，`bad=0` 会被当成通过
+
+`verify-arch-anchors.ps1` 原来只打印一行读数：
+
+```
+anchors=172  ok=120  bad=0  symbol-checked=33  skipped-external=52
+```
+
+**它有退出码**（`if ($bad.Count -gt 0) { exit 1 }`），所以 CI 能拦。但人读的时候看不出判决：`ok=120` 和 `anchors=172` 之间差 52，那 52 条是 `skipped-external`——本机没配外部树、根本没验。**看读数的人会以为「172 全过了」。**
+
+和 `parity` 的问题正好相反：那个有判决行，但 `checked` 变小会让判决假绿；这个读数是对的，但没人给判决。**两个都是「缺一样东西」，缺的不是同一样。**
+
+补上之后：
+
+```
+RESULT: all arch anchors resolve (172 anchors, 120 ok, 52 skipped-external not verifiable here)
+RESULT: FAIL (1 bad)
+```
+
+**措辞里必须带上 `skipped`。** 不写这 52，「全部解析」这句话就和 `ok=120` 对不上，下一轮还得有人重新数一遍。
+
+负向自测（往文档里塞一个越界的行号锚点）：`anchors=173  bad=1  RESULT: FAIL (1 bad)`、`EXIT=1`；删掉后回到 `EXIT=0`。**判决行跟着 `bad` 变，不是个常量。**
+

@@ -71,7 +71,14 @@ foreach ($m in [regex]::Matches($text, '`([A-Za-z0-9_\-/\.]+\.(?:rs|js|md)):(\d+
   $nearChecked++
   if (-not $hit) { $bad.Add("SYMBOL DRIFT $f`:$n 附近无 ``$sym``") }
 }
-Write-Output ''
+Write-Output ""
 Write-Output ("anchors={0}  ok={1}  bad={2}  symbol-checked={3}  skipped-external={4}" -f $pairs.Count, $ok, $bad.Count, $nearChecked, $skippedExternal)
 foreach ($b in $bad) { Write-Output "BAD $b" }
-if ($bad.Count -gt 0) { exit 1 }
+# 判决行：没有它只有读数。人扫一眼 bad=0 就以为通过，而 skipped-external 那部分
+# 既不在 ok 里也不在 bad 里。措辞里必须带上 skipped，否则 anchors 与 ok 的差额没人看。
+if ($bad.Count -gt 0) {
+  Write-Output ("RESULT: FAIL ({0} bad)" -f $bad.Count)
+  exit 1
+}
+Write-Output ("RESULT: all arch anchors resolve ({0} anchors, {1} ok, {2} skipped-external not verifiable here)" -f $pairs.Count, $ok, $skippedExternal)
+exit 0
