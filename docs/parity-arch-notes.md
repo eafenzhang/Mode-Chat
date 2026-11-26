@@ -41,7 +41,7 @@
 ### 1.2 上下文压缩（compaction）— 半成品（隐式已有，UI 无感知）
 - rpi 侧默认开启：`rpi-harness/src/types.rs:325`（`DEFAULT_COMPACTION_SETTINGS { enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000 }`）
 - MC 没有覆盖该配置：`src/rpi_engine.rs:1137`（`AgentHarnessOptions::default()`）到 `:1158` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
-- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:21697`（`compact_tokens`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
+- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 ``fn compact_tokens`（`src/main.rs`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
 - 也没有 `/compact` 手动触发入口
 - 分类：**补实现**。接一个事件 + 一个命令项即可，1～2 小时。
 
@@ -311,12 +311,12 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 
 | 功能点 | MC 现状（证据） | DS 现状（证据） | 判定 | 类型 |
 |---|---|---|---|---|
-| 多语言 | 只有中/英两档：`src/i18n.rs:12`（`set_lang` 只认 `"en"`，其余中文），下拉只有两项 `src/main.rs:12036`（`language_row`） | 7 种：`ds-bot/src/client/i18n.js:1695`（zh-TW/ja/ko/es/fr/de + 默认中英），另有 6 份 locale 各 2270～2278 行 | 缺失 | 补实现（体力活） |
+| 多语言 | 只有中/英两档：`src/i18n.rs:12`（`set_lang` 只认 `"en"`，其余中文），下拉只有两项 `src/main.rs:12037`（`fn language_row`） | 7 种：`ds-bot/src/client/i18n.js:1695`（zh-TW/ja/ko/es/fr/de + 默认中英），另有 6 份 locale 各 2270～2278 行 | 缺失 | 补实现（体力活） |
 | 语音朗读 | 0 命中（`tts`/`speech`/`voice` 在 `src` 全为 0） | `ds-bot/src/client/voice.js:81`（`VoiceMode`）、`ds-bot/src/client/speech.js`(152)、`ds-bot/src/client/read-page.js:22`（`readPage`） | 缺失 | 框架性（接系统 TTS） |
 | 手机端 / 远程配对 | 0 命中（`pairing`/`PairCode`/`mobile` 全为 0） | `link/src/pairing.ts:55`（`pairingUri`）、`ds-bot/src/host/phone.js:18`、`ds-bot/src/host/mobile.js:160`、`mobile/`（React Native 整套） | 缺失 | 框架性（独立子系统，v0.6） |
 | 学习卡（技能自学习） | 0 命中（`learning` 全为 0） | `ds-bot/src/client/learning-card.js:164`（`LearningTurnTail`）、`ds-bot/src/host/learning.js:296`（install） | 缺失 | 框架性 |
 | 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:14390`（`settings_page_feedback`，内容是一段静态格式化串 `:14392`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
-| 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wechat_theme.rs`(236)、`src/main.rs:12052`（`accent_row`） | `client/themes.js`(124) | 已有 | — |
+| 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wechat_theme.rs`(236)、`src/main.rs:12053`（`fn accent_row`） | `client/themes.js`(124) | 已有 | — |
 | 托盘 / 自启 / 自动更新 | 已有：`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs`(215) | 已有 | — |
 | 头像 / Bot 图标 | 已有：`src/avatar.rs`(262)、`bot_icon.rs`(120)、`agent_icons.rs`(70)、`brand_icons.rs`(307) | `client/avatar-library.js`(149)、`agent-logos.js`(52) | 已有 | — |
 | 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1030`（`FindState`）+ `:2859`（`find_dialog`）、隐私过滤 `:6530`、`src/rpi_engine.rs:1536`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
@@ -554,9 +554,9 @@ docs/prd-0.6.md
 **回路（每一步都是代码事实，不是推断）：**
 
 ```
-labels      src/main.rs:24082-24086  label = title(&session_id).unwrap_or(display_session_id)
-rename_id   src/main.rs:24089        rename_id = session_id.clone()      ← 与 label 同一个变量
-history     src/main.rs:24074        来自 self.sessions.history_of(&bot.id)
+labels      src/main.rs:24088-24092  label = title(&session_id).unwrap_or(display_session_id)
+rename_id   src/main.rs:24095        rename_id = session_id.clone()      ← 与 label 同一个变量
+history     src/main.rs:24080        来自 self.sessions.history_of(&bot.id)
 push_history src/main.rs:6846/7342/7550/24286  old_id = chat.session_id.clone()
 write       src/main.rs:9114         set_title(&session_id, &title)      ← 写的就是 rename_id
 ```
@@ -565,7 +565,7 @@ write       src/main.rs:9114         set_title(&session_id, &title)      ← 写
 
 这才是真正的边界：**`263-3` 成立是因为行上的 label 和改名按钮的 id 来自同一次 `history_of` 迭代**，不是因为「路径 key 的形态碰巧一致」。前者是结构保证，后者是运气。
 
-**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24126` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被 `src/main.rs:24076` 的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
+**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24132` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
 
 这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
 
