@@ -41,7 +41,7 @@
 ### 1.2 上下文压缩（compaction）— 半成品（隐式已有，UI 无感知）
 - rpi 侧默认开启：`rpi-harness/src/types.rs:325`（`DEFAULT_COMPACTION_SETTINGS { enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000 }`）
 - MC 没有覆盖该配置：`src/rpi_engine.rs:1137`（`AgentHarnessOptions::default()`）到 `:1158` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
-- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:21675`（`compact_tokens`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
+- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 `src/main.rs:21697`（`compact_tokens`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:847` 结构体、`:863` emit）不认识该事件
 - 也没有 `/compact` 手动触发入口
 - 分类：**补实现**。接一个事件 + 一个命令项即可，1～2 小时。
 
@@ -277,7 +277,7 @@
 
    本机实测两种拼写**同时存在**：`USERPROFILE` 是长名 `C:\Users\Administrator`，`TEMP` 是 8.3 短名 `C:\Users\ADMINI~1\...`。验收时隔离根建在 `TEMP` 下，于是 `titles` 的 key 带 `ADMINI~1`；生产默认走 `USERPROFILE`，key 带长名。
 
-   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:24054` 的 `filter(|id| live != id)` 判不等。
+   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:24076` 的 `filter(|id| live != id)` 判不等。
 
    表现是**改名静默失效**：弹窗能开、能保存、写盘成功、重启后名字没了，而 `set_title` 不报错。触发条件不是「将来上游换写法」，而是**同一台机器上两种来源混用**：在短名隔离根里改过名，再用默认根启动，名字就不见了。
 
@@ -498,6 +498,19 @@ bare-line anchors checked: 124  skipped(no file earlier on the line): 38  ambigu
 
 判据：重建锚点前后必须比对 `anchors checked` 的基数，掉数就是少扫，不是"干净了"。
 
+**补充：区间写法的锁代价。** 前半段是「自动重指会少扫」，这里方向相反——**写单点和写区间，对锁的影响不一样。**
+
+| 写法 | 落进锁的键 | 对锁的增量 |
+| --- | --- | --- |
+| `src/main.rs:205` | `src/main.rs:205` | +1 |
+| `src/main.rs:205-221` | `src/main.rs:205`、`src/main.rs:221` | **+2** |
+
+实测：产品在 PRD 里补了一句 `src/main.rs:205-221` 解释窗口宽度随右栏开合变化，`parity -Baseline WorkTree` 立刻报 `unlocked=2`；跑一次 `-UpdateAnchors` 后 `fingerprint` 从 380 变成 382。他写的只是「一个区间」，锁里却多出两条记录。
+
+**所以「重建锁」和「补一条锚点」不是一比一的关系。** 写区间的人以为加了一条，实际加了两条；反过来，代人重建锁的人如果只补其中一个端点，另一个端点会一直留在 `unlocked` 里——而 `unlocked` 是判失败的那一项，不是静默跳过。
+
+推论：**区间写法比单点贵，但并不比单点保护得更好**（理由见 18.10：终点的指纹往往没有区分力）。确实需要指整块代码时，写「起点行 + 块内一个符号名」比写「起点-终点」划算。
+
 ### 18.5 门禁扫哪些文档是写死的
 
 `verify-parity-anchors.ps1` 的 `$docs` 只有三个文件：
@@ -541,10 +554,10 @@ docs/prd-0.6.md
 **回路（每一步都是代码事实，不是推断）：**
 
 ```
-labels      src/main.rs:24060-24064  label = title(&session_id).unwrap_or(display_session_id)
-rename_id   src/main.rs:24067        rename_id = session_id.clone()      ← 与 label 同一个变量
-history     src/main.rs:24050        来自 self.sessions.history_of(&bot.id)
-push_history src/main.rs:6846/7342/7550/24264  old_id = chat.session_id.clone()
+labels      src/main.rs:24082-24086  label = title(&session_id).unwrap_or(display_session_id)
+rename_id   src/main.rs:24089        rename_id = session_id.clone()      ← 与 label 同一个变量
+history     src/main.rs:24074        来自 self.sessions.history_of(&bot.id)
+push_history src/main.rs:6846/7342/7550/24286  old_id = chat.session_id.clone()
 write       src/main.rs:9114         set_title(&session_id, &title)      ← 写的就是 rename_id
 ```
 
@@ -552,7 +565,7 @@ write       src/main.rs:9114         set_title(&session_id, &title)      ← 写
 
 这才是真正的边界：**`263-3` 成立是因为行上的 label 和改名按钮的 id 来自同一次 `history_of` 迭代**，不是因为「路径 key 的形态碰巧一致」。前者是结构保证，后者是运气。
 
-**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24104` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被 `src/main.rs:24054` 的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
+**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:24126` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被 `src/main.rs:24076` 的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
 
 这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
 
@@ -569,13 +582,13 @@ src/main.rs:3884   self.chat_detail = None;                 select_bot 清
 src/main.rs:4145   self.chat_detail = None;                 select_group 清
 src/main.rs:11255  self.chat_detail = None;                 set_right_panel(false) 清
 src/main.rs:16815  self.chat_detail = Some(..RunStatus..)   ← 唯一写入 Some 的地方
-src/main.rs:23698  self.chat_detail.as_ref()                唯一读取（决定是否画绿边）
-src/main.rs:24127  this.chat_detail = None;                 点「改名」跳设置页前清
+src/main.rs:23720  self.chat_detail.as_ref()                唯一读取（决定是否画绿边）
+src/main.rs:24149  this.chat_detail = None;                 点「改名」跳设置页前清
 ```
 
 **这条穷举能证明的事，比一张截图强：**
 
-1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:23697`-`:23700` 的 `matches!` 带 `if` 守卫）。
+1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:23719`-`:23722` 的 `matches!` 带 `if` 守卫）。
 2. **整个程序里只有 `src/main.rs:16815` 能把它设成 `Some`**，而那里只在点「⋯ → 运行状态」时执行。
 3. **三个清空点之外没有第四个写入者**，也没有从 `pilot-state.json` / `ui-prefs` 反序列化回来的路径——`chat_detail` 只挂在 `PilotApp` 上（`:3279`），`save_ui_prefs` 存的是 `muted / topmost / pinned_settings / right_panel_open` 四项，不含它（`src/main.rs:712`-`:718`）。
 
@@ -618,3 +631,54 @@ src/main.rs:24127  this.chat_detail = None;                 点「改名」跳�
 两条都源于同一件事：**锚点的识别只靠字符形态，不靠语义。** 所以文档里凡是长得像 `文件:数字`、`:数字`、`数字:数字` 的东西，都会被当成锚点处理。
 
 **这一节不动脚本。** 改正则去排除时间串（比如要求 `:` 前必须是行首或反引号）会把 `18.2` 那类裸行号的识别一起改坏，收益不抵风险。**规矩写在文档侧，成本为零。**
+### 18.10 区间终点被结构校验豁免，指纹又常常是 `}` —— 等于没有漂移保护
+
+18.4 说区间会被拆成两个端点。这里补另一半：**这两个端点的保护强度不一样。**
+
+`verify-parity-anchors.ps1` 的校验按顺序有这几关，区间终点在第二关就被放行了：
+
+```
+if ($start -lt 1 -or $start -gt $lines.Count) { OUT OF RANGE }
+if ($start -eq $rangeEnd -and $start -ne $positions[0]) { continue }   ← 终点在这里继续
+if ($line -eq '') { EMPTY LINE }
+elseif ($line -match '^[\(\)\[\]\{\};,]+$') { STRUCTURAL LINE }
+```
+
+**所以「锚点指到一行只有 `}` 的收尾行」这种明确坏锚点，起点会被拦、终点不会。** 而终点照样进锁、照样参与 `drifted` 比对——它的指纹就是那一行 `}`。
+
+`}` 在本仓是高频行：`src/main.rs` 共 26809 行，其中 1883 行整行只有一个 `}`。拿它当指纹，后果和 18.3 的重复行假一致完全一样：**位移之后指纹仍然相同，`drifted` 报不出来。**
+
+实测锁里 435 条，指纹恰为单字符 `}` 的 6 条，全部是区间终点：
+
+```
+ds-bot/src/host/schedules.js:86   src/backend.rs:194        src/computer_tools.rs:250
+src/data.rs:72                    src/main.rs:221           src/rpi_engine.rs:371
+```
+
+文档里的区间终点去重后 33 个，落在锁里的 29 个，其中 6 个（约两成）指纹是 `}`。指纹为纯结构性字符（只有括号/分号/逗号）的共 8 条；另有 3 条指纹是空串，对应 `src/automations.rs` 的 101、224 与 `src/cua_tree.rs` 的 320，那三行现在确实是空行（它们已不在文档里，只以 `stale-in-lock` 形式留在锁里，所以没被 `EMPTY LINE` 判错）。
+
+判据：**区间终点不能计进「已受保护的锚点」里。** 要让一条区间真的受保护，要么把终点改成「起始行 + 块内符号名」，要么另立一条指向块内有内容的一行（例如 `fn` 那一行本身）。
+
+### 18.11 门禁能证明脚本「存在且被跟踪」，证明不了它「能跑」
+
+`scripts/shot-probe.ps1` 在 `7731a3d` 进入仓库。入库时它是 **UTF-8 无 BOM**，里面有 686 个非 ASCII 字符，全是中文注释和判读提示。Windows PowerShell 5.1 在缺 BOM 时按系统 ANSI 代码页（本机 936 / GBK）解码，中文被拆成乱码字节，其中一部分吃掉换行，**整个脚本语法错误**，连 `param()` 都过不去。
+
+实测同一份内容，两种编码：
+
+```
+无 BOM  powershell -NoProfile -ExecutionPolicy Bypass -File <副本>.ps1 <图>  → EXIT=1
+        解析器报 Unexpected token ')'，同时把「4c-1 亮」显示成「4c-1 浜?」
+有 BOM  同一条命令（无管道直调）                                          → EXIT=0
+        正常输出 panel=present (left=953) / exactGreen=2248 / leftBand=y=84..139
+```
+
+两者去掉 BOM 与行尾差异后**逐字符相同**（137 行，`-ceq` 为 True），字节数差 3。
+
+**这不是「又一个人为失误」，是门禁的盲区：**
+
+- `anchor-gate.yml` 只跑三个锚点脚本，`shot-probe.ps1` 不在其中；就算在，CI 的 PowerShell 代码页也不保证与本机 5.1 一致；
+- 「被跟踪、能 diff、有哈希」这三件事都不会因为它跑不起来而失败。**仓库里可以有一个大家都以为是工具、实际一跑就崩的脚本，而全部门禁全绿。**
+
+判据：**带非 ASCII 的 `.ps1` 必须存 UTF-8 BOM，并且要有一条「无管道直调」的实跑记录**——`EXIT=0` 且输出里出现数字。`git show` 里能看到这个文件，什么都证明不了。
+
+顺带一条读退出码的规矩：脚本输出接进管道后，`$LASTEXITCODE` 取到的可能是管道末端命令的。同一份脚本，直调拿到 0、接管道拿到 1，两个数都「真」，但只有一个说明脚本自己。**判退出码要在无管道直调之后立刻取。**
