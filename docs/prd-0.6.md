@@ -218,11 +218,13 @@ Select-String -Path src\main.rs -Pattern 'wechat-welcome-suggestion-'
 ### 3.5 运行状态面板接回（grep + 截图）
 
 ```powershell
-Select-String -Path src\main.rs -Pattern 'chat-detail-run'
-# 期望：命中 1 处（chat_info_panel 里的渲染点 id）
-Select-String -Path src\main.rs -Pattern 'chat-detail-close'
-# 期望：命中 1 处（关闭按钮 id，清除 chat_detail）
+Select-String -Path src\main.rs -Pattern 'chat-detail-run'      # 期望 1（高亮容器的 id）
+Select-String -Path src\main.rs -Pattern 'chat-detail-close'    # 期望 0（关闭按钮已并入右上角折叠）
+Select-String -Path src\main.rs -Pattern 'detail-back'          # 期望 0（DetailPanel 的「返回」不该出现）
+Select-String -Path src\main.rs -Pattern 'chat_detail_panel'    # 期望 0（函数已删除）
 ```
+
+> `chat-detail-close` 的期望值是 **0**，不是 1：`dda719d` 决定删掉那个独立关闭按钮，因为基础卡右上角已有 `chat-info-collapse` 折叠按钮。前一版 PRD 在这里写「期望 1 处」与决定自相矛盾，按判据跑必然不过。
 
 截图（**判据四条，缺一条不算过**）：微信壳「⋯ → 运行状态」→ 右栏打开，基础卡带高亮
 1. **页面上只有一处「运行状态」字样**，且**不再有第二张统计卡**（`chat_detail_panel` 不得再返回 card）；
@@ -233,11 +235,22 @@ Select-String -Path src\main.rs -Pattern 'chat-detail-close'
 4. **高亮是瞬时状态，三个动作分别验**（缺一条不算过）：
    - **4a** 右栏已打开时点「⋯ → 运行状态」→ 基础卡出现 accent 描边；
    - **4b** 折叠右栏再展开 → 描边消失（`set_right_panel(false)` 必须清 `chat_detail`）；
-   - **4c** 切到另一会话再切回 → 描边不回来（会话切换入口必须清 `chat_detail`）。
+   - **4c** 切到另一个 **Bot**（或群）再切回 → 描边不回来。**判据按「换 Bot」验，不按「换会话」验**——`RunStatus` 的 key 是 bot 级 `bot:<id>`，换 session 时 key 不变，测出来的「不亮」是假象。
 
-**4b / 4c 的实现要求（`727a626` 尚未满足）**：`chat_detail = None` 全仓只有 3 处——初始化（`3775`）、改名按钮（`24110`）、以及 O-2 接回时的清理；**`set_right_panel` 的 `false` 分支和会话切换入口都没有清**。所以按现在的代码，4b 和 4c 都会失败：高亮不是「用户此刻在看」的瞬时状态，而是会跨折叠、跨会话残留的设置。
+**4b / 4c 的实现要求（`e659eb7` 已补齐，实测见下）**：`chat_detail` 是 `Option<SettingsDetail>`，`RunStatus` 的 key 是 **bot 级** `bot:<id>`（`bot_key()`，`:16337`），**不含 session_id**。所以「切会话」时 key 不变，`matches!` 一直命中——这一条不看代码会想当然以为「切走就自然不亮」。
+
+必须清空 `chat_detail` 的 **4 个入口**（当前 `chat_detail = None` 实测 4 处，全部命中）：
+
+| 入口 | 行 | 覆盖判据 |
+| --- | --- | --- |
+| `set_right_panel(false)` | `11255` | 4b 折叠 |
+| `select_bot` | `3884` | 4c 切 Bot |
+| `select_group` | `4145` | 4c 切群 |
+| 改名按钮（切设置页前） | `24118` | 防止从设置返回时带出旧高亮 |
 
 **为什么必须清**：高亮表达的是「用户刚刚点了运行状态、正在看这一份」。留着它，用户下次展开右栏会看到一个说不清来源的描边；切回旧会话又会亮起来，看起来像「这个会话有某种状态」。**瞬时 UI 状态不能写成持久字段的副作用。**
+
+> `switch_to_history_session`（`24243`）与 `new_session_for_selected`（`6830`）**不需要**单独清：前者接管「最近会话」行切换，后者是 Ctrl+N 新建会话，两者的 `RunStatus` key 都是 `bot:<id>`，而它们不改变 Bot 选择。**但如果哪天 `RunStatus` 的 key 改成带 session_id，这两处就必须补清**——写在这里，作为将来改 key 时的检查点。
 
 **本版拍板：删掉第二张卡，改成给基础卡加高亮（`8c74a19` 那版「只留三行」已撤回）**
 
