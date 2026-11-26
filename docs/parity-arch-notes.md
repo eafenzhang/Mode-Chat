@@ -505,6 +505,9 @@ bare-line anchors checked: 124  skipped(no file earlier on the line): 38  ambigu
 | `src/main.rs:205` | `src/main.rs:205` | +1 |
 | `src/main.rs:205-221` | `src/main.rs:205`、`src/main.rs:221` | **+2** |
 
+
+**区间锚点在锁里是两条记录，重建锁时要一起处理。** 只补起点不补终点，终点会一直留在 `unlocked` 里——而 `unlocked` 是判失败的那一项，不是静默跳过。
+
 实测：产品在 PRD 里补了一句 `src/main.rs:205-221` 解释窗口宽度随右栏开合变化，`parity -Baseline WorkTree` 立刻报 `unlocked=2`；跑一次 `-UpdateAnchors` 后 `fingerprint` 从 380 变成 382。他写的只是「一个区间」，锁里却多出两条记录。
 
 **所以「重建锁」和「补一条锚点」不是一比一的关系。** 写区间的人以为加了一条，实际加了两条；反过来，代人重建锁的人如果只补其中一个端点，另一个端点会一直留在 `unlocked` 里——而 `unlocked` 是判失败的那一项，不是静默跳过。
