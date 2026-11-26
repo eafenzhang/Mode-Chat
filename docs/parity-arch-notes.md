@@ -269,6 +269,24 @@
 2. **隐私 Bot 文件隔离**（4.2）——改动会碰所有工具的 `before_tool_call` 路径，需回归全部工具。但这是安全承诺，不能拖。
 3. **IM 抽象层重构**（5.3）——`im_runtime.rs` 2498 行、`im_service.rs` 782 行，抽 trait 会动现有微信/企微两条已跑通通道，回归成本高。建议先写飞书适配器、**不动**微信/企微代码路径，用注册表旁挂。
 4. **数据结构改动必须有迁移**（群目标加 acceptance、多档位、浏览器 profile）——按 goal 规则"旧 `~/.mode-bot` 数据不得丢失"，每个字段按"缺失即默认"处理，不允许收紧 `deny_unknown_fields`。
+5. **会话显示名的键是「路径字符串」，不是路径身份**（2026-11-26 记录，v0.6 不修，留给下一版）——`titles` 用完整 jsonl 路径当 key（`src/state.rs:143` 的 `title()`、`src/state.rs:148` 的 `set_title()`），`sessions` / `history` 存的也是同一份路径串（`src/backend.rs:1213` 的 `session_id: path`），而这份路径的**拼写**取决于 `data_root()`（`src/data.rs:2217`）当时从哪里拿到根：
+
+   - `BOT_PILOT_DATA_ROOT` 给什么就用什么；
+   - 否则 `MODE_DATA_BASE_DIR`；
+   - 否则 `home_dir()` 拼 `.mode-bot/.mode`（`home_dir()` 取 `USERPROFILE`，再退 `HOME`）。
+
+   本机实测两种拼写**同时存在**：`USERPROFILE` 是长名 `C:\Users\Administrator`，`TEMP` 是 8.3 短名 `C:\Users\ADMINI~1\...`。验收时隔离根建在 `TEMP` 下，于是 `titles` 的 key 带 `ADMINI~1`；生产默认走 `USERPROFILE`，key 带长名。
+
+   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:24054` 的 `filter(|id| live != id)` 判不等。
+
+   表现是**改名静默失效**：弹窗能开、能保存、写盘成功、重启后名字没了，而 `set_title` 不报错。触发条件不是「将来上游换写法」，而是**同一台机器上两种来源混用**：在短名隔离根里改过名，再用默认根启动，名字就不见了。
+
+   判据：**键必须有归一化，不能靠上游路径字符串恰好一致**。两种修法，v0.6 都不做：
+
+   - 存储层归一化：写入/查找前统一规范化（展开短名、统一分隔符、大小写口径），并在 `StateFile` 里加 `version` 迁移把老 key 重写一次；
+   - 或改用**真正的身份**当 key（会话文件 stem 里的 session uuid），路径只留作「怎么打开它」的值。后者更好：uuid 不随目录拼写变化，也天然消除「同一会话两个别名各存一条 title」。
+
+   连带一条同源的小问题：`titles` **从不清理**——全仓只有 `set_title` 里那一处 `remove`（`src/state.rs:151`），会话文件删了、Bot 删了都不回收。量很小（每条一个短串），但根因和上面一样：**把路径当身份用，就没有可靠的生命周期**。
 
 ---
 
