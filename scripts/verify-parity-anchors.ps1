@@ -215,6 +215,7 @@ if ($malformed -gt 0) { Write-Output "malformed anchors (outside backticks, unch
 # 不跨行继承（会串到上一段/上一列提到的文件上），同一行前面没有文件名就跳过并计数。
 $combinedRx = [regex]'`([A-Za-z0-9_./\\-]+\.(?:rs|js|mjs|md|json|yml|toml)):(\d+(?:/\d+)*)(?:-\d+)?`|`:(\d+(?:/\d+)*)(?:-\d+)?`'
 $bareChecked = 0
+$bareAmbiguous = 0
 $bareUnresolved = 0
 foreach ($doc in $docs) {
   $docPath = Resolve-DocPath $doc
@@ -222,14 +223,27 @@ foreach ($doc in $docs) {
     if ($line -notmatch '`:') { continue }
     $currentFile = $null
     $currentFull = $null
+    # 本行在当前位置之前出现过几个**不同**的文件。>1 说明这行的裸行号归属
+    # 是「取最近的」而不是「取语义上对的」，可能被插在中间的引用带跑：
+    # prd-0.6.md 的 O-3 行就这样把 :25011/:25017 归给了 tool_render.rs，
+    # 这次因为越界才报错；行数够长就会静默指到无关代码。只计数、不判失败
+    # （文档写法本身没错，错在归属靠猜），把数字摆出来让它别再是隐形的。
+    $filesBefore = New-Object System.Collections.Generic.List[string]
     foreach ($m in $combinedRx.Matches($line)) {
       if ($m.Groups[1].Success) {
         $currentFile = $m.Groups[1].Value.Trim()
         $currentFull = $m.Groups[1].Value.Trim()
+        if (-not $filesBefore.Contains($currentFile)) { $filesBefore.Add($currentFile) }
         continue
       }
       # 裸行号：归属同一行内紧邻其前的完整锚点文件
       if (-not $currentFile) { $bareUnresolved++; continue }
+      if ($filesBefore.Count -gt 1) {
+        $bareAmbiguous++
+        if ($bareAmbiguous -le 10) {
+          Write-Output "  [ambiguous] $doc :$($m.Groups[3].Value) 归给 $currentFile（本行另有 $((($filesBefore | Where-Object { $_ -ne $currentFile }) -join ', '))），语义归属需人工核"
+        }
+      }
       $full = Resolve-Path3 $currentFile
       if (-not $full) { $bareUnresolved++; continue }
       $lines = [System.IO.File]::ReadAllLines($full)
@@ -252,7 +266,7 @@ foreach ($doc in $docs) {
     }
   }
 }
-Write-Output "bare-line anchors checked: $bareChecked  skipped(no file earlier on the line): $bareUnresolved"
+Write-Output "bare-line anchors checked: $bareChecked  skipped(no file earlier on the line): $bareUnresolved  ambiguous-file: $bareAmbiguous"
 
 # --- 邻近符号校验：锚点后面的 `（…）` 标签里写的符号必须真的在附近 ---------------
 # 挡的是「指到一段无关但合法的代码」——这类漂移行非空、也不是纯括号，前两道检查都放过。
