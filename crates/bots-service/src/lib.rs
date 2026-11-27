@@ -16,6 +16,7 @@ pub mod bot_text;
 pub mod command;
 pub mod commands;
 pub mod conversation;
+pub mod dingtalk;
 pub mod gate;
 pub mod heartbeat;
 pub mod http;

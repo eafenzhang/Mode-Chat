@@ -88,7 +88,7 @@
 
 ### 2.4 Bot 私有记忆面板 — 半成品（缺页面）
 - DS：`ds-bot/src/client/memory-panel.js:325`（`MemoryDialog`，文件 449 行）
-- MC：只有团队记忆页 `src/main.rs:15071`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16374`（`group_memory_section`）
+- MC：只有团队记忆页 `src/main.rs:15131`（`settings_page_team_memory`）和群记忆区 `src/main.rs:16434`（`group_memory_section`）
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
@@ -188,7 +188,7 @@
 
 ### 7.3 心跳 — 已有
 - 规则：`crates/bots-service/src/heartbeat.rs`（240 行，`is_heartbeat_due` / `pick_heartbeat_conversation`）
-- 宿主：`src/im_heartbeat.rs:22`（`heartbeat_conversations` 会话投影）、`src/im_runtime.rs:520`（`start_heartbeat_scheduler`）、`:547`（`tick_heartbeats`）
+- 宿主：`src/im_heartbeat.rs:22`（`heartbeat_conversations` 会话投影）、`src/im_runtime.rs:678`（`start_heartbeat_scheduler`）、`:547`（`tick_heartbeats`）
 - 分类：无需改动。
 
 ---
@@ -342,7 +342,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 11 | Main bot | Chief 身份与降级规则 | 已有 | `src/data.rs:88`、`:590` | `ds-bot/src/host/roster.js`(900) |
 | 12 | Main bot | 管理其它 Bot/群（工具化） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:325/363/496/526/590` |
 | 13 | 群聊 | 建群/改群/删群 | 已有 | `src/data.rs:1842`（create_group）、`src/main.rs:3793` | `ds-bot/src/host/groups.js`(1885) |
-| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:19829`（route_group_members） | `ds-bot/src/host/groups.js` |
+| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:19889`（route_group_members） | `ds-bot/src/host/groups.js` |
 | 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:246`、`src/backend.rs:1512` | `ds-bot/src/host/tools.js` |
 | 16 | 群聊 | 群目标（阶段） | 半成品 | `crates/bot-team/src/goal.rs:53/64` | `ds-bot/src/host/goals.js:670` |
 | 17 | 群聊 | 目标验收标准 pass/rework | 缺失 | 0 命中 | `ds-bot/src/host/goals.js:760/767` |
@@ -366,7 +366,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 35 | IM | 飞书 / Lark | 缺失 | 只有枚举名 `crates/bots-service/src/lib.rs:68` | `ds-bot/src/host/im/platforms/feishu.js`(383) |
 | 36 | IM | 钉钉 | 缺失 | 只有枚举名 `crates/bots-service/src/lib.rs:72` | `ds-bot/src/host/im/platforms/dingtalk.js`(236) |
 | 37 | IM | QQ / Telegram / Discord / Slack | 缺失/下线 | `crates/bots-service/src/lib.rs:59`（telegram/discord 标 retired） | `ds-bot/src/host/im/platforms/qq.js`(238) 等 |
-| 38 | IM | 群激活策略 / 群审批 / 心跳 | 已有 | `src/im.rs:195/219/228`、`src/im_runtime.rs:520` | `ds-bot/src/host/im/index.js` |
+| 38 | IM | 群激活策略 / 群审批 / 心跳 | 已有 | `src/im.rs:195/219/228`、`src/im_runtime.rs:678` | `ds-bot/src/host/im/index.js` |
 | 39 | 连接器 | 本地 MCP（16 个，stdio） | 已有 | `crates/connectors-service/src/lib.rs:43`（CATALOG） | `ds-bot/src/host/connectors/catalog.js:20` |
 | 40 | 连接器 | 远程 MCP（HTTP/SSE） | 缺失 | `src/mcp_host.rs:1`（只 stdio） | `ds-bot/src/host/connectors/index.js` |
 | 41 | 连接器 | OAuth 授权链路 | 缺失 | `crates/connectors-service/src/lib.rs:42`（注释明说不做） | `ds-bot/src/host/connectors/oauth.js`(177) |

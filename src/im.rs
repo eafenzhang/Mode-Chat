@@ -108,6 +108,39 @@ pub fn create_wecom_bot_named(data_root: &Path, name: &str) -> Result<BotConfig,
     )
 }
 
+/// 新建钉钉 bot（草稿）：凭据由创建页「完成」时写入。
+/// 空名回落默认「钉钉 Bot」。
+pub fn create_dingtalk_bot_named(data_root: &Path, name: &str) -> Result<BotConfig, String> {
+    let name = name.trim();
+    create_draft_bot(
+        data_root,
+        BotProvider::Dingtalk,
+        if name.is_empty() { "钉钉 Bot" } else { name },
+    )
+}
+
+/// 写钉钉凭据：client_id 进 config，secret 走 TokenVault（同企微 secret 通道）。
+pub fn set_dingtalk_credentials(
+    data_root: &Path,
+    bot_id: &str,
+    client_id: &str,
+    secret: &str,
+) -> Result<(), String> {
+    let client_id = client_id.trim();
+    let secret = secret.trim();
+    if client_id.is_empty() || secret.is_empty() {
+        return Err("Client ID 与 Client Secret 不能为空".to_string());
+    }
+    let mut bot = bot(data_root, bot_id)?.ok_or_else(|| format!("Bot 不存在：{bot_id}"))?;
+    bot.dingtalk_client_id = Some(client_id.to_string());
+    service_with_vault(data_root).save_bot(&BotSaveParams {
+        bot,
+        credential_value: Some(secret.to_string()),
+        webhook_secret_value: None,
+    })?;
+    Ok(())
+}
+
 fn create_draft_bot(
     data_root: &Path,
     provider: BotProvider,

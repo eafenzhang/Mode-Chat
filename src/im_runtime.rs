@@ -58,6 +58,9 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::im_service::{BindCodeStore, ReqwestHttpPort, TokenLoader, TokenVault, now_ms};
+use bots_service::dingtalk;
+use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::Message;
 
 /// 按数据根读 bots state/config，找桌面任务的 IM 镜像目标。
 fn mirror_targets_for(
@@ -106,6 +109,14 @@ struct RunningWecom {
     outbound: UnboundedSender<Value>,
 }
 
+/// 钉钉 Stream 长连接运行句柄（与企微同构：锁 + fingerprint 对齐 + abort 句柄）。
+struct RunningDingtalk {
+    signal: AbortSignal,
+    task: tokio::task::JoinHandle<()>,
+    fingerprint: u64,
+    _lock: Option<BotRuntimeLock>,
+}
+
 /// 微信轮询 / 企微长连接运行时管理器。
 pub struct ImRuntimeManager {
     data_root: std::path::PathBuf,
@@ -115,6 +126,7 @@ pub struct ImRuntimeManager {
     statuses: WeixinStatusRegistry,
     running: Mutex<HashMap<String, RunningLoop>>,
     running_wecom: Mutex<HashMap<String, RunningWecom>>,
+    running_dingtalk: Mutex<HashMap<String, RunningDingtalk>>,
     heartbeat_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stopped: AtomicBool,
 }
@@ -134,6 +146,7 @@ impl ImRuntimeManager {
             statuses: WeixinStatusRegistry::new(),
             running: Mutex::new(HashMap::new()),
             running_wecom: Mutex::new(HashMap::new()),
+            running_dingtalk: Mutex::new(HashMap::new()),
             heartbeat_task: Mutex::new(None),
             stopped: AtomicBool::new(false),
         })
@@ -288,10 +301,155 @@ impl ImRuntimeManager {
             self.start_loop(bot);
         }
         self.refresh_wecom()?;
+        self.refresh_dingtalk()?;
         Ok(())
     }
 
     /// 对齐企微长连接：启用且配置/secret 未变的保留，其余重启或停止。
+    /// 对齐钉钉 Stream 连接：启用且配置/secret 未变的保留，其余重启或停止。
+    fn refresh_dingtalk(self: &Arc<Self>) -> Result<(), String> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let config = BotsRepo::new(&self.data_root).read_config()?;
+        let desired: Vec<(BotConfig, Option<String>)> = config
+            .bots
+            .into_iter()
+            .filter(|bot| bot.enabled && bot.provider == BotProvider::Dingtalk)
+            .filter(|bot| {
+                bot.dingtalk_client_id
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+            .map(|bot| {
+                let secret = self.tokens.load(&bot.id);
+                (bot, secret)
+            })
+            .collect();
+        let desired_ids: Vec<String> = desired.iter().map(|(bot, _)| bot.id.clone()).collect();
+        let mut to_start = Vec::new();
+        {
+            let mut running = self
+                .running_dingtalk
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let stale: Vec<String> = running
+                .keys()
+                .filter(|bot_id| !desired_ids.contains(bot_id))
+                .cloned()
+                .collect();
+            for bot_id in stale {
+                if let Some(entry) = running.remove(&bot_id) {
+                    entry.signal.abort();
+                    entry.task.abort();
+                }
+                self.statuses.remove(&bot_id);
+            }
+            for (bot, secret) in desired {
+                let fingerprint = dingtalk_fingerprint(&bot, secret.as_deref());
+                match running.get(&bot.id) {
+                    Some(entry) if entry.fingerprint == fingerprint && !entry.task.is_finished() => {}
+                    Some(_) => {
+                        if let Some(entry) = running.remove(&bot.id) {
+                            entry.signal.abort();
+                            entry.task.abort();
+                        }
+                        self.statuses.remove(&bot.id);
+                        to_start.push((bot, secret));
+                    }
+                    None => to_start.push((bot, secret)),
+                }
+            }
+        }
+        for (bot, secret) in to_start {
+            if self.stopped.load(Ordering::SeqCst) {
+                break;
+            }
+            self.start_dingtalk_loop(bot, secret);
+        }
+        Ok(())
+    }
+
+    fn start_dingtalk_loop(self: &Arc<Self>, bot: BotConfig, secret: Option<String>) {
+        let bot_id = bot.id.clone();
+        let Some(client_id) = bot
+            .dingtalk_client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            self.set_wecom_status(&bot_id, "error", Some("钉钉 Client ID 未配置".to_string()));
+            return;
+        };
+        let Some(client_secret) = secret.filter(|value| !value.trim().is_empty()) else {
+            self.set_wecom_status(&bot_id, "error", Some("钉钉 Client Secret 未配置".to_string()));
+            return;
+        };
+        let fingerprint = dingtalk_fingerprint(&bot, Some(&client_secret));
+        let lock_root = self.data_root.join("v2").join("bots-runtime-locks");
+        let lock = match acquire_bot_runtime_lock(&lock_root, "dingtalk-stream", &client_id) {
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) => {
+                self.set_wecom_status(
+                    &bot_id,
+                    "handled_elsewhere",
+                    Some("钉钉连接由另一个 Mode 窗口处理".to_string()),
+                );
+                return;
+            }
+            Err(error) => {
+                im_log!("[im] 钉钉运行时锁失败 bot={bot_id}: {error}");
+                None
+            }
+        };
+        self.set_wecom_status(&bot_id, "connecting", None);
+        let signal = AbortSignal::new();
+        let statuses = self.statuses.clone();
+        let log_bot_id = bot.id.clone();
+        let handler_bot = bot.clone();
+        let http = Arc::clone(&self.http) as Arc<dyn HttpJsonPort>;
+        let ops: Arc<dyn BotTurnOps> = turn_ops(&self.data_root);
+        let sink: Arc<dyn BotReplySink> = Arc::new(DingtalkReplySink::new());
+        let inner: Arc<dyn WeixinMessageHandler> = Arc::new(
+            ImWeixinHandler::new(
+                self.data_root.clone(),
+                handler_bot,
+                Arc::clone(&self.bind_codes),
+                ops,
+                Arc::clone(&sink),
+                Arc::clone(&self.http) as Arc<dyn HttpJsonPort>,
+            )
+            .with_provider_label("dingtalk"),
+        );
+        let loop_signal = signal.clone();
+        let task = tokio::spawn(async move {
+            dingtalk_stream_loop(
+                log_bot_id,
+                client_id,
+                client_secret,
+                http,
+                inner,
+                statuses,
+                loop_signal,
+            )
+            .await;
+        });
+        let mut running = self
+            .running_dingtalk
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        running.insert(
+            bot.id.clone(),
+            RunningDingtalk {
+                signal,
+                task,
+                fingerprint,
+                _lock: lock,
+            },
+        );
+    }
+
     fn refresh_wecom(self: &Arc<Self>) -> Result<(), String> {
         if self.stopped.load(Ordering::SeqCst) {
             return Ok(());
@@ -821,6 +979,280 @@ fn wecom_fingerprint(bot: &BotConfig, secret: Option<&str>) -> u64 {
     }
     feed(secret.unwrap_or_default().as_bytes());
     hash
+}
+
+/// 钉钉指纹：配置或 secret 变了就重启连接。
+fn dingtalk_fingerprint(bot: &BotConfig, secret: Option<&str>) -> u64 {
+    let mut hash = config_fingerprint(bot);
+    hash = hash
+        .wrapping_mul(1_099_511_628_211)
+        .wrapping_add(secret.unwrap_or_default().len() as u64);
+    hash
+}
+
+/// 钉钉状态条（与企微同一张注册表，provider 标 dingtalk 供 UI 区分）。
+fn set_dingtalk_status(
+    statuses: &WeixinStatusRegistry,
+    bot_id: &str,
+    status: &'static str,
+    message: Option<String>,
+) {
+    let mut entry = WeixinRuntimeStatus::new(bot_id, status, message);
+    entry.provider = "dingtalk";
+    entry.last_update_at = Some(now_ms());
+    statuses.set(entry);
+}
+
+/// 钉钉回复链：sessionWebhook 直发（入站时把 webhook 存进 context_token）。
+struct DingtalkReplySink;
+
+impl DingtalkReplySink {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl BotReplySink for DingtalkReplySink {
+    fn send_reply<'a>(
+        &'a self,
+        _bot_id: &'a str,
+        _conversation_key: &'a str,
+        context_token: Option<&'a str>,
+        text: &'a str,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let Some(webhook) = context_token.filter(|value| !value.is_empty()) else {
+                return Err("没有回复通道（sessionWebhook 缺失）".to_string());
+            };
+            let request = bots_service::http::OutboundHttpRequest {
+                url: webhook.to_string(),
+                headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+                body: dingtalk::webhook_reply_body(text).to_string(),
+                timeout: std::time::Duration::from_secs(10),
+            };
+            let port = ReqwestHttpPort::default();
+            let response = port.post_json(&request).await?;
+            if response.status >= 400 {
+                return Err(format!("钉钉 webhook 回复失败（HTTP {}）", response.status));
+            }
+            Ok(())
+        })
+    }
+}
+
+/// gateway/connections/open：拿 WS endpoint 与注册 ticket。
+async fn dingtalk_gateway_open(
+    http: &dyn HttpJsonPort,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<(String, String), String> {
+    let request = bots_service::http::OutboundHttpRequest {
+        url: dingtalk::GATEWAY_OPEN_URL.to_string(),
+        headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+        body: dingtalk::gateway_open_body(client_id, client_secret).to_string(),
+        timeout: std::time::Duration::from_secs(10),
+    };
+    let response = http.post_json(&request).await?;
+    let endpoint = response
+        .payload
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let ticket = response
+        .payload
+        .get("ticket")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if endpoint.is_empty() || ticket.is_empty() {
+        return Err(format!(
+            "钉钉 gateway 响应缺 endpoint/ticket（HTTP {}）",
+            response.status
+        ));
+    }
+    Ok((endpoint, ticket))
+}
+
+/// 钉钉 Stream 长连接：断线退避重连，EVENT → 统一入站 handler。
+async fn dingtalk_stream_loop(
+    bot_id: String,
+    client_id: String,
+    client_secret: String,
+    http: Arc<dyn HttpJsonPort>,
+    handler: Arc<dyn WeixinMessageHandler>,
+    statuses: WeixinStatusRegistry,
+    signal: AbortSignal,
+) {
+    let ping_interval = std::time::Duration::from_millis(dingtalk::PING_INTERVAL_MS);
+    let mut dedupe: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        if signal.is_aborted() {
+            return;
+        }
+        set_dingtalk_status(&statuses, &bot_id, "connecting", None);
+        let (endpoint, ticket) =
+            match dingtalk_gateway_open(http.as_ref(), &client_id, &client_secret).await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    set_dingtalk_status(&statuses, &bot_id, "reconnecting", Some(error));
+                    signal.wait_for(5_000).await;
+                    continue;
+                }
+            };
+        let ws = match tokio_tungstenite::connect_async(&endpoint).await {
+            Ok((ws, _)) => ws,
+            Err(error) => {
+                set_dingtalk_status(
+                    &statuses,
+                    &bot_id,
+                    "reconnecting",
+                    Some(format!("WS 连接失败：{error}")),
+                );
+                signal.wait_for(5_000).await;
+                continue;
+            }
+        };
+        let (mut writer, mut reader) = ws.split();
+        let register = dingtalk::register_frame(&ticket, &client_id, &req_id());
+        if let Err(error) = writer.send(Message::Text(register.to_string())).await {
+            set_dingtalk_status(
+                &statuses,
+                &bot_id,
+                "reconnecting",
+                Some(format!("注册帧发送失败：{error}")),
+            );
+            signal.wait_for(3_000).await;
+            continue;
+        }
+        // 等 REGISTER:ACK（最长 10s）。
+        let mut registered = false;
+        for _ in 0..3 {
+            let frame = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                reader.next(),
+            )
+            .await
+            {
+                Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<Value>(&text).ok(),
+                _ => None,
+            };
+            if matches!(frame.as_ref().map(dingtalk::frame_type), Some("REGISTER:ACK")) {
+                registered = true;
+                break;
+            }
+        }
+        if !registered {
+            set_dingtalk_status(
+                &statuses,
+                &bot_id,
+                "reconnecting",
+                Some("REGISTER:ACK 超时".to_string()),
+            );
+            signal.wait_for(3_000).await;
+            continue;
+        }
+        im_log!("[im] 钉钉 Stream 已注册 bot={bot_id}");
+        set_dingtalk_status(&statuses, &bot_id, "connected", None);
+        // 消息循环：窗口内没有下行就主动 PING。
+        loop {
+            if signal.is_aborted() {
+                return;
+            }
+            let frame = match tokio::time::timeout(ping_interval, reader.next()).await {
+                Err(_elapsed) => {
+                    let _ = writer
+                        .send(Message::Text(dingtalk::ping_frame(&req_id()).to_string()))
+                        .await;
+                    continue;
+                }
+                Ok(None) => break,
+                Ok(Some(Err(error))) => {
+                    set_dingtalk_status(
+                        &statuses,
+                        &bot_id,
+                        "reconnecting",
+                        Some(format!("WS 断开：{error}")),
+                    );
+                    break;
+                }
+                Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<Value>(&text).ok(),
+                Ok(Some(Ok(_))) => continue,
+            };
+            let Some(frame) = frame else { continue };
+            match dingtalk::frame_type(&frame) {
+                "PING" => {
+                    let _ = writer
+                        .send(Message::Text(
+                            serde_json::json!({
+                                "frameType": "system",
+                                "type": "PONG",
+                                "contentType": "application/json"
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                }
+                "PING:ACK" | "REGISTER:ACK" => {}
+                "EVENT" => {
+                    let req_id_value = frame
+                        .get("reqId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let _ = writer
+                        .send(Message::Text(
+                            dingtalk::event_ack_frame(&req_id_value).to_string(),
+                        ))
+                        .await;
+                    if let Some(event) = dingtalk::parse_message_event(&frame) {
+                        if !event.message_id.is_empty()
+                            && !dedupe.insert(event.message_id.clone())
+                        {
+                            continue;
+                        }
+                        let chat_type = if event.conversation_type == "1" {
+                            "private"
+                        } else {
+                            "group"
+                        };
+                        let message = WeixinInboundMessage {
+                            bot_id: bot_id.clone(),
+                            text: event.text,
+                            attachments: Vec::new(),
+                            actor: WeixinInboundActor {
+                                provider_user_id: event.sender_id,
+                                display_name: event.sender_nick,
+                                chat_type: chat_type.to_string(),
+                                chat_id: Some(event.conversation_id),
+                                provider_message_id: Some(event.message_id),
+                                provider_context_token: Some(event.session_webhook),
+                            },
+                        };
+                        if let Err(error) = handler.handle(&bot_id, &message).await {
+                            im_log!("[im] 钉钉回合失败 bot={bot_id}: {error}");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if signal.is_aborted() {
+            return;
+        }
+        signal.wait_for(3_000).await;
+    }
+}
+
+/// 轻量 reqId（时间戳 + 计数，无需 uuid 依赖）。
+fn req_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "req-{}-{}",
+        now_ms(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn set_wecom_status(

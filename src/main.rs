@@ -3239,6 +3239,9 @@ struct ImCreateView {
     draft_id: Option<String>,
     name: Entity<SimpleInput>,
     heartbeat: Entity<SimpleInput>,
+    /// 钉钉通道：Client ID 与 Client Secret（Stream 模式凭据）。
+    dingtalk_client_id: Entity<SimpleInput>,
+    dingtalk_secret: Entity<SimpleInput>,
     free_access: bool,
     group_activation: bots_service::BotGroupActivation,
     enabled: bool,
@@ -13848,27 +13851,37 @@ impl PilotApp {
         });
         let heartbeat = cx.new(|cx| SimpleInput::new("0", theme::ink_tertiary, cx));
         heartbeat.update(cx, |input, cx| input.set_content("0", cx));
+        let dingtalk_client_id = cx.new(|cx| {
+            SimpleInput::new(i18n::t("App Key（Client ID）"), theme::ink_tertiary, cx)
+        });
+        let dingtalk_secret =
+            cx.new(|cx| SimpleInput::new(i18n::t("App Secret"), theme::ink_tertiary, cx));
         let root = self.roster.data_root.clone();
-        let created = if provider == bots_service::BotProvider::Weixin {
-            im::create_weixin_bot_named(&root, "")
+        // 钉钉不扫码：没有草稿 bot，submit 时按表单创建并写凭据。
+        let draft_id = if provider == bots_service::BotProvider::Dingtalk {
+            None
         } else {
-            im::create_wecom_bot_named(&root, "")
-        };
-        let draft_id = match created {
-            Ok(bot) => {
-                let id = bot.id.clone();
-                if let Some(service) = im_service::handle() {
-                    if provider == bots_service::BotProvider::Weixin {
-                        service.start_weixin_qr(&id);
-                    } else {
-                        service.start_wecom_qr(&id);
+            let created = if provider == bots_service::BotProvider::Weixin {
+                im::create_weixin_bot_named(&root, "")
+            } else {
+                im::create_wecom_bot_named(&root, "")
+            };
+            match created {
+                Ok(bot) => {
+                    let id = bot.id.clone();
+                    if let Some(service) = im_service::handle() {
+                        if provider == bots_service::BotProvider::Weixin {
+                            service.start_weixin_qr(&id);
+                        } else {
+                            service.start_wecom_qr(&id);
+                        }
                     }
+                    Some(id)
                 }
-                Some(id)
-            }
-            Err(message) => {
-                self.toast(message, cx);
-                None
+                Err(message) => {
+                    self.toast(message, cx);
+                    None
+                }
             }
         };
         let handle = name.read(cx).focus_handle(cx);
@@ -13877,6 +13890,8 @@ impl PilotApp {
             draft_id,
             name,
             heartbeat,
+            dingtalk_client_id,
+            dingtalk_secret,
             free_access: true,
             group_activation: bots_service::BotGroupActivation::Disabled,
             enabled: true,
@@ -13944,7 +13959,9 @@ impl PilotApp {
                 })
             }
             None => {
-                if provider == bots_service::BotProvider::Weixin {
+                if provider == bots_service::BotProvider::Dingtalk {
+                    im::create_dingtalk_bot_named(&root, &name)
+                } else if provider == bots_service::BotProvider::Weixin {
                     im::create_weixin_bot_named(&root, &name)
                 } else {
                     im::create_wecom_bot_named(&root, &name)
@@ -13956,7 +13973,29 @@ impl PilotApp {
                 let bot_id = bot.id.clone();
                 let reused_draft = draft_id.as_deref() == Some(bot_id.as_str());
                 let mut error = None;
-                if !enabled && let Err(message) = im::set_enabled(&root, &bot_id, false) {
+                if provider == bots_service::BotProvider::Dingtalk {
+                    let client_id = view
+                        .dingtalk_client_id
+                        .read(cx)
+                        .content()
+                        .trim()
+                        .to_string();
+                    let secret = view
+                        .dingtalk_secret
+                        .read(cx)
+                        .content()
+                        .trim()
+                        .to_string();
+                    if let Err(message) =
+                        im::set_dingtalk_credentials(&root, &bot_id, &client_id, &secret)
+                    {
+                        error = Some(message);
+                    }
+                }
+                if !enabled
+                    && error.is_none()
+                    && let Err(message) = im::set_enabled(&root, &bot_id, false)
+                {
                     error = Some(message);
                 }
                 if error.is_none() && let Err(message) = im::set_access_mode(&root, &bot_id, free_access) {
@@ -13981,7 +14020,10 @@ impl PilotApp {
                 }
                 self.im_heartbeat_input
                     .update(cx, |input, cx| input.set_content(minutes.to_string(), cx));
-                if !reused_draft && let Some(service) = im_service::handle() {
+                if !reused_draft
+                    && provider != bots_service::BotProvider::Dingtalk
+                    && let Some(service) = im_service::handle()
+                {
                     if provider == bots_service::BotProvider::Weixin {
                         service.start_weixin_qr(&bot_id);
                     } else {
@@ -14074,16 +14116,31 @@ impl PilotApp {
                 )),
             );
         }
-        let mut body = settings_page_body("")
-            .child(settings_section(i18n::t("扫码绑定")));
-        body = if let Some(bot_id) = draft_id {
-            let service = im_service::handle();
-            body.child(self.im_qr_card(&bot_id, weixin, service.as_ref(), cx))
+        let dingtalk = provider == bots_service::BotProvider::Dingtalk;
+        let dingtalk_client_id = view.dingtalk_client_id.clone();
+        let dingtalk_secret = view.dingtalk_secret.clone();
+        let mut body = settings_page_body("");
+        if dingtalk {
+            body = body
+                .child(settings_section(i18n::t("凭据")))
+                .child(settings_note(i18n::t(
+                    "钉钉开放平台建机器人（Stream 模式）后，把 App Key / App Secret 填到这里。",
+                )))
+                .child(settings_group(vec![
+                    im_field(i18n::t("App Key（Client ID）"), dingtalk_client_id.clone()),
+                    im_field(i18n::t("App Secret"), dingtalk_secret.clone()),
+                ]));
         } else {
-            body.child(settings_note(i18n::t(
-                "二维码暂不可用（草稿创建失败）；点「创建」会重新尝试。",
-            )))
-        };
+            body = body.child(settings_section(i18n::t("扫码绑定")));
+            body = if let Some(bot_id) = draft_id {
+                let service = im_service::handle();
+                body.child(self.im_qr_card(&bot_id, weixin, service.as_ref(), cx))
+            } else {
+                body.child(settings_note(i18n::t(
+                    "二维码暂不可用（草稿创建失败）；点「创建」会重新尝试。",
+                )))
+            };
+        }
         body
             .child(settings_section(i18n::t("基本信息")))
             .child(settings_group(vec![im_field(i18n::t("名称（可选）"), name)]))
@@ -14438,8 +14495,9 @@ impl PilotApp {
                         cx,
                     )),
             )
-            // 两张「暂不支持」的卡：明确不可用，不打开创建页（见 im_platform_card_planned）。
+            // 飞书「暂不支持」的卡：明确不可用，不打开创建页（见 im_platform_card_planned）。
             // 不要写「计划 vX.Y」——发版当天承诺下一版，等于把没做的事变成欠条。
+            // 钉钉已接 Stream 模式（协议公开，凭据创建）；飞书长连接协议未公开，仍灰。
             .child(
                 div()
                     .flex()
@@ -14450,10 +14508,12 @@ impl PilotApp {
                         i18n::t("暂不支持飞书通道"),
                         cx,
                     ))
-                    .child(self.im_platform_card_planned(
+                    .child(self.im_platform_card(
                         "im-new-dingtalk",
+                        "dingtalk",
                         i18n::t("钉钉"),
-                        i18n::t("暂不支持钉钉通道"),
+                        i18n::t("凭据创建（Stream）"),
+                        bots_service::BotProvider::Dingtalk,
                         cx,
                     )),
             );
@@ -24226,15 +24286,16 @@ impl PilotApp {
             modal_title = Some(SharedString::from(i18n::t("扫码绑定")));
             body = Some(self.im_qr_page_view(&bot_id, cx));
         } else if self.im_create.is_some() {
-            let weixin = self
+            let provider = self
                 .im_create
                 .as_ref()
-                .is_some_and(|view| view.provider == bots_service::BotProvider::Weixin);
+                .map(|view| view.provider)
+                .unwrap_or(bots_service::BotProvider::Wecom);
             kind = Some(SettingsModalKind::ImSubpage);
-            modal_title = Some(SharedString::from(if weixin {
-                i18n::t("新建微信机器人")
-            } else {
-                i18n::t("新建企业微信机器人")
+            modal_title = Some(SharedString::from(match provider {
+                bots_service::BotProvider::Weixin => i18n::t("新建微信机器人"),
+                bots_service::BotProvider::Dingtalk => i18n::t("新建钉钉机器人"),
+                _ => i18n::t("新建企业微信机器人"),
             }));
             body = Some(self.im_create_page(cx));
         } else if self.settings_open && tab == 7 && self.im_selected.is_some() {
