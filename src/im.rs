@@ -162,6 +162,22 @@ pub fn set_enabled(data_root: &Path, bot_id: &str, enabled: bool) -> Result<(), 
     Ok(())
 }
 
+/// 改显示名：创建弹窗先建草稿、用户再填名称，提交时把名字补上。
+pub fn set_name(data_root: &Path, bot_id: &str, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    let mut bot = bot(data_root, bot_id)?.ok_or_else(|| format!("Bot 不存在：{bot_id}"))?;
+    bot.name = name.to_string();
+    service_with_vault(data_root).save_bot(&BotSaveParams {
+        bot,
+        credential_value: None,
+        webhook_secret_value: None,
+    })?;
+    Ok(())
+}
+
 pub fn set_access_mode(data_root: &Path, bot_id: &str, free: bool) -> Result<(), String> {
     let mode = if free {
         BotAccessMode::Free

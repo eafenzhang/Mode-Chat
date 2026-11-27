@@ -1,7 +1,11 @@
 //! 审批策略的纯决策核心。
 //!
-//! 规则（用户 2026-11-03 定稿）：`ask` 全问；`auto` 只放行只读工具；`full` 放行
-//! 工作区内的读写工具，但 Bash/MCP 永远仍询问。白名单只对非 Bash/MCP 的工具名精确生效。
+//! 三档语义（用户 2026-11-27 定稿）：
+//! - `ask`：每个工具调用都询问；
+//! - `auto`：只自动放行只读工具；
+//! - `full`：完全自主，所有操作（含 Bash / MCP / 未知工具）都不再询问。
+//!
+//! 白名单只对非 Bash/MCP 的工具名精确生效；全档位都优先于白名单。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalLevel {
@@ -18,7 +22,6 @@ pub enum ApprovalDecision {
 }
 
 const READ_TOOLS: &[&str] = &["read", "grep", "glob", "ls", "stat", "notebook_read"];
-const WRITE_TOOLS: &[&str] = &["write", "edit", "apply_patch"];
 const BASH_TOOLS: &[&str] = &["bash", "shell", "run_command"];
 
 pub fn parse_level(value: &str) -> Result<ApprovalLevel, String> {
@@ -59,10 +62,6 @@ fn is_read(tool: &str) -> bool {
     READ_TOOLS.contains(&tool)
 }
 
-fn is_write(tool: &str) -> bool {
-    WRITE_TOOLS.contains(&tool)
-}
-
 fn is_bash(tool: &str) -> bool {
     BASH_TOOLS.contains(&tool)
 }
@@ -96,15 +95,8 @@ pub fn decide(level: ApprovalLevel, allowlist: &[String], tool_name: &str) -> Ap
                 ApprovalDecision::Ask
             }
         }
-        ApprovalLevel::Full => {
-            if is_bash(&tool) || is_mcp(&tool) {
-                ApprovalDecision::Ask
-            } else if is_read(&tool) || is_write(&tool) {
-                ApprovalDecision::Allow
-            } else {
-                ApprovalDecision::Ask
-            }
-        }
+        // 完全自主：不再区分工具类别，一律放行。
+        ApprovalLevel::Full => ApprovalDecision::Allow,
     }
 }
 
@@ -131,23 +123,32 @@ mod tests {
     }
 
     #[test]
-    fn full_allows_read_write_but_never_bash_or_mcp() {
+    fn full_allows_every_tool_including_bash_and_mcp() {
         assert_eq!(decide(ApprovalLevel::Full, &[], "write"), ApprovalDecision::Allow);
         assert_eq!(decide(ApprovalLevel::Full, &[], "apply_patch"), ApprovalDecision::Allow);
-        assert_eq!(decide(ApprovalLevel::Full, &[], "bash"), ApprovalDecision::Ask);
-        assert_eq!(decide(ApprovalLevel::Full, &[], "mcp__github__pr"), ApprovalDecision::Ask);
-        assert_eq!(decide(ApprovalLevel::Full, &[], "unknown_tool"), ApprovalDecision::Ask);
+        assert_eq!(decide(ApprovalLevel::Full, &[], "bash"), ApprovalDecision::Allow);
+        assert_eq!(
+            decide(ApprovalLevel::Full, &[], "mcp__github__pr"),
+            ApprovalDecision::Allow
+        );
+        assert_eq!(
+            decide(ApprovalLevel::Full, &[], "unknown_tool"),
+            ApprovalDecision::Allow
+        );
     }
 
     #[test]
     fn agent_capitalized_tool_names_match_the_matrix() {
-        // v4 snapshot 真实投递 "Write"/"Bash"/"Read"；大小写不归一会让 full 静默变 ask。
+        // v4 snapshot 真实投递 "Write"/"Bash"/"Read"；大小写不归一会让档位判定失真。
         assert_eq!(decide(ApprovalLevel::Full, &[], "Write"), ApprovalDecision::Allow);
         assert_eq!(decide(ApprovalLevel::Full, &[], "Read"), ApprovalDecision::Allow);
-        assert_eq!(decide(ApprovalLevel::Full, &[], "Bash"), ApprovalDecision::Ask);
+        assert_eq!(decide(ApprovalLevel::Full, &[], "Bash"), ApprovalDecision::Allow);
         assert_eq!(decide(ApprovalLevel::Auto, &[], "Read"), ApprovalDecision::Allow);
         assert_eq!(decide(ApprovalLevel::Auto, &[], "Write"), ApprovalDecision::Ask);
-        assert_eq!(decide(ApprovalLevel::Full, &[], "MCP__github__pr"), ApprovalDecision::Ask);
+        assert_eq!(
+            decide(ApprovalLevel::Full, &[], "MCP__github__pr"),
+            ApprovalDecision::Allow
+        );
     }
 
     #[test]

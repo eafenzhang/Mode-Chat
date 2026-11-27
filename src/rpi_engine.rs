@@ -439,27 +439,29 @@ impl ApprovalGate {
         args: serde_json::Value,
         signal: tokio_util::sync::CancellationToken,
     ) -> Option<BeforeToolCallResult> {
-        use bot_team::approval::{decide, ApprovalDecision};
+        use bot_team::approval::{decide, ApprovalDecision, ApprovalLevel};
 
         // 无人值守测试/自动化：显式跳过审批（仅测试环境使用）。
         if std::env::var("BOT_PILOT_AUTO_APPROVE").ok().as_deref() == Some("1") {
             return None;
         }
         // 隐私守卫（W3）：路径类工具访问别人的/已归档的目录时，不管档位一律弹卡。
-        // 放在档位判定之前，所以 `full` 档也拦得住（越界不是「信任范围内」）。
-        let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref());
-        if let Some(owner) = cross_dir {
-            return self
-                .ask_permission(
-                    &tool_name,
-                    &request_id,
-                    crate::privacy::reason_text(&tool_name, &args, &owner),
-                    risk_of(&tool_name),
-                    false,
-                    true,
-                    signal,
-                )
-                .await;
+        // 例外：「完全自主」的语义是所有操作都不再询问，这里必须让位。
+        if self.level != ApprovalLevel::Full {
+            let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref());
+            if let Some(owner) = cross_dir {
+                return self
+                    .ask_permission(
+                        &tool_name,
+                        &request_id,
+                        crate::privacy::reason_text(&tool_name, &args, &owner),
+                        risk_of(&tool_name),
+                        false,
+                        true,
+                        signal,
+                    )
+                    .await;
+            }
         }
         let allowlist = self
             .allowlist

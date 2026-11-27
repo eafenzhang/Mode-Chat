@@ -26,7 +26,6 @@ mod backend;
 mod bot_icon;
 mod bot_tools;
 mod brand_icons;
-mod capabilities;
 mod connectors;
 mod data;
 #[cfg(windows)]
@@ -97,6 +96,7 @@ use std::time::Duration;
 
 use gpui::AnimationExt as _;
 use gpui::component::WindowExt as _;
+use gpui::component::scroll::ScrollableElement as _;
 use gpui::prelude::*;
 use gpui::size;
 use gpui::{
@@ -196,8 +196,10 @@ const SETTINGS_MODAL_WIDTH: f32 = 520.;
 
 /// 主窗口最小尺寸（窗口系统层）。侧栏展开时以此为基础加宽，
 /// 保证左侧名单 / 中间会话的宽度不变。
-const WINDOW_MIN_W: f32 = 900.0;
-const WINDOW_MIN_H: f32 = 600.0;
+///
+/// 会话区最小 610：60（导轨）+ 232（列表）+ 610 = 902，向上取 910。
+const WINDOW_MIN_W: f32 = 910.0;
+const WINDOW_MIN_H: f32 = 650.0;
 
 /// 打开 / 收起右侧栏时调整窗口宽度。
 ///
@@ -293,10 +295,10 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>, bool) {
     let pinned = migrate_pinned_settings(&pinned, layout);
     // 守卫必须跟着迁移表的**目标版本**走：加了 v3->v4 之后这里还是 `< 3`，
     // 导致 layout=3 的用户迁移结果永远不落盘（只活在内存里）。
-    if layout < 4 {
+    if layout < 7 {
         let mut migrated = value.clone();
         migrated["pinned_settings"] = serde_json::json!(pinned);
-        migrated["settings_layout"] = serde_json::json!(4);
+        migrated["settings_layout"] = serde_json::json!(7);
         let _ = atomic_file::write_json_atomic(
             &ui_prefs_path(),
             &migrated,
@@ -321,6 +323,8 @@ fn load_ui_prefs() -> (HashSet<String>, bool, Vec<usize>, bool) {
 /// - v1→v2：团队记忆插入到 6，其后 +1
 /// - v2→v3：浏览器/电脑操控插入到 15/16，其后 +2
 /// - v3→v4：Bot 与群聊合并为「Bot团队」，群里归到 4，其后 -1
+/// - v4→v5：反馈/更多并入关于，浏览器/电脑操控各前移一位
+/// - v5→v6：插件/连接器合并为「连接」，第 2 项之后整体前移一位
 fn migrate_pinned_settings(items: &[usize], layout: u64) -> Vec<usize> {
     let mut out = items.to_vec();
     if layout < 2 {
@@ -344,6 +348,42 @@ fn migrate_pinned_settings(items: &[usize], layout: u64) -> Vec<usize> {
                 // 6.. 整体前移一位
                 n if n >= 6 => n - 1,
                 n => n,
+            })
+            .collect();
+    }
+    if layout < 5 {
+        out = out
+            .iter()
+            .map(|&item| match item {
+                // 反馈(13) / 更多(16) 并入关于(12)
+                13 | 16 => 12,
+                // 浏览器(14)/电脑操控(15) 前移一位
+                n if n >= 14 => n - 1,
+                n => n,
+            })
+            .collect();
+    }
+    if layout < 6 {
+        out = out
+            .iter()
+            .map(|&item| match item {
+                // 插件(2) 与连接器(6) 合并成「连接」，落在 5
+                2 => 5,
+                // 智能体及之后的页面整体前移一位
+                n if n >= 3 => n - 1,
+                n => n,
+            })
+            .collect();
+    }
+    if layout < 7 {
+        out = out
+            .iter()
+            .filter_map(|&item| match item {
+                // 能力页(9) 删除
+                9 => None,
+                // 用量及之后的页面前移一位
+                n if n >= 10 => Some(n - 1),
+                n => Some(n),
             })
             .collect();
     }
@@ -732,7 +772,7 @@ fn save_ui_prefs(
     value["muted"] = serde_json::json!(keys);
     value["topmost"] = serde_json::json!(topmost);
     value["pinned_settings"] = serde_json::json!(pinned_settings);
-    value["settings_layout"] = serde_json::json!(4);
+    value["settings_layout"] = serde_json::json!(7);
     value["right_panel_open"] = serde_json::json!(right_panel_open);
     let _ = atomic_file::write_json_atomic(&path, &value, &atomic_file::WriteOptions::default());
 }
@@ -2749,9 +2789,18 @@ impl ChatState {
             }
             return;
         }
+        // 工具行必须落在「思考」下面、「回答」上面：插到流式回答占位之前。
+        // 直接 push 会让工具卡跑到回答后面（本轮回放顺序就反了）。
+        let insert_at = self.streaming_index.unwrap_or(self.messages.len());
+        let insert_at = insert_at.min(self.messages.len());
         self.tool_index
-            .insert(card.call_id.clone(), self.messages.len());
-        self.messages.push(Message::tool(card));
+            .insert(card.call_id.clone(), insert_at);
+        self.messages.insert(insert_at, Message::tool(card));
+        if let Some(streaming) = self.streaming_index
+            && insert_at <= streaming
+        {
+            self.streaming_index = Some(streaming + 1);
+        }
     }
 
     /// 从会话库刷新待办与用量（只读、失败即空；在 Ready/History/Done 时调用）。
@@ -3184,6 +3233,9 @@ fn display_session_id(raw: &str) -> String {
 /// 设置 → IM 的「新建机器人」子页面状态。
 struct ImCreateView {
     provider: bots_service::BotProvider,
+    /// 打开弹窗时立即建的草稿 bot：二维码要绑定到具体 bot id 才能生成。
+    /// 取消/关闭弹窗时删除；点「创建」则沿用它。
+    draft_id: Option<String>,
     name: Entity<SimpleInput>,
     heartbeat: Entity<SimpleInput>,
     free_access: bool,
@@ -3204,6 +3256,8 @@ struct PilotApp {
     settings_tab: usize,
     /// 「Bot团队」页内的横向 tab（0=Bot, 1=群聊, 2=分组）。
     bot_team_tab: usize,
+    /// 「连接」页内的横向 tab（0=连接器, 1=插件）。
+    connection_tab: usize,
     /// 设置窗口的焦点句柄：打开时拿走焦点，别让按键落到后面的输入框。
     settings_focus: gpui::FocusHandle,
     /// 每个会话（Bot/群聊 key）的未发送草稿：切走再回来不丢。
@@ -3413,8 +3467,12 @@ struct PilotApp {
     update_checking: bool,
     /// 下载/校验/解压中（按钮态用）。
     update_busy: bool,
-    /// 自更新二次确认（应用会退出并重启）。
-    confirm_update: bool,
+    /// 下载进度（0..1；None = 尚未开始或未知总大小）。
+    update_progress: Option<f32>,
+    /// 已下载 / 总字节（进度文案用）。
+    update_progress_bytes: (u64, u64),
+    /// 已下载并校验完成的更新包：点「立即更新」直接安装。
+    update_staged: Option<update::StagedUpdate>,
     /// 新建/编辑对话框的「身份同步」开关（Overlay 渲染与提交共用）。
     roster: Roster,
     selection: Option<Selection>,
@@ -3433,8 +3491,6 @@ struct PilotApp {
     right_panel_anim: f32,
     /// 当前动画的目标值（快速连点开合时，旧动画发现目标变了就自己退出）。
     panel_anim_target: f32,
-    /// 折叠动画进行中：窗口宽度等面板收完再还原（见 render 顶部）。
-    panel_collapse_pending: bool,
 }
 
 /// ⋯ 菜单动作（鼠标与键盘 Enter 共用；参数在构建条目时取快照，执行时不再查名册）。
@@ -3608,6 +3664,8 @@ enum WecomRow {
         author: String,
         author_id: String,
         find_hit: bool,
+        /// 该条回答还在流式输出：动作条（复制/引用）等整段回答完再显示。
+        streaming: bool,
     },
     Reasoning {
         /// 展开态键（消息时间 + 成员，跨窗口稳定）。
@@ -3724,7 +3782,7 @@ impl PilotApp {
         let wechat_scroller = cx.new(|cx| {
             gpui::component::message_scroller::MessageScrollerState::new(0, cx)
         });
-        let mut app = Self {
+        let app = Self {
             input,
             search_input,
             browser_url_input,
@@ -3747,6 +3805,7 @@ impl PilotApp {
             settings_open: false,
             settings_tab: 0,
             bot_team_tab: 0,
+            connection_tab: 0,
             settings_focus: cx.focus_handle(),
             tab_focus: {
                 let mut names = vec![
@@ -3869,7 +3928,9 @@ impl PilotApp {
             update_check: None,
             update_checking: false,
             update_busy: false,
-            confirm_update: false,
+            update_progress: None,
+            update_progress_bytes: (0, 0),
+            update_staged: None,
             roster,
             selection,
             chats: HashMap::new(),
@@ -3882,10 +3943,19 @@ impl PilotApp {
             panel_restore_width: None,
             right_panel_anim: if right_panel_open { 1. } else { 0. },
             panel_anim_target: if right_panel_open { 1. } else { 0. },
-            panel_collapse_pending: false,
         };
-        if let Some(Selection::Bot(index)) = app.selection {
-            app.ensure_bot(index);
+        // 恢复选中会话放到首帧之后：启动时先出窗口与列表，
+        // 再在后台连 Agent/读历史，避免「打开应用先卡在加载会话详情」。
+        if app.selection.is_some() {
+            let weak = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    if let Some(Selection::Bot(index)) = this.selection {
+                        this.ensure_bot(index);
+                    }
+                    cx.notify();
+                });
+            });
         }
         app
     }
@@ -4069,7 +4139,6 @@ impl PilotApp {
                                 group_id: open.clone(),
                             });
                             this.settings_detail_view = None;
-                            this.settings_open = true;
                             cx.notify();
                         }))
                         .child(
@@ -4132,7 +4201,6 @@ impl PilotApp {
                             group_id: open_id.clone(),
                         });
                         this.settings_detail_view = None;
-                        this.settings_open = true;
                         cx.notify();
                     }))
                     .child(
@@ -4221,14 +4289,13 @@ impl PilotApp {
         }
     }
 
-    /// 新建/编辑群聊：只置 pending，下一帧由 render 打开 kit AlertDialog。
+    /// 新建/编辑群聊：在当前页面居中弹窗，不跳设置页。
     fn open_new_group_dialog(&mut self, cx: &mut Context<Self>) {
         self.detail_menu_open = false;
         self.settings_detail = Some(SettingsDetail::GroupForm {
             request: GroupFormRequest::New,
         });
         self.settings_detail_group = None;
-        self.settings_open = true;
         cx.notify();
     }
 
@@ -4238,27 +4305,23 @@ impl PilotApp {
             request: GroupFormRequest::Edit(group_id),
         });
         self.settings_detail_group = None;
-        self.settings_open = true;
         cx.notify();
     }
 
     fn open_new_dialog(&mut self, cx: &mut Context<Self>) {
-        // 从设置页打开时保留设置背景；对话框关闭后回到原页。
         self.settings_detail = Some(SettingsDetail::BotForm {
             request: BotFormRequest::New,
         });
         self.settings_detail_bot = None;
-        self.settings_open = true;
         cx.notify();
     }
 
-    /// 编辑已有 Bot：下一帧由 render 打开 kit AlertDialog。
+    /// 编辑已有 Bot：同样在当前页面居中弹窗。
     fn open_edit_dialog(&mut self, bot_id: String, cx: &mut Context<Self>) {
         self.settings_detail = Some(SettingsDetail::BotForm {
             request: BotFormRequest::Edit(bot_id),
         });
         self.settings_detail_bot = None;
-        self.settings_open = true;
         cx.notify();
     }
 
@@ -6790,19 +6853,17 @@ impl PilotApp {
         } else if self.footer_menu_open {
             self.footer_menu_open = false;
             return;
-        } else if self.settings_open && self.settings_detail.is_some() {
-            // 详情面板：Esc 只收起面板，不关设置。
+        } else if self.settings_detail.is_some() {
+            // 详情弹窗：Esc 只收起弹窗；从聊天页打开时设置页本来就没开。
             self.settings_detail = None;
             self.settings_detail_input = None;
             self.settings_detail_error = None;
-            self.settings_focus.focus(window, cx);
+            self.refocus_composer_if_clear(window, cx);
         } else if self.settings_open && (self.im_create.is_some() || self.im_qr_page.is_some()) {
-            // IM 子页面：Esc 只返回上级页，不直接关设置。
-            if self.im_qr_page.take().is_none() {
-                self.im_create = None;
-            }
-            self.settings_focus.focus(window, cx);
-        } else if self.settings_open && self.settings_tab == 7 && self.im_selected.is_some() {
+            // IM 子页面：Esc 只返回上级页，不直接关设置；创建草稿一并清理。
+            self.close_im_subpage(window, cx);
+            return;
+        } else if self.settings_open && self.settings_tab == 6 && self.im_selected.is_some() {
             // IM 机器人详情弹窗：Esc 只收起详情，不关设置。
             self.im_selected = None;
             self.settings_focus.focus(window, cx);
@@ -6981,6 +7042,13 @@ impl PilotApp {
             let _ = this.update(cx, |this, cx| {
                 this.update_checking = false;
                 this.update_check = Some(result);
+                // 静默下载：检查到新版本就后台拉包，用户点「立即更新」时无需再等下载。
+                if this.update_target().is_some()
+                    && this.update_staged.is_none()
+                    && !this.update_busy
+                {
+                    this.start_update_download(true, cx);
+                }
                 cx.notify();
             });
         })
@@ -6998,13 +7066,109 @@ impl PilotApp {
         }
     }
 
-    /// 下载 → SHA-256 校验 → 解压 → 启动替换脚本并退出。
-    fn start_update(&mut self, cx: &mut Context<Self>) {
-        if self.update_busy {
+    /// 下载 → SHA-256 校验 → 解压；完成后停在「已下载」，由用户点「立即更新」安装。
+    ///
+    /// `silent` = 检查到新版本后自动在后台下载（不弹开始/完成提示）。
+    fn start_update_download(&mut self, silent: bool, cx: &mut Context<Self>) {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+        if self.update_busy || self.update_staged.is_some() {
             return;
         }
         let Some(target) = self.update_target() else {
-            self.toast(i18n::t("没有可自更新的平台包；请到发布页下载"), cx);
+            if !silent {
+                self.toast(i18n::t("没有可自更新的平台包；请到发布页下载"), cx);
+            }
+            return;
+        };
+        self.update_busy = true;
+        self.update_progress = Some(0.);
+        self.update_progress_bytes = (0, target.size.unwrap_or(0));
+        if !silent {
+            cx.notify();
+        }
+        let done_bytes = std::sync::Arc::new(AtomicU64::new(0));
+        let total_bytes = std::sync::Arc::new(AtomicU64::new(target.size.unwrap_or(0)));
+        let finished = std::sync::Arc::new(AtomicBool::new(false));
+        // UI 进度条：后台下载在跑时每 150ms 从原子量取一次进度。
+        {
+            let done_bytes = done_bytes.clone();
+            let total_bytes = total_bytes.clone();
+            let finished = finished.clone();
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(150))
+                        .await;
+                    let done = done_bytes.load(Ordering::Relaxed);
+                    let total = total_bytes.load(Ordering::Relaxed);
+                    let is_done = finished.load(Ordering::Relaxed);
+                    let _ = this.update(cx, |this, cx| {
+                        this.update_progress_bytes = (done, total);
+                        if total > 0 {
+                            this.update_progress =
+                                Some((done as f32 / total as f32).clamp(0., 1.));
+                        }
+                        cx.notify();
+                    });
+                    if is_done {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        let target_for_download = target.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let progress_done = done_bytes.clone();
+                    let progress_total = total_bytes.clone();
+                    let result = update::download_and_stage_with_progress(
+                        &target_for_download,
+                        move |done, total| {
+                            progress_done.store(done, Ordering::Relaxed);
+                            if let Some(total) = total {
+                                progress_total.store(total, Ordering::Relaxed);
+                            }
+                        },
+                    );
+                    finished.store(true, Ordering::Relaxed);
+                    result
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.update_busy = false;
+                match result {
+                    Ok(staged) => {
+                        this.update_progress = Some(1.);
+                        this.update_staged = Some(staged);
+                        if !silent {
+                            this.toast(i18n::t("更新已下载，点「立即更新」安装"), cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.update_progress = None;
+                        if silent {
+                            eprintln!("[update] 后台下载失败：{error}");
+                        } else {
+                            this.toast(
+                                tri!("更新失败：{error}", "Update failed: {error}"),
+                                cx,
+                            );
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 「立即更新」：用已下载的包替换当前 exe 并重启（不再二次确认）。
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let Some(staged) = self.update_staged.clone() else {
             return;
         };
         let Ok(current_exe) = std::env::current_exe() else {
@@ -7015,42 +7179,24 @@ impl PilotApp {
             self.toast(message, cx);
             return;
         }
-        self.update_busy = true;
-        self.confirm_update = false;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { update::download_and_stage(&target) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(staged) => match update::spawn_swap_and_restart(&current_exe, &staged) {
-                        Ok(()) => {
-                            this.update_busy = false;
-                            this.toast(i18n::t("更新器已启动，应用即将退出…"), cx);
-                            cx.notify();
-                            // 给 toast 一帧时间；脚本会等本进程退出后再替换。
-                            std::thread::spawn(|| {
-                                std::thread::sleep(Duration::from_millis(800));
-                                std::process::exit(0);
-                            });
-                        }
-                        Err(error) => {
-                            this.update_busy = false;
-                            this.toast(tri!("启动更新失败：{error}", "Failed to start the update: {error}"), cx);
-                            cx.notify();
-                        }
-                    },
-                    Err(error) => {
-                        this.update_busy = false;
-                        this.toast(tri!("更新失败：{error}", "Update failed: {error}"), cx);
-                        cx.notify();
-                    }
-                }
-            });
-        })
-        .detach();
+        match update::spawn_swap_and_restart(&current_exe, &staged) {
+            Ok(()) => {
+                self.toast(i18n::t("正在安装更新，应用即将重启…"), cx);
+                cx.notify();
+                // 给 toast 一帧时间；脚本会等本进程退出后再替换。
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_millis(800));
+                    std::process::exit(0);
+                });
+            }
+            Err(error) => {
+                self.toast(
+                    tri!("启动更新失败：{error}", "Failed to start the update: {error}"),
+                    cx,
+                );
+                cx.notify();
+            }
+        }
     }
 
     fn on_new_bot_shortcut(
@@ -7630,7 +7776,6 @@ impl PilotApp {
                         bot_id: bot.id.clone(),
                     });
                     self.settings_detail_input = None;
-                    self.settings_open = true;
                 }
                 cx.notify();
             }
@@ -7650,7 +7795,6 @@ impl PilotApp {
                     });
                     self.settings_detail_entries.clear();
                     self.settings_detail_input = None;
-                    self.settings_open = true;
                 }
                 cx.notify();
             }
@@ -7902,6 +8046,8 @@ impl PilotApp {
         });
         self.backend
             .ensure(key, workspace, identity, model, None, engine);
+        // 旁路会话固定走右侧栏：先把栏打开（窗口按既有规则加宽 320，不挤压会话区）。
+        self.set_right_panel(true, window, cx);
         if text.trim().is_empty() {
             let handle = input.read(cx).focus_handle(cx);
             window.defer(cx, move |window, cx| handle.focus(window, cx));
@@ -7934,10 +8080,12 @@ impl PilotApp {
         cx.notify();
     }
 
-    fn close_side(&mut self, cx: &mut Context<Self>) {
+    fn close_side(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(side) = self.side_chat.take() {
             self.backend.reset_session(side.key);
         }
+        // 旁路关闭后直接折叠右栏（用户要求：不要留一个空的信息栏）。
+        self.set_right_panel(false, window, cx);
         cx.notify();
     }
 
@@ -8109,29 +8257,30 @@ impl PilotApp {
             messages = messages.child(if message.user {
                 div()
                     .self_end()
-                    .max_w(px(300.))
+                    // 右栏净宽 320：气泡留出左右内边距后仍要能完整显示。
+                    .max_w(px(280.))
                     .rounded(px(theme::RADIUS_FIELD))
-                    .bg(theme::accent_soft())
+                    .bg(wechat_theme::bubble_out())
                     .px(px(10.))
                     .py(px(7.))
-                    .font_family(theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(13.))
                     .line_height(px(20.))
-                    .text_color(theme::ink())
+                    .text_color(wechat_theme::bubble_out_text())
                     .child(SharedString::from(message.text.clone()))
             } else if message.tool {
                 div()
-                    .font_family(theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(11.))
                     .line_height(px(16.))
-                    .text_color(theme::ink_tertiary())
+                    .text_color(wechat_theme::time_label())
                     .child(SharedString::from(message.text.clone()))
             } else {
                 div()
                     .w_full()
-                    .font_family(theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(13.))
-                    .text_color(theme::ink())
+                    .text_color(wechat_theme::chat_title())
                     .child(kit_markdown_el(
                         format!("side-md-{index}"),
                         &message.text,
@@ -8143,25 +8292,22 @@ impl PilotApp {
         if side.messages.is_empty() {
             messages = messages.child(
                 div()
-                    .font_family(theme::FONT_FAMILY)
+                    .font_family(wechat_theme::FONT_FAMILY)
                     .text_size(px(12.))
                     .line_height(px(18.))
-                    .text_color(theme::ink_tertiary())
+                    .text_color(wechat_theme::list_preview())
                     .child(i18n::t("旁路会话不会写入主对话，也不会出现在历史列表。")),
             );
         }
         Some(
             div()
-                .absolute()
-                .top(px(60.))
-                .right(px(16.))
-                .bottom(px(16.))
-                .w(px(380.))
-                .rounded(px(theme::RADIUS_MENU))
-                .border_1()
-                .border_color(theme::edge())
-                .bg(theme::panel())
-                .shadow(theme::shadow_2())
+                .id("side-panel")
+                .w_full()
+                .h_full()
+                // 右栏的一列：底色/分隔线与信息栏一致，不再悬浮在内容之上。
+                .bg(wechat_theme::panel_card_bg())
+                .border_l_1()
+                .border_color(wechat_theme::panel_divider())
                 .flex()
                 .flex_col()
                 .overflow_hidden()
@@ -8173,15 +8319,15 @@ impl PilotApp {
                         .px(px(14.))
                         .py(px(10.))
                         .border_b_1()
-                        .border_color(theme::edge())
+                        .border_color(wechat_theme::divider())
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.))
-                                .font_family(theme::FONT_FAMILY)
+                                .font_family(wechat_theme::FONT_FAMILY)
                                 .text_size(px(13.))
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme::ink())
+                                .text_color(wechat_theme::chat_title())
                                 .truncate()
                                 .child(SharedString::from(format!(
                                     "{} · {}",
@@ -8198,15 +8344,19 @@ impl PilotApp {
                                 .items_center()
                                 .justify_center()
                                 .pointer()
-                                .text_color(theme::ink_tertiary())
-                                .hover(|style| style.bg(theme::hover()).text_color(theme::ink()))
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.close_side(cx);
+                                .text_color(wechat_theme::list_preview())
+                                .hover(|style| {
+                                    style
+                                        .bg(wechat_theme::nav_item_hover_bg())
+                                        .text_color(wechat_theme::chat_title())
+                                })
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.close_side(window, cx);
                                 }))
                                 .child(icons::icon(
                                     icons::Icon::X,
                                     14.,
-                                    theme::ink_secondary(),
+                                    wechat_theme::icon(),
                                 )),
                         ),
                 )
@@ -8555,7 +8705,7 @@ impl PilotApp {
                     div()
                         .p(px(10.))
                         .border_t_1()
-                        .border_color(theme::edge())
+                        .border_color(wechat_theme::divider())
                         .flex()
                         .items_center()
                         .gap(px(8.))
@@ -8566,8 +8716,8 @@ impl PilotApp {
                                 .h(px(34.))
                                 .rounded(px(theme::RADIUS_FIELD))
                                 .border_1()
-                                .border_color(theme::edge())
-                                .bg(theme::composer_card())
+                                .border_color(wechat_theme::composer_border())
+                                .bg(wechat_theme::composer_bg())
                                 .px(px(10.))
                                 .flex()
                                 .items_center()
@@ -8579,7 +8729,7 @@ impl PilotApp {
                                 .size(px(30.))
                                 .flex_shrink_0()
                                 .rounded_full()
-                                .bg(theme::accent())
+                                .bg(wechat_theme::send_enabled())
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -8592,7 +8742,7 @@ impl PilotApp {
                                 .child(icons::icon(
                                     icons::Icon::ArrowUp,
                                     14.,
-                                    theme::accent_ink(),
+                                    wechat_theme::bubble_out_text(),
                                 )),
                         ),
                 )
@@ -10105,7 +10255,17 @@ impl PilotApp {
                 if templates.is_empty() {
                     return None;
                 }
-                let selected = self.settings_detail_entries.len().min(templates.len() - 1);
+                // 高亮跟着「已选模板」走，不能拿已选条数当下标：
+                // entries 永远只有 1 条，用 len 会让高亮永远停在第二个模板上。
+                let selected = self
+                    .settings_detail_entries
+                    .first()
+                    .and_then(|chosen| {
+                        templates
+                            .iter()
+                            .position(|template| &template.template_id == chosen)
+                    })
+                    .unwrap_or(0);
                 let fields = self.ensure_detail_fields(
                     cx,
                     &[
@@ -10127,6 +10287,9 @@ impl PilotApp {
                 for (index, template) in templates.iter().enumerate() {
                     let active = index == selected;
                     let template_id = template.template_id.clone();
+                    let template_name = template.name.clone();
+                    let id_input = id_input.clone();
+                    let name_input = name_input.clone();
                     let logo_key = template_logo_key(&template.template_id).to_string();
                     let logo = brand_icons::provider_color(&logo_key, 20.)
                         .unwrap_or_else(|| provider_initial_tile(&template.name, 20.));
@@ -10159,6 +10322,17 @@ impl PilotApp {
                                     entries.clear();
                                     entries.push(template_id.clone());
                                     this.settings_detail_entries = entries;
+                                    // 选中模板后把 id / 显示名填进去（只填空框，不覆盖用户输入）。
+                                    if id_input.read(cx).content().trim().is_empty() {
+                                        id_input.update(cx, |input, cx| {
+                                            input.set_content(template_id.clone(), cx);
+                                        });
+                                    }
+                                    if name_input.read(cx).content().trim().is_empty() {
+                                        name_input.update(cx, |input, cx| {
+                                            input.set_content(template_name.clone(), cx);
+                                        });
+                                    }
                                     cx.notify();
                                 },
                             ))
@@ -10968,7 +11142,8 @@ impl PilotApp {
         self.settings_detail = None;
         self.settings_detail_input = None;
         self.settings_detail_error = None;
-        self.settings_focus.focus(window, cx);
+        // 从聊天页打开的弹窗关掉后焦点回到输入框；设置页里打开则回设置卡。
+        self.refocus_composer_if_clear(window, cx);
         cx.notify();
     }
 
@@ -11300,19 +11475,16 @@ impl PilotApp {
             return;
         }
         if open {
-            // 展开：窗口立即加宽（否则动画期间聊天区要重排两次），面板再从 0 长到 320。
-            // 只有从「贴最小宽度」展开时才撑窗口，记下原宽度供收起时还原。
+            // 展开：记下基准宽度，窗口宽度由 render 按面板动画进度逐帧补齐，
+            // 让「窗口加宽」和「面板长出」同速，聊天区宽度全程不变（消除跳动）。
             let current = f32::from(window.bounds().size.width);
             let target = panel_target_width(current, true, None, PANEL_WIDTH);
             self.panel_restore_width = target.map(|_| current);
             self.right_panel_open = true;
-            self.panel_collapse_pending = false;
-            apply_panel_width(window, target);
             self.animate_right_panel(1., cx);
         } else {
-            // 折叠：先让面板收拢，窗口宽度等动画结束再还原（见 render 顶部）。
+            // 折叠：面板收到 0 的同时窗口逐步缩回基准宽度（同样在 render 里逐帧处理）。
             self.right_panel_open = false;
-            self.panel_collapse_pending = true;
             // 运行状态高亮是瞬时 UI 状态，不是跨会话设置：关栏就清掉，
             // 否则下次展开会留下一个来源不明的描边。
             self.chat_detail = None;
@@ -11338,11 +11510,12 @@ impl PilotApp {
             self.right_panel_anim = target;
             return;
         }
-        const STEPS: u32 = 10;
+        // 8 × 12ms ≈ 96ms：比原来的 160ms 快一档，开合更跟手。
+        const STEPS: u32 = 8;
         cx.spawn(async move |this, cx| {
             for step in 1..=STEPS {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(16))
+                    .timer(std::time::Duration::from_millis(12))
                     .await;
                 let t = step as f32 / STEPS as f32;
                 // ease-out cubic：开头快、收尾稳。
@@ -11441,22 +11614,21 @@ impl PilotApp {
         match self.settings_tab {
             0 => self.settings_page_general(cx),
             1 => self.settings_page_models(cx),
-            2 => self.settings_page_plugins(cx),
-            3 => self.settings_page_local_agents(cx),
+            2 => self.settings_page_local_agents(cx),
             // Bot / 群聊 / 分组 三合一，页内横向 tab
-            4 => self.settings_page_bot_team(content_width, cx),
-            5 => self.settings_page_team_memory(cx),
-            6 => self.settings_page_connectors(content_width, cx),
-            7 => self.settings_page_im(cx),
-            8 => self.settings_page_schedules(cx),
-            9 => self.settings_page_secrets(cx),
-            10 => self.settings_page_capabilities(),
-            11 => self.settings_page_usage(cx),
-            12 => self.settings_page_about(cx),
-            13 => self.settings_page_feedback(cx),
-            14 => self.settings_page_browser(cx),
-            15 => self.settings_page_computer(cx),
-            _ => self.settings_page_more(cx),
+            3 => self.settings_page_bot_team(content_width, cx),
+            4 => self.settings_page_team_memory(cx),
+            // 连接器 / 插件 合并为「连接」，页内横向 tab
+            5 => self.settings_page_connections(content_width, cx),
+            6 => self.settings_page_im(cx),
+            7 => self.settings_page_schedules(cx),
+            8 => self.settings_page_secrets(cx),
+            9 => self.settings_page_usage(cx),
+            10 => self.settings_page_about(cx),
+            11 => self.settings_page_browser(cx),
+            12 => self.settings_page_computer(cx),
+            // 「反馈」「更多」已并入关于页，未知下标兜底也回关于。
+            _ => self.settings_page_about(cx),
         }
     }
 
@@ -11699,8 +11871,7 @@ impl PilotApp {
                     ),
                 )
                 .into_any_element(),
-            ]))
-            .child(self.sidebar_sections_section(cx));
+            ]));
         body = body
             .child(settings_section(i18n::t("启动与后台")))
             .child(settings_group(vec![
@@ -12164,14 +12335,14 @@ impl PilotApp {
     fn accent_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let wechat = wechat_theme::active();
         // 微信默认绿、经典默认蓝；首项即“默认色”，点它等于跟随主题默认。
-        let default_hex = if wechat { "#07c160" } else { "#4d6bfe" };
+        let default_hex = if wechat { "#0da869" } else { "#4d6bfe" };
         let palette: &[&str] = if wechat {
             &[
-                "#07c160", "#00b4a6", "#4d6bfe", "#7c5cff", "#ec2f6b", "#ff6900", "#e5484d",
+                "#0da869", "#00b4a6", "#4d6bfe", "#7c5cff", "#ec2f6b", "#ff6900", "#e5484d",
             ]
         } else {
             &[
-                "#4d6bfe", "#07c160", "#00b4a6", "#7c5cff", "#ec2f6b", "#ff6900", "#e5484d",
+                "#4d6bfe", "#0da869", "#00b4a6", "#7c5cff", "#ec2f6b", "#ff6900", "#e5484d",
             ]
         };
         let current_hex = self
@@ -12414,7 +12585,7 @@ impl PilotApp {
         for (level, label) in [
             ("ask", i18n::t("每次询问")),
             ("auto", i18n::t("自动只读")),
-            ("full", i18n::t("工作区自动")),
+            ("full", i18n::t("完全自主")),
         ] {
             let selected = current == level;
             let bot_id = bot_id.clone();
@@ -12822,39 +12993,8 @@ impl PilotApp {
                         .items_center()
                         .gap(px(ui::S2))
                         .py(px(ui::S1))
-                        // O-6：模型名可能很长（`deepseek-v4.1-flash` 这类），
-                        // 父是 flex 行且右侧跟着「已启用/停用」等按钮，
-                        // 不给 min_w 会把右侧按钮挤出这一行。
                         .child(ui::body_muted(model.model_id.clone()).min_w(px(0.)).truncate())
                         .child(div().flex_1())
-                        .child(ui::badge(
-                            if enabled {
-                                i18n::t("已启用")
-                            } else {
-                                i18n::t("已停用")
-                            },
-                            if enabled {
-                                ui::Tone::Accent
-                            } else {
-                                ui::Tone::Neutral
-                            },
-                        ))
-                        .child({
-                            let pid = pid.clone();
-                            let mid = mid.clone();
-                            ui::button_ghost(
-                                SharedString::from(format!("model-toggle-{pid}-{mid}")),
-                                if enabled { i18n::t("停用") } else { i18n::t("启用") },
-                            )
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                if let Err(message) =
-                                    data::set_model_enabled(&pid, &mid, !enabled)
-                                {
-                                    this.toast(message, cx);
-                                }
-                                cx.notify();
-                            }))
-                        })
                         .child({
                             let pid = pid.clone();
                             let mid = mid.clone();
@@ -12921,6 +13061,23 @@ impl PilotApp {
                                 cx.notify();
                             }))
                         })
+                        // 启用/停用改成开关：与设置页其它开关同一视觉，不再用文字按钮。
+                        .child({
+                            let pid = pid.clone();
+                            let mid = mid.clone();
+                            switch(
+                                SharedString::from(format!("model-toggle-{pid}-{mid}")),
+                                enabled,
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Err(message) =
+                                    data::set_model_enabled(&pid, &mid, !enabled)
+                                {
+                                    this.toast(message, cx);
+                                }
+                                cx.notify();
+                            }))
+                        })
                         .into_any_element(),
                 );
             }
@@ -12956,6 +13113,78 @@ impl PilotApp {
     }
 
     /// 插件：卡片式。三张卡（插件宿主 / 浏览器 / 电脑操控）。
+    /// 「连接」页：连接器 / 插件 两个横向 tab（合并原两个设置页）。
+    fn settings_page_connections(
+        &mut self,
+        content_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        const TABS: [&str; 2] = ["连接器", "插件"];
+        let active = self.connection_tab.min(TABS.len() - 1);
+        let mut tab_row = div()
+            .w_full()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .border_b_1()
+            .border_color(wechat_theme::divider());
+        for (index, label) in TABS.iter().enumerate() {
+            let is_active = index == active;
+            tab_row = tab_row.child(
+                div()
+                    .id(SharedString::from(format!("connection-tab-{index}")))
+                    .h(px(38.))
+                    // 固定宽度：不随窗口拉成等分大块，保持微信 tab 的紧凑尺寸。
+                    .w(px(120.))
+                    .px(px(ui_kit::S3))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .border_b_2()
+                    .border_color(if is_active {
+                        wechat_theme::send_enabled()
+                    } else {
+                        gpui::rgba(0x00000000)
+                    })
+                    .mb(px(-1.))
+                    .pointer()
+                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.connection_tab = index;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .font_family(wechat_theme::FONT_FAMILY)
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .font_weight(if is_active {
+                                gpui::FontWeight::SEMIBOLD
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
+                            .text_color(if is_active {
+                                wechat_theme::chat_title()
+                            } else {
+                                wechat_theme::list_preview()
+                            })
+                            .child(i18n::t(label)),
+                    ),
+            );
+        }
+        let inner = match active {
+            0 => self.settings_page_connectors(content_width, cx),
+            _ => self.settings_page_plugins(cx),
+        };
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(tab_row)
+            .child(div().w_full().pt(px(ui_kit::S4)).child(inner))
+            .into_any_element()
+    }
+
     fn settings_page_plugins(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         use crate::ui_kit as ui;
 
@@ -13069,7 +13298,10 @@ impl PilotApp {
                 ui::stat_row(current_label.clone(), i18n::t("当前引擎")).into_any_element(),
             ]));
         } else {
-            body = body.child(ui::empty(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
+            // 未选中 Bot 时也保留「当前 Bot」分区标题，页面顶部不会贴边。
+            body = body
+                .child(ui::section(i18n::t("当前 Bot")))
+                .child(ui::empty(i18n::t("先在左栏选中一个 Bot 再选择引擎")));
         }
 
         body = body.child(ui::section_action(
@@ -13182,16 +13414,16 @@ impl PilotApp {
         let mut body = div().w_full().flex().flex_col().gap(px(ui_kit::S4));
         // 「新建分组」跟同页另外两个 tab 一样挂在分区标题行右侧：
         // 之前它单独落在列表末尾，三处入口位置各不相同。
-        body = body.child(crate::ui_kit::section_action(
-            i18n::t("侧栏分组"),
-            settings_button(SharedString::from("section-new"), i18n::t("新建分组")).on_click(
+        let count = self.sidebar_sections.sections.len();
+        body = body.child(settings_section_action(
+            tri!("全部分组 · {}", "All groups · {}", count),
+            settings_action_button(SharedString::from("section-new"), i18n::t("新建分组")).on_click(
                 cx.listener(|this, _event, _window, cx| {
                     this.settings_detail = Some(SettingsDetail::Section {
                         editing_id: None,
                         current_name: String::new(),
                     });
                     this.settings_detail_input = None;
-                    this.settings_open = true;
                     cx.notify();
                 }),
             ),
@@ -13269,7 +13501,6 @@ impl PilotApp {
                                 current_name,
                             });
                             this.settings_detail_input = None;
-                            this.settings_open = true;
                             cx.notify();
                         })),
                     )
@@ -13326,6 +13557,8 @@ impl PilotApp {
                 div()
                     .id(SharedString::from(format!("bot-team-tab-{index}")))
                     .h(px(38.))
+                    // 固定宽度：选中加粗不再改变 tab 宽度/位置。
+                    .w(px(120.))
                     .px(px(ui_kit::S3))
                     .flex()
                     .items_center()
@@ -13339,9 +13572,8 @@ impl PilotApp {
                     })
                     .mb(px(-1.))
                     .pointer()
-                    .when(!is_active, |el| {
-                        el.hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
-                    })
+                    // 选中/未选中都给 hover 反馈，三个 tab 行为一致。
+                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.bot_team_tab = index;
                         cx.notify();
@@ -13369,8 +13601,9 @@ impl PilotApp {
         let inner = match active {
             0 => self.settings_page_bots(cx),
             1 => self.settings_page_channels(cx),
-            _ => self
-                .sidebar_sections_section(cx)
+            // 分组 tab 与另两个 tab 用同一层 page 容器，左右缩进/首行位置一致。
+            _ => settings_page_body("")
+                .child(self.sidebar_sections_section(cx))
                 .into_any_element(),
         };
         let _ = content_width;
@@ -13615,21 +13848,52 @@ impl PilotApp {
     }
 
     /// IM：微信/企业微信机器人的扫码、运行态、绑定与群聊审批（配置与主程序同源）。
-    /// 打开「新建机器人」子页面（设置内容区整页替换，不再弹窗）。
+    /// 打开「新建机器人」弹窗。
+    ///
+    /// 打开时就建一只草稿 bot 并启动扫码：二维码必须挂在具体 bot id 上，
+    /// 所以不能在用户点「创建」之后才生成。取消/关闭会删掉草稿。
     fn open_im_create_page(
         &mut self,
         provider: bots_service::BotProvider,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 上一次没提交的草稿先清掉，避免连点两次入口留下孤儿 bot。
+        if let Some(old) = self.im_create.take() {
+            self.discard_im_create_draft(old);
+        }
         let name = cx.new(|cx| {
             SimpleInput::new(i18n::t("机器人名称（可选）"), theme::ink_tertiary, cx)
         });
         let heartbeat = cx.new(|cx| SimpleInput::new("0", theme::ink_tertiary, cx));
         heartbeat.update(cx, |input, cx| input.set_content("0", cx));
+        let root = self.roster.data_root.clone();
+        let created = if provider == bots_service::BotProvider::Weixin {
+            im::create_weixin_bot_named(&root, "")
+        } else {
+            im::create_wecom_bot_named(&root, "")
+        };
+        let draft_id = match created {
+            Ok(bot) => {
+                let id = bot.id.clone();
+                if let Some(service) = im_service::handle() {
+                    if provider == bots_service::BotProvider::Weixin {
+                        service.start_weixin_qr(&id);
+                    } else {
+                        service.start_wecom_qr(&id);
+                    }
+                }
+                Some(id)
+            }
+            Err(message) => {
+                self.toast(message, cx);
+                None
+            }
+        };
         let handle = name.read(cx).focus_handle(cx);
         self.im_create = Some(ImCreateView {
             provider,
+            draft_id,
             name,
             heartbeat,
             free_access: true,
@@ -13642,10 +13906,26 @@ impl PilotApp {
         window.defer(cx, move |window, cx| handle.focus(window, cx));
     }
 
+    /// 丢弃创建弹窗的草稿：取消扫码、删 bot、清掉可能指向它的选中态。
+    fn discard_im_create_draft(&mut self, view: ImCreateView) {
+        let Some(draft_id) = view.draft_id else {
+            return;
+        };
+        if let Some(service) = im_service::handle() {
+            service.cancel_qr(&draft_id);
+        }
+        let _ = im::delete(&self.roster.data_root, &draft_id);
+        if self.im_selected.as_deref() == Some(draft_id.as_str()) {
+            self.im_selected = None;
+        }
+    }
+
     /// 返回上一级：扫码页 → IM 详情；创建页 → IM 列表。
     fn close_im_subpage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.im_qr_page.take().is_none() {
-            self.im_create = None;
+        if self.im_qr_page.take().is_none()
+            && let Some(view) = self.im_create.take()
+        {
+            self.discard_im_create_draft(view);
         }
         self.settings_focus.focus(window, cx);
         cx.notify();
@@ -13670,14 +13950,30 @@ impl PilotApp {
             .unwrap_or(0)
             .max(0);
         let root = self.roster.data_root.clone();
-        let created = if provider == bots_service::BotProvider::Weixin {
-            im::create_weixin_bot_named(&root, &name)
-        } else {
-            im::create_wecom_bot_named(&root, &name)
+        let draft_id = view.draft_id.clone();
+        let created = match draft_id.clone() {
+            Some(bot_id) => {
+                // 草稿在打开弹窗时就建好了，这里只把用户改的名称写回去。
+                let mut result = Ok(());
+                if !name.is_empty() {
+                    result = im::set_name(&root, &bot_id, &name);
+                }
+                result.and_then(|()| {
+                    im::bot(&root, &bot_id)?.ok_or_else(|| format!("Bot 不存在：{bot_id}"))
+                })
+            }
+            None => {
+                if provider == bots_service::BotProvider::Weixin {
+                    im::create_weixin_bot_named(&root, &name)
+                } else {
+                    im::create_wecom_bot_named(&root, &name)
+                }
+            }
         };
         match created {
             Ok(bot) => {
                 let bot_id = bot.id.clone();
+                let reused_draft = draft_id.as_deref() == Some(bot_id.as_str());
                 let mut error = None;
                 if !enabled && let Err(message) = im::set_enabled(&root, &bot_id, false) {
                     error = Some(message);
@@ -13698,15 +13994,20 @@ impl PilotApp {
                 }
                 self.im_create = None;
                 self.im_selected = Some(bot_id.clone());
-                self.im_qr_page = Some(bot_id.clone());
+                // 草稿的二维码在打开弹窗时已启动；只有兜底新建才需要现起一次。
+                if !reused_draft {
+                    self.im_qr_page = Some(bot_id.clone());
+                }
                 self.im_heartbeat_input
                     .update(cx, |input, cx| input.set_content(minutes.to_string(), cx));
-                if let Some(service) = im_service::handle() {
+                if !reused_draft && let Some(service) = im_service::handle() {
                     if provider == bots_service::BotProvider::Weixin {
                         service.start_weixin_qr(&bot_id);
                     } else {
                         service.start_wecom_qr(&bot_id);
                     }
+                }
+                if let Some(service) = im_service::handle() {
                     service.refresh_runtime();
                 }
                 self.toast(
@@ -13734,10 +14035,12 @@ impl PilotApp {
         let activation = view.group_activation;
         let enabled = view.enabled;
         let weixin = provider == bots_service::BotProvider::Weixin;
+        let draft_id = view.draft_id.clone();
+        let has_draft = draft_id.is_some();
         let hint = if weixin {
-            i18n::t("创建后立即显示登录二维码，用微信扫码即可接通。")
+            i18n::t("用微信扫码登录；下方名称与访问方式可继续调整，点「完成」保存。")
         } else {
-            i18n::t("创建后进入企业微信扫码流程，确认后自动写入 Bot ID 与 Secret。")
+            i18n::t("用企业微信扫码创建机器人；确认后自动写入 Bot ID 与 Secret，点「完成」保存其余设置。")
         };
         let wechat = wechat_theme::active();
         let submit_text = if wechat {
@@ -13790,7 +14093,17 @@ impl PilotApp {
                 )),
             );
         }
-        settings_page_body("")
+        let mut body = settings_page_body("")
+            .child(settings_section(i18n::t("扫码绑定")));
+        body = if let Some(bot_id) = draft_id {
+            let service = im_service::handle();
+            body.child(self.im_qr_card(&bot_id, weixin, service.as_ref(), cx))
+        } else {
+            body.child(settings_note(i18n::t(
+                "二维码暂不可用（草稿创建失败）；点「创建」会重新尝试。",
+            )))
+        };
+        body
             .child(settings_section(i18n::t("基本信息")))
             .child(settings_group(vec![im_field(i18n::t("名称（可选）"), name)]))
             .child(settings_section(i18n::t("访问与群聊")))
@@ -13857,7 +14170,11 @@ impl PilotApp {
                                     .line_height(px(18.))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(submit_text)
-                                    .child(i18n::t("创建")),
+                                    .child(if has_draft {
+                                        i18n::t("完成")
+                                    } else {
+                                        i18n::t("创建")
+                                    }),
                             ),
                     ),
             )
@@ -14646,7 +14963,7 @@ impl PilotApp {
                     .timer(Duration::from_millis(800))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    if this.settings_open && this.settings_tab == 7 {
+                    if this.settings_open && this.settings_tab == 6 {
                         cx.notify();
                     }
                 });
@@ -15333,9 +15650,7 @@ impl PilotApp {
     /// 密钥：本机插件密钥库（`v2/secrets.json`），值只写不读。
     fn settings_page_secrets(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let data_root = self.roster.data_root.clone();
-        let mut body = settings_page_body(i18n::t("密钥")).child(settings_note(
-            i18n::t("值只写不读，供 ${secret:NAME} 引用。"),
-        ));
+        let mut body = settings_page_body(i18n::t("密钥"));
         let names = match secrets::list(&data_root) {
             Ok(names) => names,
             Err(error) => {
@@ -15427,76 +15742,6 @@ impl PilotApp {
         body.into_any_element()
     }
 
-    /// 能力：壳真实可用的 N6 能力集（只读状态，不做开关）。
-    fn settings_page_capabilities(&self) -> gpui::AnyElement {
-        use crate::ui_kit as ui;
-
-        let rows = capabilities::rows();
-        let wired = rows.iter().filter(|row| row.wired).count();
-        let mut body = ui::page()
-            .child(ui::section_action(
-                i18n::t("能力"),
-                ui::badge(
-                    format!("{wired} / {}", rows.len()),
-                    if wired == rows.len() {
-                        ui::Tone::Success
-                    } else {
-                        ui::Tone::Neutral
-                    },
-                ),
-            ));
-        if rows.is_empty() {
-            body = body.child(ui::empty(i18n::t("没有可用的能力")));
-            return body.into_any_element();
-        }
-        let count = rows.len();
-        let mut card = ui::card(vec![]);
-        for (index, row) in rows.into_iter().enumerate() {
-            let badge = ui::badge(
-                if row.wired {
-                    i18n::t("已接线")
-                } else {
-                    i18n::t("未接线")
-                },
-                if row.wired {
-                    ui::Tone::Success
-                } else {
-                    ui::Tone::Neutral
-                },
-            );
-            card = card.child(ui::card_row(
-                div()
-                    .id(SharedString::from(format!("capability-{}", row.id)))
-                    .w_full()
-                    .px(px(ui::S3))
-                    .py(px(ui::S2))
-                    .flex()
-                    .items_center()
-                    .gap(px(ui::S2))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            // Q-03：这两行原来直接渲染 &'static str，绕过了 i18n；
-                            // 字典里早有译文，只是没查。
-                            .child(ui::body(i18n::t(row.title)))
-                            .child(ui::body_muted(i18n::t(row.hint))),
-                    )
-                    .child(badge)
-                    .into_any_element(),
-                index + 1 == count,
-            ));
-        }
-        body.child(card).into_any_element()
-    }
-
-    /// 用量分组快照（W9；懒加载，按 `usage_range` 缓存）。
-    ///
-    /// 顶部四张卡与按 Bot / 按模型两张表都从这里取数，切范围时由范围 chip
-    /// 把 `usage_grouped_view` 清空重读，三处不会各读各的。
     fn get_or_load_usage_grouped(&mut self) -> crate::rpi_engine::GroupedUsage {
         if self.usage_grouped_view.is_none() {
             self.usage_grouped_view = Some(crate::rpi_engine::usage_grouped(self.usage_range));
@@ -15778,6 +16023,10 @@ impl PilotApp {
             i18n::t("默认（未设置 MODE_SESSION_DB_PATH，与主程序同库）"),
         );
         let storage_dir = env_value("MODE_STORAGE_DIR", i18n::t("默认（未设置 MODE_STORAGE_DIR）"));
+        let version = update::current_version();
+        let diagnostics = format!(
+            "Mode Chat {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.11 / gpui-pre 0.3.14)",
+        );
         let data_rows: Vec<(&'static str, String)> = vec![
             ("数据根", data_root.clone()),
             (
@@ -15796,7 +16045,7 @@ impl PilotApp {
             .child(settings_group(vec![
                 kv_row(update::current_version(), i18n::t("当前版本")).into_any_element(),
                 kv_row(
-                    "Rust + GPUI（gpui-kit 0.10 / gpui-pre 0.3.12）".to_string(),
+                    "Rust + GPUI（gpui-kit 0.11 / gpui-pre 0.3.14）".to_string(),
                     i18n::t("界面"),
                 )
                 .into_any_element(),
@@ -15814,15 +16063,82 @@ impl PilotApp {
         for (label, value) in data_rows {
             body = body.child(value_box(value, Some(i18n::t(label))));
         }
+        body = body.child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(
+                    settings_button("about-open-dir", i18n::t("打开数据目录")).on_click(
+                        cx.listener(|this, _event, _window, cx| {
+                            let dir = this.roster.data_root.display().to_string();
+                            if let Err(error) =
+                                std::process::Command::new("explorer").arg(&dir).spawn()
+                            {
+                                this.toast(
+                                    tri!(
+                                        "打开目录失败：{error}",
+                                        "Failed to open the folder: {error}"
+                                    ),
+                                    cx,
+                                );
+                            }
+                        }),
+                    ),
+                ),
+        );
+        // 诊断与反馈入口（原「反馈」页并入）：版本/平台一键复制，发布页一个入口就够。
+        body = body
+            .child(settings_section(i18n::t("诊断")))
+            .child(value_box(truncate_chars(&diagnostics, 300), None))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .child(
+                        settings_button("about-copy-diagnostics", i18n::t("复制诊断")).on_click(
+                            cx.listener(move |this, _event, _window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    diagnostics.clone(),
+                                ));
+                                this.toast(i18n::t("诊断信息已复制"), cx);
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        settings_button("about-releases", i18n::t("打开发布页")).on_click(
+                            cx.listener(|_this, _event, _window, cx| {
+                                if let Err(error) = std::process::Command::new("explorer")
+                                    .arg(update::RELEASES_PAGE)
+                                    .spawn()
+                                {
+                                    eprintln!("[about] 打开发布页失败：{error}");
+                                }
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            );
         body.into_any_element()
     }
 
     fn update_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let target = self.update_target();
-        let status_text = if self.update_busy {
-            i18n::t("下载并校验更新…").to_string()
+        let target = self.update_target();        let status_text = if self.update_busy {
+            let (done, total) = self.update_progress_bytes;
+            match self.update_progress {
+                Some(progress) if total > 0 => tri!(
+                    "正在下载更新 {:.0}%（{:.1} / {:.1} MB）",
+                    "Downloading update {:.0}% ({:.1} / {:.1} MB)",
+                    progress * 100.,
+                    done as f64 / 1_048_576.0,
+                    total as f64 / 1_048_576.0
+                ),
+                _ => i18n::t("下载并校验更新…").to_string(),
+            }
         } else if self.update_checking {
             i18n::t("检查中…").to_string()
+        } else if self.update_staged.is_some() {
+            i18n::t("更新已下载，点「立即更新」安装").to_string()
         } else {
             match &self.update_check {
                 None => i18n::t("尚未检查").to_string(),
@@ -15834,7 +16150,7 @@ impl PilotApp {
                 }) => {
                     if *newer {
                         if target.is_some() {
-                            tri!("有新版本 v{latest}（可下载安装）", "New version v{latest} is available")
+                            tri!("有新版本 v{latest}（正在后台下载）", "New version v{latest} is available (downloading in background)")
                         } else {
                             tri!("有新版本 v{latest}（清单无 GPUI 平台包，请到发布页）", "New version v{latest} is available (no GPUI package in the manifest; use the release page)")
                         }
@@ -15853,7 +16169,7 @@ impl PilotApp {
             Some(update::Check::Failed(_)) => theme::danger(),
             _ => theme::ink_secondary(),
         };
-        let mut body = div()
+        div()
             .w_full()
             .flex()
             .flex_col()
@@ -15885,15 +16201,21 @@ impl PilotApp {
                                     },
                                 )),
                             )
+                            .children(self.update_staged.is_some().then(|| {
+                                settings_button("update-install", i18n::t("立即更新")).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        this.install_update(cx);
+                                    }),
+                                )
+                            }))
                             .children(
                                 (target.is_some()
                                     && !self.update_busy
-                                    && !self.confirm_update)
+                                    && self.update_staged.is_none())
                                     .then(|| {
-                                        settings_button("update-install", i18n::t("下载并安装")).on_click(
+                                        settings_button("update-download", i18n::t("下载更新")).on_click(
                                             cx.listener(|this, _event, _window, cx| {
-                                                this.confirm_update = true;
-                                                cx.notify();
+                                                this.start_update_download(false, cx);
                                             }),
                                         )
                                     }),
@@ -15913,131 +16235,9 @@ impl PilotApp {
                                 ),
                             ),
                     ),
-            );
-        if self.confirm_update && let Some(target) = target {
-            body = body.child(
-                div()
-                    .w_full()
-                    .rounded(px(theme::RADIUS_FIELD))
-                    .border_1()
-                    .border_color(theme::edge())
-                    .bg(theme::card())
-                    .p(px(12.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(settings_note(tri!(
-                        "确认下载并安装 v{}？应用会退出并重启；覆盖失败会自动回滚备份。",
-                        "Download and install v{}? The app will exit and restart; a failed overwrite rolls back automatically.",
-                        target.version
-                    )))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(px(6.))
-                            .child(
-                                settings_button("update-cancel", i18n::t("取消")).on_click(cx.listener(
-                                    |this, _event, _window, cx| {
-                                        this.confirm_update = false;
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                            .child(
-                                settings_button("update-confirm", i18n::t("确认更新")).on_click(
-                                    cx.listener(|this, _event, _window, cx| {
-                                        this.start_update(cx);
-                                    }),
-                                ),
-                            ),
-                    ),
-            );
-        }
-        body
-    }
-
-    /// 宿主能力缺口 + 数据目录入口。
-    fn settings_page_more(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let rows = vec![
-            (
-                i18n::t("连接器 OAuth"),
-                i18n::t("Figma / Linear / Google Drive 等登录授权仍走外部凭据"),
-            ),
-            (i18n::t("语音转写"), i18n::t("composer 麦克风入口当前提示未接入")),
-            (
-                i18n::t("电脑操控远程桌面"),
-                i18n::t("computer-use 插件开关已接，远程桌面面板未接线"),
-            ),
-        ]
-        .into_iter()
-        .map(|(name, detail)| {
-            settings_row(name.to_string(), Some(detail.to_string())).into_any_element()
-        })
-        .collect();
-        settings_page_body("更多")
-            .child(settings_section(i18n::t("尚未覆盖")))
-            .child(settings_group(rows))
-            .child(settings_section(i18n::t("数据")))
-            .child(value_box(self.roster.data_root.display().to_string(), None))
-            .child(
-                div().flex().gap(px(6.)).child(
-                    settings_button("more-open-dir", i18n::t("打开数据目录")).on_click(cx.listener(
-                        |this, _event, _window, cx| {
-                            let dir = this.roster.data_root.display().to_string();
-                            if let Err(error) = std::process::Command::new("explorer")
-                                .arg(&dir)
-                                .spawn()
-                            {
-                                this.toast(tri!("打开目录失败：{error}", "Failed to open the folder: {error}"), cx);
-                            }
-                        },
-                    )),
-                ),
             )
-            .into_any_element()
     }
 
-    fn settings_page_feedback(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let version = update::current_version();
-        let diagnostics = format!(
-            "Mode Chat {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.10 / gpui-pre 0.3.12)",
-        );
-        let body = settings_page_body("反馈")
-            .child(settings_section(i18n::t("诊断信息")))
-            .child(value_box(truncate_chars(&diagnostics, 300), None))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(6.))
-                    .child(
-                        settings_button("feedback-copy", i18n::t("复制诊断")).on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    diagnostics.clone(),
-                                ));
-                                this.toast(i18n::t("诊断信息已复制"), cx);
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .child(
-                        settings_button("feedback-open", i18n::t("打开发布页")).on_click(cx.listener(
-                            |this, _event, _window, cx| {
-                                let _ = this;
-                                if let Err(error) = std::process::Command::new("explorer")
-                                    .arg(update::RELEASES_PAGE)
-                                    .spawn()
-                                {
-                                    eprintln!("[feedback] 打开发布页失败：{error}");
-                                }
-                                cx.notify();
-                            },
-                        )),
-                    ),
-            );
-        body.into_any_element()
-    }
     // ---- 团队记忆（S2：列表 + 新增/编辑/删除/撤销） ----
 
     /// 通用页的团队记忆区（列表 + 新增/撤销/编辑/删除）。
@@ -16737,7 +16937,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     group_id: id.clone(),
                 });
                 self.settings_detail_view = None;
-                self.settings_open = true;
                 cx.notify();
             }
             DetailMenuAction::GroupTasks(id) => {
@@ -16745,7 +16944,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                     group_id: id.clone(),
                 });
                 self.settings_detail_view = None;
-                self.settings_open = true;
                 cx.notify();
             }
             DetailMenuAction::AssignSection(member_key, section_id) => {
@@ -17240,7 +17438,7 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         cx.listener(|this, _event, _window, cx| {
                                             cx.stop_propagation();
                                             this.me_card_open = false;
-                                            this.open_settings_at(12, _window, cx);
+                                            this.open_settings_at(10, _window, cx);
                                             cx.notify();
                                         }),
                                     ),
@@ -17362,7 +17560,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                                         current_name: String::new(),
                                     });
                                     this.settings_detail_input = None;
-                                    this.settings_open = true;
                                     cx.notify();
                                 }),
                             ),
@@ -17453,7 +17650,13 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
                             cx.stop_propagation();
                             this.footer_menu_open = false;
                             match action {
-                                FooterMenuAction::InstallUpdate => this.start_update(cx),
+                                FooterMenuAction::InstallUpdate => {
+                                    if this.update_staged.is_some() {
+                                        this.install_update(cx);
+                                    } else {
+                                        this.start_update_download(false, cx);
+                                    }
+                                }
                                 FooterMenuAction::Settings(tab) => {
                                     this.open_settings_at(tab, _window, cx)
                                 }
@@ -18814,7 +19017,7 @@ fn approval_reason_view(reason: &str) -> gpui::AnyElement {
 fn approval_note(level: &str) -> &'static str {
     match level {
         "auto" => i18n::t("只读工具自动放行；写操作仍会询问。"),
-        "full" => i18n::t("工作区内自动执行；Bash/MCP 仍会询问。"),
+        "full" => i18n::t("所有工具调用都自动执行，不再询问。"),
         _ => i18n::t("每个工具调用都先询问。"),
     }
 }
@@ -18973,9 +19176,11 @@ fn wechat_row_fingerprint(row: &WecomRow) -> u64 {
             author,
             author_id,
             find_hit,
+            streaming,
         } => (text.len() as u64)
             .wrapping_mul(131)
             .wrapping_add(author.len() as u64)
+            .wrapping_add(*streaming as u64)
             .wrapping_add(author_id.len() as u64)
             .wrapping_add(u64::from(*find_hit))
             + 30,
@@ -19156,7 +19361,8 @@ fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
     let avatar = if entry.is_group && !entry.member_ids.is_empty() {
         PilotApp::wechat_group_avatar(&entry.member_ids, 40.).into_any_element()
     } else if entry.is_group {
-        PilotApp::wechat_channel_avatar(&entry.id, 40.).into_any_element()
+        // 群聊没有成员时用群名首字，不再回落到 Hash 频道图标（那是 IM 频道的语义）。
+        PilotApp::wechat_avatar(&entry.id, &entry.name, 40.).into_any_element()
     } else {
         PilotApp::wechat_avatar(&entry.id, &entry.name, 40.).into_any_element()
     };
@@ -19296,11 +19502,13 @@ fn wechat_rows_fingerprint(rows: &[WecomRow]) -> u64 {
                 author,
                 author_id,
                 find_hit,
+                streaming,
             } => {
                 mix(text.len());
                 mix(author.len());
                 mix(author_id.len());
                 mix(usize::from(*find_hit));
+                mix(usize::from(*streaming));
             }
             WecomRow::Tool { message, expanded } => {
                 mix(tool_message_fingerprint(message) as usize);
@@ -19402,8 +19610,8 @@ fn wechat_row_el(
             .group(hover_group.clone())
             .w_full()
             .flex()
-            .justify_end()
-            .items_start()
+            .flex_col()
+            .items_end()
             .when(*find_hit, |el| {
                 el.rounded(px(theme::RADIUS_CHIP)).bg(theme::accent_soft())
             })
@@ -19434,7 +19642,7 @@ fn wechat_row_el(
                         cx,
                     )),
             )
-            // 用户气泡贴右，动作条挂右上（与 classic 的 top -18 / right 0 一致）
+            // 动作条在气泡下面，icon 样式（默认可见）。
             .child(wechat_message_actions(
                 index,
                 text,
@@ -19442,7 +19650,6 @@ fn wechat_row_el(
                 i18n::t("你"),
                 weak,
                 true,
-                &hover_group,
             ))
             .into_any_element(),
         WecomRow::Assistant {
@@ -19450,6 +19657,7 @@ fn wechat_row_el(
             author,
             author_id: _,
             find_hit,
+            streaming,
         } => {
             let mut cell = div()
                 .flex_1()
@@ -19489,6 +19697,17 @@ fn wechat_row_el(
                     font_size,
                 ));
             cell = cell.child(bubble);
+            // 动作条跟在正文下面（左对齐）；回答还在流式输出时先不显示，
+            // 避免「复制/引用」在答案没写完时就出现。
+            if !*streaming {
+                cell = cell.child(wechat_message_actions(
+                    index,
+                    text,
+                    author,
+                    weak,
+                    false,
+                ));
+            }
             // 群聊不再显示头像，只保留气泡上方的成员名称。
             div()
                 .relative()
@@ -19500,15 +19719,6 @@ fn wechat_row_el(
                     el.rounded(px(theme::RADIUS_CHIP)).bg(theme::accent_soft())
                 })
                 .child(cell)
-                // 助手气泡贴左，动作条挂左上
-                .child(wechat_message_actions(
-                    index,
-                    text,
-                    author,
-                    weak,
-                    false,
-                    &hover_group,
-                ))
                 .into_any_element()
         }
         WecomRow::Reasoning {
@@ -19904,7 +20114,7 @@ fn switch(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div>
         .flex()
         .items_center()
         .pointer()
-        .hover(|style| style.bg(theme::hover()))
+        // 开关不挂 hover：鼠标移上去底色不变，避免「看起来能点但状态没变」的错觉。
         .child(
             div()
                 .size(px(16.))
@@ -20083,93 +20293,73 @@ fn wechat_message_actions(
     author: &str,
     weak: &gpui::WeakEntity<PilotApp>,
     align_right: bool,
-    hover_group: &gpui::SharedString,
 ) -> gpui::AnyElement {
+    // 默认显示在消息正文下面，icon 样式（对齐 WebView 版）：不再悬浮在气泡上方，
+    // 也不靠 hover 才出现，避免长回复时动作条压字。
     let mut bar = div()
-        .absolute()
-        // 与 classic 的 `message_row` 一致：挂在气泡上方 18px，
-        // 避开正文（助手长段落会铺满列宽，top(0) 会压字）。
-        .top(px(-18.))
-        .when(align_right, |el| el.right(px(0.)))
-        .when(!align_right, |el| el.left(px(0.)))
-        .opacity(0.)
-        .group_hover(hover_group.clone(), |style| style.opacity(1.))
         .flex()
         .items_center()
-        .gap(px(8.))
-        .px(px(6.))
-        .py(px(2.))
-        .rounded(px(theme::RADIUS_TAG))
-        .bg(wechat_theme::chip_bg());
+        .gap(px(2.))
+        .pt(px(2.))
+        .text_color(wechat_theme::time_label())
+        .when(align_right, |el| el.justify_end());
+    let action_button = |id: String, icon: icons::Icon| {
+        div()
+            .id(SharedString::from(id))
+            .size(px(22.))
+            .rounded(px(theme::RADIUS_TAG))
+            .flex()
+            .items_center()
+            .justify_center()
+            .pointer()
+            .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+            .child(icons::icon(icon, 13., wechat_theme::time_label()))
+    };
 
     let copy_text = text.to_string();
     let weak_copy = weak.clone();
     bar = bar.child(
-        div()
-            .id(SharedString::from(format!("wecom-copy-{index}")))
-            .font_family(wechat_theme::FONT_FAMILY)
-            .text_size(px(ui_kit::T_LABEL))
-            .line_height(px(ui_kit::T_LABEL_LH))
-            .text_color(wechat_theme::chip_text())
-            .pointer()
-            .hover(|style| style.text_color(wechat_theme::chat_title()))
-            .on_click(move |_event, _window, cx| {
-                let text = copy_text.clone();
-                let _ = weak_copy.update(cx, |this, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    this.toast(i18n::t("已复制消息"), cx);
-                    cx.notify();
-                });
-            })
-            .child(i18n::t("复制")),
+        action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_event, _window, cx| {
+            let text = copy_text.clone();
+            let _ = weak_copy.update(cx, |this, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                this.toast(i18n::t("已复制消息"), cx);
+                cx.notify();
+            });
+        }),
     );
 
     if let Some(code) = fenced_code(text) {
         let weak_code = weak.clone();
         bar = bar.child(
-            div()
-                .id(SharedString::from(format!("wecom-copy-code-{index}")))
-                .font_family(wechat_theme::FONT_FAMILY)
-                .text_size(px(ui_kit::T_LABEL))
-                .line_height(px(ui_kit::T_LABEL_LH))
-                .text_color(wechat_theme::chip_text())
-                .pointer()
-                .hover(|style| style.text_color(wechat_theme::chat_title()))
-                .on_click(move |_event, _window, cx| {
+            action_button(format!("wecom-copy-code-{index}"), icons::Icon::Terminal).on_click(
+                move |_event, _window, cx| {
                     let code = code.clone();
                     let _ = weak_code.update(cx, |this, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(code));
                         this.toast(i18n::t("已复制代码"), cx);
                         cx.notify();
                     });
-                })
-                .child(i18n::t("复制代码")),
+                },
+            ),
         );
     }
 
     // 「引用」：把这条消息的作者 + 正文写进 chat.quote，由 composer 顶部的
-    // 引用条显示。正文在 compose_with_quote 里还会再压一遍空白并截到 200 字，
-    // 这里不预截，避免两处截断长度不一致。
+    // 引用条显示。正文在 compose_with_quote 里还会再压一遍空白并截到 200 字。
     let weak_quote = weak.clone();
     let quote_author = author.trim().to_string();
     let quote_body = text.to_string();
     bar = bar.child(
-        div()
-            .id(SharedString::from(format!("wechat-quote-{index}")))
-            .font_family(wechat_theme::FONT_FAMILY)
-            .text_size(px(ui_kit::T_LABEL))
-            .line_height(px(ui_kit::T_LABEL_LH))
-            .text_color(wechat_theme::chip_text())
-            .pointer()
-            .hover(|style| style.text_color(wechat_theme::chat_title()))
-            .on_click(move |_event, _window, cx| {
+        action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_click(
+            move |_event, _window, cx| {
                 let author = quote_author.clone();
                 let body = quote_body.clone();
                 let _ = weak_quote.update(cx, |this, cx| {
                     this.set_quote(author, body, cx);
                 });
-            })
-            .child(i18n::t("引用")),
+            },
+        ),
     );
 
     bar.into_any_element()
@@ -20357,14 +20547,6 @@ fn truncate_chars(text: &str, limit: usize) -> String {
 
 /// 焦点指示：贴在元素左侧的 3px 内阴影。
 ///
-/// 用 inset 阴影而不是 `border_l_3()`：边框会占布局空间，把固定宽度的
-/// 侧栏/设置导航撑破；阴影只在绘制层，不影响布局。
-fn focus_ring_left(color: Rgba) -> gpui::BoxShadow {
-    gpui::BoxShadow::new(px(3.), px(0.), Hsla::from(color))
-        .inset()
-        .spread_radius(px(0.))
-}
-
 fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
     div()
         .font_family(theme::FONT_FAMILY)
@@ -20379,29 +20561,25 @@ fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
 ///
 /// Bot / 群聊 / 侧栏分组 三块合并为一页「Bot团队」，页内用横向 tab 切换
 /// （见 `settings_page_bot_team`）。18 -> 17 项，原「群聊」及之后的下标各前移 1。
-const SETTINGS_PAGES: [&str; 17] = [
+const SETTINGS_PAGES: [&str; 13] = [
     "通用",
     "模型",
-    "插件",
     "智能体",
     "Bot团队",
     "团队记忆",
-    "连接器",
+    "连接",
     "IM频道",
     "定时任务",
     "密钥",
-    "能力",
     "用量",
     "关于",
-    "反馈",
     "浏览器",
     "电脑操控",
-    "更多",
 ];
 
-/// 设置页的二级详情面板（替代原先的弹窗）。
+/// 设置页的二级详情面板（统一渲染成居中弹窗）。
 ///
-/// 规范 §8：选择类与表单类走侧栏，破坏性删除仍用居中确认框。
+/// 规范 §8：选择类与表单类走居中弹窗，破坏性删除仍用 AlertDialog。
 #[derive(Clone)]
 enum SettingsDetail {
     ProviderKey {
@@ -20596,31 +20774,28 @@ fn settings_page_icon(index: usize) -> menu_icons::MenuIcon {
     match index {
         0 => menu_icons::MenuIcon::Sliders,
         1 => menu_icons::MenuIcon::Models,
-        2 => menu_icons::MenuIcon::Plugins,
-        3 => menu_icons::MenuIcon::Agents,
-        4 => menu_icons::MenuIcon::Team,
-        5 => menu_icons::MenuIcon::Memory,
-        6 => menu_icons::MenuIcon::Connectors,
-        7 => menu_icons::MenuIcon::Im,
-        8 => menu_icons::MenuIcon::Schedules,
-        9 => menu_icons::MenuIcon::Keys,
-        10 => menu_icons::MenuIcon::Abilities,
-        11 => menu_icons::MenuIcon::Usage,
-        12 => menu_icons::MenuIcon::About,
-        13 => menu_icons::MenuIcon::Feedback,
-        14 => menu_icons::MenuIcon::Browser,
-        15 => menu_icons::MenuIcon::Computer,
+        2 => menu_icons::MenuIcon::Agents,
+        3 => menu_icons::MenuIcon::Team,
+        4 => menu_icons::MenuIcon::Memory,
+        5 => menu_icons::MenuIcon::Connectors,
+        6 => menu_icons::MenuIcon::Im,
+        7 => menu_icons::MenuIcon::Schedules,
+        8 => menu_icons::MenuIcon::Keys,
+        9 => menu_icons::MenuIcon::Usage,
+        10 => menu_icons::MenuIcon::About,
+        11 => menu_icons::MenuIcon::Browser,
+        12 => menu_icons::MenuIcon::Computer,
         _ => menu_icons::MenuIcon::More,
     }
 }
 
-/// 已并入「插件」页、不再单独占导航的设置页下标（浏览器 / 电脑操控）。
+/// 已并入「连接 → 插件」页、不再单独占导航的设置页下标（浏览器 / 电脑操控）。
 ///
 /// 这两页的内容由 `settings_page_plugins` 以内嵌卡片渲染，导航里故意不列。
-/// 用常量 + `settings_page_in_nav` 而不是两处 `index == 14 || index == 15` 硬编码：
+/// 用常量 + `settings_page_in_nav` 而不是两处 `index == 12 || index == 13` 硬编码：
 /// 导航在桌面侧栏（`settings_nav`）和微信风侧栏各写一遍，硬编码写歪一处就会出现
-/// 「`SETTINGS_PAGES` 17 项、侧栏只有 15 个入口」的不一致（验收 D-03）。
-const EMBEDDED_SETTINGS_PAGES: [usize; 2] = [14, 15];
+/// 「`SETTINGS_PAGES` 14 项、侧栏只有 12 个入口」的不一致（验收 D-03）。
+const EMBEDDED_SETTINGS_PAGES: [usize; 2] = [11, 12];
 
 /// 该设置页是否在导航里单列（内嵌页返回 false）。
 fn settings_page_in_nav(index: usize) -> bool {
@@ -21836,13 +22011,14 @@ fn auto_permission(
     bot: &Bot,
     prompt: &PermissionPrompt,
 ) -> Option<(String, String, String)> {
-    // 隐私越界（访问别人/已归档的目录）一律交给用户：档位说的是「这个 Bot 在它自己的
+    // 隐私越界（访问别人/已归档的目录）默认交给用户：档位说的是「这个 Bot 在它自己的
     // 范围内可以多自由」，不是「允许它读别人的隐私目录」。曾经这里只按工具名判定，
     // `full` 对 `read` 返回 Allow，越界卡被静默消费，文件内容直接进了回复（D-05）。
-    if prompt.privacy {
+    // 2026-11-27：`full` 改名「完全自主」，语义改为所有操作都不再询问，隐私卡也放行。
+    let level = parse_level(&bot.approval_level).ok()?;
+    if prompt.privacy && level != bot_team::approval::ApprovalLevel::Full {
         return None;
     }
-    let level = parse_level(&bot.approval_level).ok()?;
     let decision = decide(level, &bot.approval_allowlist, &prompt.tool_name);
     let (allow, label) = match decision {
         ApprovalDecision::Allow => (true, i18n::t("放行")),
@@ -22955,6 +23131,8 @@ impl PilotApp {
                                 .w(px(PANEL_WIDTH * self.right_panel_anim.max(0.)))
                                 .flex_shrink_0()
                                 .h_full()
+                                // 动画期间先铺右栏底色，避免新露出的窗口区域闪白。
+                                .bg(wechat_theme::panel_card_bg())
                                 .overflow_hidden()
                                 .child(
                                     div()
@@ -22963,7 +23141,13 @@ impl PilotApp {
                                         .right(px(0.))
                                         .w(px(PANEL_WIDTH))
                                         .h_full()
-                                        .child(self.chat_info_panel(window, cx)),
+                                        // 旁路会话占用右栏时替换信息栏；关闭后自动回到信息栏。
+                                        .child(match self.side_panel(window, cx) {
+                                            Some(side) => side,
+                                            None => self
+                                                .chat_info_panel(window, cx)
+                                                .into_any_element(),
+                                        }),
                                 ),
                         );
                     }
@@ -22990,14 +23174,8 @@ impl PilotApp {
             .w_full()
             .flex()
             .items_center()
-            // 液态磨砂玻璃：半透明白渐变 + 顶部内高光 + 底部内暗边。
-            .bg(wechat_theme::glass_gradient(wechat_theme::Glass::Titlebar))
-            .border_b_1()
-            .border_color(wechat_theme::glass_edge())
-            .shadow(vec![
-                wechat_theme::glass_sheen(),
-                wechat_theme::glass_depth(),
-            ])
+            // 实色标题栏（微信桌面端原样）：不做半透明/渐变，避免与内容层互相透色。
+            .bg(wechat_theme::titlebar_bg())
             .text_color(wechat_theme::nav_text())
             .child(
                 div()
@@ -23213,22 +23391,6 @@ impl PilotApp {
         grid
     }
 
-    fn wechat_channel_avatar(id: &str, size: f32) -> impl IntoElement {
-        div()
-            .size(px(size))
-            .flex_shrink_0()
-            .rounded(px(theme::RADIUS_TAG))
-            .bg(wechat_theme::avatar_color(id))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(icons::icon(
-                icons::Icon::Hash,
-                size * 0.52,
-                wechat_theme::nav_text_active(),
-            ))
-    }
-
     fn wechat_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.wechat_nav;
         let total_unread: usize = self
@@ -23244,26 +23406,11 @@ impl PilotApp {
             .flex()
             .flex_col()
             .items_center()
-            // 液态磨砂玻璃：渐变 + 顶部反光条 + 右缘细边。
-            .bg(wechat_theme::glass_gradient(wechat_theme::Glass::Rail))
-            .border_r_1()
-            .border_color(wechat_theme::glass_edge())
-            .shadow(vec![
-                wechat_theme::glass_sheen(),
-                wechat_theme::glass_depth(),
-            ])
+            // 实色导轨；左右不再画分隔线（与列表连成一片）。
+            .bg(wechat_theme::nav_gradient())
             .pt(px(12.))
             .pb(px(12.))
-            .gap(px(4.))
-            .child(
-                div()
-                    .absolute()
-                    .top(px(0.))
-                    .left(px(0.))
-                    .right(px(0.))
-                    .h(px(140.))
-                    .bg(wechat_theme::glass_glow()),
-            );
+            .gap(px(4.));
         // 顶部用户头像（圆形 + 在线绿点）
         rail = rail.child(
             div()
@@ -23424,17 +23571,22 @@ impl PilotApp {
     fn ensure_wechat_selection(&mut self, cx: &mut Context<Self>) {
         match self.wechat_nav {
             WecomNav::Channels => {
-                if self.selected_group().is_none()
-                    && let Some(index) = self.roster.groups.iter().position(|_| true)
-                {
-                    self.select_group(index, cx);
+                if self.selected_group().is_none() {
+                    if let Some(index) = self.roster.groups.iter().position(|_| true) {
+                        self.select_group(index, cx);
+                    } else if self.selected_bot().is_some() {
+                        // 群聊栏没有群时不能继续挂着 Bot，否则中栏会显示成私聊。
+                        self.selection = None;
+                    }
                 }
             }
             WecomNav::Bots => {
-                if self.selected_bot().is_none()
-                    && let Some(index) = self.roster.bots.iter().position(|_| true)
-                {
-                    self.select_bot(index, cx);
+                if self.selected_bot().is_none() {
+                    if let Some(index) = self.roster.bots.iter().position(|_| true) {
+                        self.select_bot(index, cx);
+                    } else if self.selected_group().is_some() {
+                        self.selection = None;
+                    }
                 }
             }
             WecomNav::All => {}
@@ -23600,23 +23752,8 @@ impl PilotApp {
             .h_full()
             .flex()
             .flex_col()
-            // 液态磨砂玻璃：与导轨同一套表面，亮度略低一档。
-            .bg(wechat_theme::glass_gradient(wechat_theme::Glass::List))
-            .border_r_1()
-            .border_color(wechat_theme::glass_edge())
-            .shadow(vec![
-                wechat_theme::glass_sheen(),
-                wechat_theme::glass_depth(),
-            ])
-            .child(
-                div()
-                    .absolute()
-                    .top(px(0.))
-                    .left(px(0.))
-                    .right(px(0.))
-                    .h(px(140.))
-                    .bg(wechat_theme::glass_glow()),
-            );
+            // 实色列表底；右缘不再画分隔线（红框标出的竖线取消）。
+            .bg(wechat_theme::list_gradient());
         if self.settings_open {
             // 行本身通栏到侧栏边缘，内容缩进放在行内；滚动条占右侧 6px。
             let mut rows = div()
@@ -23630,7 +23767,7 @@ impl PilotApp {
             }
             let active = self.settings_tab == index;
             let pinned = self.pinned_settings.contains(&index);
-            if index == 12 {
+            if index == 10 {
                     rows = rows.child(
                         div()
                             .mx(px(8.))
@@ -23648,11 +23785,10 @@ impl PilotApp {
                         .id(SharedString::from(format!("wechat-set-{index}")))
                         .track_focus(&nav_focus)
                         .key_context("TabStop")
-                        // 焦点态只用底色 + inset 阴影：border 会增加元素宽度，
-                        // 把固定 246px 宽的侧栏撑破（实测整体错位 3px）。
+                        // 焦点态只用底色：不再画左侧竖线（inset 阴影），
+                        // 选中态本身已有整行底色，竖线是多余的第二个选中指示。
                         .when(nav_focused, |el| {
                             el.bg(wechat_theme::nav_item_hover_bg())
-                                .shadow(vec![focus_ring_left(wechat_theme::send_enabled())])
                         })
                         .on_action(cx.listener(
                             move |this, _: &ActivateTabStop, window, cx| {
@@ -23665,7 +23801,8 @@ impl PilotApp {
                                 cx.notify();
                             },
                         ))
-                        .h(px(40.))
+                        // 与右侧页标题同高：14 + 24 + 14 = 52。
+                        .h(px(52.))
                         // 滚动条槽占 6px：反向抵消，选中/悬浮底色才铺到面板右缘。
                         .mr(px(-6.))
                         .pl(px(16.))
@@ -23754,9 +23891,10 @@ impl PilotApp {
                     .id("wechat-settings-list")
                     .flex_1()
                     .min_h(px(0.))
+                    // 菜单列不显示滚动条（项数固定，滚轮仍可用）。
                     .overflow_y_scroll()
-                    .scrollbar_width(px(6.))
-                    .py(px(16.))
+                    .scrollbar_width(px(0.))
+                    // 顶部不再留 16px：导航第一项紧贴标题栏下沿。
                     .child(rows),
             );
         }
@@ -23774,16 +23912,14 @@ impl PilotApp {
         }
         let list_body: gpui::AnyElement = if rows.is_empty() {
             // 空列表有两种成因：搜索没命中，或这一栏本来就没有内容。
-            // 一律写「没有匹配的会话」，会让「还没有 IM 频道」被读成搜索失败——
+            // 一律写「没有匹配的会话」，会让「还没有群聊」被读成搜索失败——
             // 用户会去翻搜索框，而搜索框里一个字都没有。
             let query = self.search_input.read(cx).content().trim().to_string();
             let empty_text = if !query.is_empty() {
                 i18n::t("没有匹配的会话")
             } else {
                 match self.wechat_nav {
-                    WecomNav::Channels => {
-                        i18n::t("还没有 IM 频道；在 设置 → IM 频道 新建机器人")
-                    }
+                    WecomNav::Channels => i18n::t("还没有群聊；点左上角 + 新建"),
                     WecomNav::Bots => i18n::t("还没有 Bot；点左上角 + 新建"),
                     WecomNav::All => i18n::t("还没有会话；点左上角 + 新建"),
                 }
@@ -23810,7 +23946,9 @@ impl PilotApp {
             div()
                 .px(px(12.))
                 .pt(px(12.))
-                .pb(px(12.))
+                // 底部间距交给列表容器的 pt(12)：搜索框到第一行仍是 12，
+                // 与上方、左右、列表底部一致。
+                .pb(px(0.))
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -23868,6 +24006,8 @@ impl PilotApp {
                 .id("wechat-list")
                 .flex_1()
                 .min_h(px(0.))
+                // 上下留 12，与行内左右 12 一致。
+                .py(px(12.))
                 .child(list_body),
         )
     }
@@ -23928,13 +24068,13 @@ impl PilotApp {
                     .id("wecom-settings-scroll")
                     .flex_1()
                     .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .scrollbar_width(px(6.))
-                    // 滚动条占右侧 6px；右内边距相应减掉，视觉左右等宽。
+                    // 常显滚动条；右侧内边距不再为滚动条扣 6px。
+                    .overflow_y_scrollbar()
+                    // 上下保留 S4 呼吸位：页标题/底边与内容不再贴死。
                     .pl(px(14.))
-                    .pr(px(8.))
-                    .pt(px(14.))
-                    .pb(px(14.))
+                    .pr(px(14.))
+                    .pt(px(ui_kit::S4))
+                    .pb(px(ui_kit::S4))
                     .child(
                         div()
                             .w_full()
@@ -23969,7 +24109,12 @@ impl PilotApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        if !self.settings_open {
+        // 详情/创建弹窗不再依赖设置页：从聊天页触发的编辑/新建就在当前页面居中弹出。
+        let has_modal = self.settings_detail.is_some()
+            || self.im_create.is_some()
+            || self.im_qr_page.is_some()
+            || (self.settings_open && self.settings_tab == 6 && self.im_selected.is_some());
+        if !has_modal {
             return None;
         }
         let tab = self.settings_tab;
@@ -23992,7 +24137,7 @@ impl PilotApp {
                 i18n::t("新建企业微信机器人")
             }));
             body = Some(self.im_create_page(cx));
-        } else if tab == 7 && self.im_selected.is_some() {
+        } else if self.settings_open && tab == 7 && self.im_selected.is_some() {
             kind = Some(SettingsModalKind::ImDetail);
             modal_title = Some(SharedString::from(i18n::t("机器人详情")));
             body = Some(self.im_bot_detail(cx));
@@ -24007,9 +24152,8 @@ impl PilotApp {
         let close = cx.listener(move |this, _event, window, cx| {
             match kind {
                 SettingsModalKind::ImSubpage => {
-                    if this.im_qr_page.take().is_none() {
-                        this.im_create = None;
-                    }
+                    this.close_im_subpage(window, cx);
+                    return;
                 }
                 SettingsModalKind::ImDetail => this.im_selected = None,
                 SettingsModalKind::Detail => {
@@ -24018,7 +24162,8 @@ impl PilotApp {
                     this.settings_detail_error = None;
                 }
             }
-            this.settings_focus.focus(window, cx);
+            // 设置页还开着就把焦点收回设置卡，否则还给输入框。
+            this.refocus_composer_if_clear(window, cx);
             cx.notify();
         });
         Some(
@@ -24043,7 +24188,11 @@ impl PilotApp {
                     div()
                         .w(px(SETTINGS_MODAL_WIDTH))
                         .max_h(px(max_h))
-                        .rounded(px(theme::RADIUS_DIALOG))
+                        // 与全局卡片圆角一致（14），不再单独用更大的 16。
+                        .rounded(px(theme::RADIUS_CARD))
+                        // 微信风弹窗：1px 边框描出卡片轮廓 + 层级阴影，避免贴在大片深色上糊成一块。
+                        .border_1()
+                        .border_color(wechat_theme::panel_divider())
                         .overflow_hidden()
                         .bg(wechat_theme::panel_card_bg())
                         .shadow(theme::shadow_4())
@@ -24094,20 +24243,30 @@ impl PilotApp {
                                 )
                         }))
 
-                        .child(
+                        .child(if has_title {
+                            // IM 类页面：内容层自己滚动，滚动条常显。
                             div()
                                 .id("settings-modal-body")
                                 .flex_1()
                                 .min_h(px(0.))
-                                // `SettingsDetail` 的 DetailPanel 自己带滚动与标题头，
-                                // 只有 IM 两类需要这里再包一层滚动。
-                                .when(has_title, |el| {
-                                    el.overflow_y_scroll()
-                                        .scrollbar_width(px(6.))
-                                        .p(px(16.))
-                                })
-                                .child(body),
-                        ),
+                                .flex()
+                                .flex_col()
+                                .overflow_y_scrollbar()
+                                .p(px(16.))
+                                .child(body)
+                                .into_any_element()
+                        } else {
+                            // SettingsDetail 的 DetailPanel 自带标题头与常显滚动条。
+                            div()
+                                .id("settings-modal-body")
+                                .flex_1()
+                                .min_h(px(0.))
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(body)
+                                .into_any_element()
+                        }),
                 )
                 .into_any_element(),
         )
@@ -24184,9 +24343,27 @@ impl PilotApp {
             ui::Tone::Neutral
         };
 
+        // 模型行可点：直接打开「切换模型」，替代底部单独的按钮。
+        let model_row = if let Some(bot) = &bot {
+            let bot_id = bot.id.clone();
+            ui::stat_row(i18n::t("模型"), model)
+                .id("info-model-row")
+                .pointer()
+                .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.settings_detail = Some(SettingsDetail::Model {
+                        bot_id: bot_id.clone(),
+                    });
+                    this.settings_detail_input = None;
+                    cx.notify();
+                }))
+                .into_any_element()
+        } else {
+            ui::stat_row(i18n::t("模型"), model).into_any_element()
+        };
         let mut rows = vec![
             ui::stat_row(i18n::t("引擎"), engine_label).into_any_element(),
-            ui::stat_row(i18n::t("模型"), model).into_any_element(),
+            model_row,
             ui::stat_row(i18n::t("会话 ID"), session).into_any_element(),
             ui::stat_row(i18n::t("消息数"), messages.to_string()).into_any_element(),
             ui::stat_row(i18n::t("排队消息"), queued.to_string()).into_any_element(),
@@ -24429,7 +24606,7 @@ impl PilotApp {
                         match bot.approval_level.as_str() {
                             "ask" => i18n::t("每次询问").to_string(),
                             "auto" => i18n::t("自动只读").to_string(),
-                            "full" => i18n::t("工作区自动").to_string(),
+                            "full" => i18n::t("完全自主").to_string(),
                             other => other.to_string(),
                         },
                     )
@@ -24637,10 +24814,6 @@ impl PilotApp {
                                                 current_title: current,
                                             });
                                         this.settings_detail_input = None;
-                                        // 切到设置页后右栏整块不再渲染，清理掉运行状态卡，
-                                        // 否则从设置返回时它会带着旧数据冒出来。
-                                        this.chat_detail = None;
-                                        this.settings_open = true;
                                         cx.notify();
                                     }))
                                     .child(i18n::t("改名")),
@@ -24692,7 +24865,6 @@ impl PilotApp {
                             this.settings_detail_input = None;
                             this.settings_detail_extra.clear();
                             this.settings_detail_error = None;
-                            this.settings_open = true;
                             cx.notify();
                         }))
                         .child(
@@ -24719,27 +24891,6 @@ impl PilotApp {
             );
         }
 
-        // 快捷动作：与「⋯」菜单里的常用项对齐
-        if let Some(bot_id) = bot.as_ref().map(|bot| bot.id.clone()) {
-            body = body.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(ui::S1))
-                    .child(
-                        ui::button("info-model", i18n::t("切换模型"))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.settings_detail = Some(SettingsDetail::Model {
-                                    bot_id: bot_id.clone(),
-                                });
-                                this.settings_detail_input = None;
-                                this.settings_open = true;
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
-
         // 「⋯ → 运行状态」现在只高亮上面那张基础卡（见 card 构造处），
         // 不再渲染第二张卡：右栏基础卡已经涵盖它的全部内容，再画一张就是同一数据出现两次。
 
@@ -24751,14 +24902,17 @@ impl PilotApp {
             // 不再画 border_l_1：面板底色（#252526）本来就比中栏（#1e1e1f）亮一档，
             // 再叠 1px 亮线会读成「两条分割线」。底色差已经够分隔。
             .bg(wechat_theme::panel_bg())
-            .px(px(12.))
+            // 右侧不再给面板内边距：滚动条画在这 12px 里，内容右边距由
+            // chat-info-scroll 的 pr(12) 提供，左右视觉一致。
+            .pl(px(12.))
             .py(px(12.))
             .child(
                 div()
                     .id("chat-info-scroll")
                     .size_full()
-                    .overflow_y_scroll()
-                    .scrollbar_width(px(6.))
+                    .overflow_y_scrollbar()
+                    // 右边距放在滚动层：滚动条落在面板最右侧的 12px 留白里。
+                    .pr(px(12.))
                     .child(body),
             )
     }
@@ -24821,17 +24975,20 @@ impl PilotApp {
     }
 
     fn wechat_chat(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = if let Some(bot) = self.selected_bot() {
+        // 「群聊」栏只展示群聊：即使遗留了 Bot 选中态，也不在这里渲染私聊。
+        let bot_chat_allowed = self.wechat_nav != WecomNav::Channels;
+        let title = if let Some(bot) = self.selected_bot().filter(|_| bot_chat_allowed) {
             bot.name.clone()
         } else if let Some(group) = self.selected_group() {
             group.name.clone()
         } else {
             "Mode Chat".to_string()
         };
-        let is_bot_chat = self.selected_bot().is_some();
+        let is_bot_chat = self.selected_bot().is_some() && bot_chat_allowed;
         div()
             .flex_1()
-            .min_w(px(0.))
+            // 会话区最小 610：右栏展开/窗口变窄时不再把它压到不可读。
+            .min_w(px(610.))
             .h_full()
             .flex()
             .flex_col()
@@ -25161,6 +25318,7 @@ impl PilotApp {
                 author,
                 author_id,
                 find_hit: find_hit_message == Some(index),
+                streaming: message.streaming,
             });
             message_rows.insert(index, rows.len() - 1);
         }
@@ -25276,15 +25434,11 @@ impl PilotApp {
                 .right(px(6.))
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .rounded(px(theme::RADIUS_CHIP))
-                .border_1()
-                .border_color(wechat_theme::composer_border())
-                .bg(wechat_theme::panel_card_bg())
-                .p(px(2.));
-            for (label, previous, enabled) in
-                [("↑", true, can_prev), ("↓", false, can_next)]
-            {
+                .gap(px(2.));
+            for (icon, previous, enabled) in [
+                (icons::Icon::ArrowUp, true, can_prev),
+                (icons::Icon::ArrowDown, false, can_next),
+            ] {
                 let turns = if previous {
                     turns_prev.clone()
                 } else {
@@ -25325,13 +25479,7 @@ impl PilotApp {
                             }
                             cx.notify();
                         }))
-                        .child(
-                            div()
-                                .font_family(wechat_theme::FONT_FAMILY)
-                                .text_size(px(12.))
-                                .text_color(wechat_theme::icon())
-                                .child(i18n::t(label)),
-                        ),
+                        .child(icons::icon(icon, 14., wechat_theme::icon())),
                 );
             }
             container = container.child(nav);
@@ -25495,7 +25643,7 @@ impl PilotApp {
             .px(px(ui_kit::S6))
             .child(if ids.is_empty() {
                 // 群聊还没加成员：画不出九宫格，退回首字色块。
-                Self::wechat_channel_avatar(&group.id, 56.).into_any_element()
+                Self::wechat_avatar(&group.id, &group.name, 56.).into_any_element()
             } else {
                 Self::wechat_group_avatar(&ids, 56.).into_any_element()
             })
@@ -26119,7 +26267,8 @@ impl PilotApp {
                     .px(px(12.))
                     .flex()
                     .items_center()
-                    .gap(px(12.))
+                    // 左侧图标组收紧到 8：微信 4.x 的图标排布比 12 更紧。
+                    .gap(px(8.))
                     .children(permission.map(|level| {
                         let color = if level == "ask" {
                             wechat_theme::icon()
@@ -26300,19 +26449,14 @@ impl Render for PilotApp {
             window_state::calibrate_if_pending((geometry.x, geometry.y));
             window_state::remember(geometry);
         }
-        // 设置详情不再联动窗口宽度：详情面板改成设置抽屉内的覆盖层，
-        // 不再占主轴一列，也就不需要（也不能）靠加宽窗口给它腾位置。
-        // 右栏折叠动画收完才还原窗口宽度：否则聊天区会先被缩掉 320，
-        // 面板再慢慢收，视觉上是「先跳一下再滑走」。
-        if self.panel_collapse_pending && self.right_panel_anim <= 0.001 {
-            self.panel_collapse_pending = false;
-            let current = f32::from(window.bounds().size.width);
-            let target = panel_target_width(current, false, self.panel_restore_width, PANEL_WIDTH);
-            self.panel_restore_width = None;
-            if target.is_some() {
-                window.defer(cx, move |window, _cx| {
-                    apply_panel_width(window, target);
-                });
+        // 右栏开合期间窗口宽度跟着面板同比例变化：window = base + PANEL_WIDTH * anim。
+        // 这样面板长出/收起时聊天区净宽全程不变，不再出现「先跳 320px 再滑」。
+        if let Some(base) = self.panel_restore_width {
+            let anim = self.right_panel_anim.clamp(0., 1.);
+            let desired = base + PANEL_WIDTH * anim;
+            apply_panel_width(window, Some(desired));
+            if !self.right_panel_open && anim <= 0.001 {
+                self.panel_restore_width = None;
             }
         }
         if !self.first_frame_logged {
@@ -26403,7 +26547,6 @@ impl Render for PilotApp {
             .on_action(cx.listener(Self::on_focus_next))
             .on_action(cx.listener(Self::on_focus_prev))
             .child(self.wechat_shell(window, cx))
-            .children(self.side_panel(window, cx))
             // 设置二级页面的居中弹窗：整窗遮罩，压在会话与侧栏之上。
             .children(self.settings_modal(window, cx))
             .children(self.image_preview_overlay(cx))
@@ -26632,13 +26775,23 @@ fn configure_kit_theme(cx: &mut App) {
         theme.danger_foreground = gpui::Hsla::from(wechat_theme::nav_text_active());
         theme.ring = gpui::Hsla::from(wechat_theme::send_enabled());
         theme.caret = gpui::Hsla::from(wechat_theme::chat_title());
-        // 滚动条：浅色皮肤默认深色滑块，会像一条黑杠。
+        // 滚动条：半透明浅色滑块，悬浮时略亮；轨道保持透明。
         theme.scrollbar = gpui::Hsla::from(gpui::rgba(0x00000000));
-        theme.scrollbar_thumb = gpui::Hsla::from(wechat_theme::time_label());
-        theme.scrollbar_thumb_hover = gpui::Hsla::from(wechat_theme::icon_strong());
+        theme.scrollbar_thumb = gpui::Hsla::from(if wechat_theme::light() {
+            gpui::rgba(0x00000033)
+        } else {
+            gpui::rgba(0xffffff3d)
+        });
+        theme.scrollbar_thumb_hover = gpui::Hsla::from(if wechat_theme::light() {
+            gpui::rgba(0x00000055)
+        } else {
+            gpui::rgba(0xffffff66)
+        });
         theme.font_family = wechat_theme::FONT_FAMILY.into();
         theme.font_size = px(13.);
     });
+    // 滚动条自动隐藏：滚动时出现，停下后淡出（不再常显）。
+    Theme::set_scrollbar_mode(gpui::component::scroll::ScrollbarMode::Scrolling, cx);
 }
 
 /// 发布包是 GUI 子系统：从 cmd/PowerShell 里直接跑 `--version` 时，先挂到父进程
@@ -26715,6 +26868,9 @@ fn main() {
         let saved_light = theme_light_for(&saved_theme);
         theme::set_light_runtime(saved_light);
         wechat_theme::set_light(saved_light);
+        // v0.6 之后只剩微信壳：皮肤标记必须是 true，否则开关/字体/控件
+        // 仍走 classic 分支（实测开关变蓝、字体回落到非雅黑）。
+        wechat_theme::set_active(true);
         gpui::component::Theme::change(
             if saved_light {
                 gpui::component::ThemeMode::Light
@@ -26796,20 +26952,13 @@ fn main() {
             Some(geometry) => window_state::restore_origin(geometry),
             None => (120.0, 90.0),
         };
-        let bounds = match saved {
-            Some(geometry) => Bounds::new(
-                Point::new(px(requested_origin.0), px(requested_origin.1)),
-                size(px(geometry.width), px(geometry.height)),
-            ),
-            None => Bounds::new(
-                Point::new(px(requested_origin.0), px(requested_origin.1)),
-                size(px(1100.), px(720.)),
-            ),
-        };
-        let window_bounds = match saved {
-            Some(geometry) if geometry.maximized => WindowBounds::Maximized(bounds),
-            _ => WindowBounds::Windowed(bounds),
-        };
+        // 启动一律使用最小尺寸：宽度 910、高度 650；只恢复上次的位置。
+        // （用户要求：默认窗口宽度保持最小，启动时按最小尺寸。）
+        let bounds = Bounds::new(
+            Point::new(px(requested_origin.0), px(requested_origin.1)),
+            size(px(WINDOW_MIN_W), px(WINDOW_MIN_H)),
+        );
+        let window_bounds = WindowBounds::Windowed(bounds);
         window_state::set_restore_request(requested_origin);
         window_state::spawn_autosave();
         let options = WindowOptions {
@@ -27015,25 +27164,36 @@ mod prefs_tests {
 
     #[test]
     fn pinned_settings_migrate_to_new_layout() {
-        // v1 用户：v1→v2 +1，v2→v3 不动，v3→v4 -1，净效果抵消。
-        assert_eq!(migrate_pinned_settings(&[1, 6], 1), vec![1, 6]);
-        // v2 用户：只有 v3→v4 的 -1。
-        assert_eq!(migrate_pinned_settings(&[1, 6], 2), vec![1, 5]);
-        // v2 里 15 是浏览器，v3 插到 17，v4 再 -1。
-        assert_eq!(migrate_pinned_settings(&[1, 15], 2), vec![1, 16]);
-        assert_eq!(migrate_pinned_settings(&[1, 6, 14], 1), vec![1, 6, 16]);
-        // v3 用户：只跑 v3→v4。
-        assert_eq!(migrate_pinned_settings(&[1, 6, 17], 3), vec![1, 5, 16]);
-        // v4 用户：不再迁移，原样返回。
-        assert_eq!(migrate_pinned_settings(&[1, 5, 16], 4), vec![1, 5, 16]);
-        // 群聊(5) 在任何旧版本都并入 Bot团队(4)。
-        assert_eq!(migrate_pinned_settings(&[5], 3), vec![4]);
-        assert_eq!(migrate_pinned_settings(&[5], 2), vec![4]);
+        // v1 用户：多次迁移后稳定在 5。
+        assert_eq!(migrate_pinned_settings(&[1, 6], 1), vec![1, 5]);
+        // v2 用户：v3→v4 -1、v5→v6 -1。
+        assert_eq!(migrate_pinned_settings(&[1, 6], 2), vec![1, 4]);
+        // v2 里 15 是浏览器：一路迁移到关于/用量附近，再随 v7 前移。
+        assert_eq!(migrate_pinned_settings(&[1, 15], 2), vec![1, 10]);
+        assert_eq!(migrate_pinned_settings(&[1, 6, 14], 1), vec![1, 5, 10]);
+        // v3 用户：v4/v5/v6/v7 连续迁移。
+        assert_eq!(migrate_pinned_settings(&[1, 6, 17], 3), vec![1, 4, 10]);
+        // v4 用户：反馈/更多并入关于，再经 v6/v7 前移。
+        assert_eq!(migrate_pinned_settings(&[1, 5, 16], 4), vec![1, 4, 10]);
+        assert_eq!(
+            migrate_pinned_settings(&[12, 13, 14, 16], 4),
+            vec![10, 10, 11, 10]
+        );
+        // v5 用户：插件/连接器合并为「连接」。
+        assert_eq!(migrate_pinned_settings(&[1, 5, 12], 5), vec![1, 4, 10]);
+        // v6 用户：能力页删除，用量及之后前移。
+        assert_eq!(migrate_pinned_settings(&[1, 4, 11], 6), vec![1, 4, 10]);
+        assert_eq!(migrate_pinned_settings(&[9, 11], 6), vec![10]);
+        // v7 用户：不再迁移，原样返回。
+        assert_eq!(migrate_pinned_settings(&[1, 4, 10], 7), vec![1, 4, 10]);
+        // 群聊(5) 在任何旧版本都并入 Bot团队，再随迁移前移。
+        assert_eq!(migrate_pinned_settings(&[5], 3), vec![3]);
+        assert_eq!(migrate_pinned_settings(&[5], 2), vec![3]);
     }
 
     /// 验收 D-03：导航项数必须等于「声明页数 - 内嵌页数」。
     ///
-    /// 曾经两处导航各自写 `index == 14 || index == 15`，一旦有一处写歪，
+    /// 曾经两处导航各自写 `index == 12 || index == 13`，一旦有一处写歪，
     /// 侧栏项数就和 `SETTINGS_PAGES` 对不上，却没有任何测试会红。
     #[test]
     fn settings_nav_lists_every_page_except_embedded() {
@@ -27044,23 +27204,23 @@ mod prefs_tests {
             nav.len(),
             SETTINGS_PAGES.len() - EMBEDDED_SETTINGS_PAGES.len()
         );
-        assert_eq!(nav.len(), 15);
+        assert_eq!(nav.len(), 11);
         assert!(
-            !nav.contains(&14) && !nav.contains(&15),
-            "浏览器/电脑操控由插件页内嵌，不该单独占导航"
+            !nav.contains(&11) && !nav.contains(&12),
+            "浏览器/电脑操控由连接→插件页内嵌，不该单独占导航"
         );
         // 内嵌页必须真的是这两页，否则「跳过」的就是别的功能。
-        assert_eq!(SETTINGS_PAGES[14], "浏览器");
-        assert_eq!(SETTINGS_PAGES[15], "电脑操控");
+        assert_eq!(SETTINGS_PAGES[11], "浏览器");
+        assert_eq!(SETTINGS_PAGES[12], "电脑操控");
     }
 
     /// 固定的设置页必须落在导航里：内嵌页固定出来只会是重复图标。
     #[test]
     fn pinned_settings_skip_embedded_pages() {
-        assert_eq!(normalize_pinned_settings(&[14, 15, 11]), vec![11]);
-        // 上限 5 条也只数导航页：14/15 不该占名额。
+        assert_eq!(normalize_pinned_settings(&[11, 12, 9]), vec![9]);
+        // 上限 5 条也只数导航页：11/12 不该占名额。
         assert_eq!(
-            normalize_pinned_settings(&[14, 15, 0, 1, 2, 3, 4, 5]),
+            normalize_pinned_settings(&[11, 12, 0, 1, 2, 3, 4, 5]),
             vec![0, 1, 2, 3, 4]
         );
     }
@@ -27113,10 +27273,11 @@ mod auto_permission_tests {
     }
 
     #[test]
-    fn privacy_prompt_is_never_auto_approved() {
-        // D-05：`full` 档下 read 本来会被自动放行，越界卡就被静默消费、文件内容进了回复。
-        // 隐私越界必须一律弹给用户，任何档位都不许自动放行。
-        for level in ["full", "auto", "ask"] {
+    fn privacy_prompt_follows_the_full_level() {
+        // 2026-11-27：`full` = 完全自主，隐私越界也不再询问；
+        // auto / ask 仍必须把卡弹给用户（D-05 的防线保留在这两档）。
+        assert!(auto_permission(&bot("full"), &prompt("read", true)).is_some());
+        for level in ["auto", "ask"] {
             assert!(
                 auto_permission(&bot(level), &prompt("read", true)).is_none(),
                 "{level} 档不得自动放行隐私越界卡"

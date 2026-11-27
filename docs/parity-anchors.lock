@@ -1,4 +1,4 @@
-Cargo.toml:25|version = "0.6.2"
+Cargo.toml:25|version = "0.7.0"
 crates/automation-schedule/src/cron.rs:1|//! 五段/六段/七段 cron 解析与下次/上次触发计算。
 crates/automation-schedule/src/cron.rs:49|pub fn parse(pattern: &str) -> Result<Self, String> {
 crates/bots-service/src/lib.rs:59|pub const RETIRED_BOT_PROVIDERS: &[&str] = &["telegram", "webhook", "discord", "
@@ -96,16 +96,16 @@ src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
 src/backend.rs:144|pub struct ElicitationCard {
-src/backend.rs:1498|let internal = member_session_key(&spec.group_key, &member.member_id);
-src/backend.rs:1603|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
-src/backend.rs:1611|let chosen: Vec<usize> = if !mentioned.is_empty() {
-src/backend.rs:1613|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
-src/backend.rs:1667|memory: crate::data::group_memory_context(
+src/backend.rs:1507|let internal = member_session_key(&spec.group_key, &member.member_id);
+src/backend.rs:1612|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
+src/backend.rs:1620|let chosen: Vec<usize> = if !mentioned.is_empty() {
+src/backend.rs:1622|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
+src/backend.rs:1676|memory: crate::data::group_memory_context(
 src/backend.rs:191|Delta {
 src/backend.rs:194|}
-src/backend.rs:2161|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
-src/backend.rs:2239|async fn run_memory_review(
-src/backend.rs:2247|};
+src/backend.rs:2170|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
+src/backend.rs:2248|async fn run_memory_review(
+src/backend.rs:2256|};
 src/backend.rs:320|async fn open_rpi_session(
 src/backend.rs:335|let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, w
 src/backend.rs:345|let mut extra_tools = crate::mcp_host::for_workspace(workspace)
@@ -193,85 +193,84 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10045|SettingsDetail::AddModel {
-src/main.rs:10104|let templates = data::provider_templates();
-src/main.rs:10408|panel = panel.body(view);
-src/main.rs:1052|#[derive(Clone, PartialEq, Eq)]
-src/main.rs:10601|let Some(form) = this.settings_detail_group.clone() else {
-src/main.rs:1084|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11157|.filter(|bot| !bot.is_private)
-src/main.rs:11167|.filter(|bot| !bot.is_private)
-src/main.rs:11174|.filter(|bot| !bot.is_private)
-src/main.rs:11762|settings_row(i18n::t("测试通知").to_string(), None)
-src/main.rs:11808|.text_color(theme::ink())
-src/main.rs:12342|this.settings_dropdown = None;
-src/main.rs:12674|ui::button_ghost(
-src/main.rs:13444|body = body.child(settings_section(i18n::t("已隐藏")));
-src/main.rs:13828|settings_button("im-create-cancel", i18n::t("取消")).on_click(
-src/main.rs:15003|let toggled_on = !on;
-src/main.rs:15532|let token = |value: Option<i64>| {
-src/main.rs:15601|.child(ui::stat_card(
-src/main.rs:15619|);
-src/main.rs:1589|strip = strip.child(stage_action_chip(
-src/main.rs:1615|strip = strip.child(stage_action_chip(
-src/main.rs:1636|strip = strip.child(stage_action_chip(
-src/main.rs:1680|.id(SharedString::from(format!(
-src/main.rs:18061|true
-src/main.rs:18394|.unwrap_or(true);
-src/main.rs:18798|rendered = true;
-src/main.rs:18906|.filter(|bot| !bot.is_private)
-src/main.rs:19325|expanded
-src/main.rs:19604|.line_height(px(18.))
-src/main.rs:19763|"发送失败"
-src/main.rs:20064|.into_any_element()
-src/main.rs:20093|.when(align_right, |el| el.right(px(0.)))
-src/main.rs:20103|.bg(wechat_theme::chip_bg());
-src/main.rs:20111|.text_size(px(ui_kit::T_LABEL))
-src/main.rs:20371|.text_size(px(11.))
-src/main.rs:20390|"IM频道"
-src/main.rs:2052|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:209|fn panel_target_width(
-src/main.rs:2096|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
-src/main.rs:21199|crate::ui_kit::error(text)
-src/main.rs:21878|.options
-src/main.rs:21880|.find(|option| option.kind.starts_with("allow"))
-src/main.rs:226|}
-src/main.rs:2262|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:2342|"task-reassign-{}"
-src/main.rs:2385|"task-reassign-{}-{}"
-src/main.rs:24119|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
-src/main.rs:2456|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:247|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:26110|.text_color(wechat_theme::bubble_text())
-src/main.rs:26251|.id("wechat-send")
-src/main.rs:2802|fn push_member_delta(&mut self, member: &str, delta: &str) {
-src/main.rs:2820|fn finish_member(&mut self, member: &str) {
-src/main.rs:3249|usage_group: usize
-src/main.rs:3627|ToolGroup {
-src/main.rs:4279|.filter(|bot| !bot.is_private)
-src/main.rs:4281|let workspace = match &group.directory {
-src/main.rs:4571|.filter(|bot| !bot.is_private)
-src/main.rs:5318|&session_id
-src/main.rs:5325|self.mirror_reply_sessions.insert(session_id);
-src/main.rs:5364|accepted = true;
-src/main.rs:5492|.filter(|bot| !bot.is_private)
-src/main.rs:5821|else {
-src/main.rs:6040|.on_click(cx.listener(move |this, _event, _window, cx| {
-src/main.rs:6393|if pending.sent {
-src/main.rs:6547|.elicitations
-src/main.rs:6842|/// 关闭当帧对话框还在退场动画里，焦点会被浮层盖住，所以延后一帧再还。
-src/main.rs:705|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7094|window: &mut Window
-src/main.rs:755|enum MsgKind {
-src/main.rs:7568|/// 执行命令面板的一项（关面板由调用方保证）。
-src/main.rs:757|Reasoning
-src/main.rs:8374|if let Some(side) = this.side_chat.as_mut() {
-src/main.rs:8623|.filter(|bot| !bot.is_private)
-src/main.rs:9213|match &id {
-src/main.rs:9494|tri!("已保存密钥：{name}", "Saved secret: {name}")
-src/main.rs:9614|("例如：每日简报", String::new())
-src/main.rs:9633|.settings_detail_entries
-src/main.rs:9678|let mut days_row = div().flex().items_center().gap(px(ui::S1));
+src/main.rs:10195|SettingsDetail::AddModel {
+src/main.rs:10280|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:10582|panel = panel.body(view);
+src/main.rs:10775|let Some(form) = this.settings_detail_group.clone() else {
+src/main.rs:1092|#[derive(Clone, PartialEq, Eq)]
+src/main.rs:1124|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
+src/main.rs:11332|.filter(|bot| !bot.is_private)
+src/main.rs:11342|.filter(|bot| !bot.is_private)
+src/main.rs:11349|.filter(|bot| !bot.is_private)
+src/main.rs:11933|settings_row(i18n::t("测试通知").to_string(), None)
+src/main.rs:11979|.text_color(theme::ink())
+src/main.rs:12513|this.settings_dropdown = None;
+src/main.rs:12845|ui::button_ghost(
+src/main.rs:13677|body = body.child(settings_section(i18n::t("已隐藏")));
+src/main.rs:14141|settings_button("im-create-cancel", i18n::t("取消")).on_click(
+src/main.rs:15320|let toggled_on = !on;
+src/main.rs:15777|let token = |value: Option<i64>| {
+src/main.rs:15846|.child(ui::stat_card(
+src/main.rs:15864|);
+src/main.rs:1629|strip = strip.child(stage_action_chip(
+src/main.rs:1655|strip = strip.child(stage_action_chip(
+src/main.rs:1676|strip = strip.child(stage_action_chip(
+src/main.rs:1720|.id(SharedString::from(format!(
+src/main.rs:18264|true
+src/main.rs:18597|.unwrap_or(true);
+src/main.rs:19001|rendered = true;
+src/main.rs:19109|.filter(|bot| !bot.is_private)
+src/main.rs:19549|fn wechat_row_el(
+src/main.rs:19814|.line_height(px(18.))
+src/main.rs:19973|"发送失败"
+src/main.rs:20290|fn wechat_message_actions(
+src/main.rs:20322|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
+src/main.rs:20354|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
+src/main.rs:20369|fn fenced_code(text: &str) -> Option<String> {
+src/main.rs:20553|.text_size(px(11.))
+src/main.rs:20571|"IM频道"
+src/main.rs:2092|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
+src/main.rs:211|fn panel_target_width(
+src/main.rs:2136|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
+src/main.rs:21374|crate::ui_kit::error(text)
+src/main.rs:22070|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:22072|.selectable(true)
+src/main.rs:228|}
+src/main.rs:2302|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
+src/main.rs:2382|"task-reassign-{}"
+src/main.rs:2425|"task-reassign-{}-{}"
+src/main.rs:24278|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:249|const TRANSCRIPT_WINDOW: usize = 120;
+src/main.rs:2496|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
+src/main.rs:26400|.id("wechat-send")
+src/main.rs:2851|fn push_member_delta(&mut self, member: &str, delta: &str) {
+src/main.rs:2869|fn finish_member(&mut self, member: &str) {
+src/main.rs:3303|usage_group: usize
+src/main.rs:3685|ToolGroup {
+src/main.rs:4342|.filter(|bot| !bot.is_private)
+src/main.rs:4344|let workspace = match &group.directory {
+src/main.rs:4634|.filter(|bot| !bot.is_private)
+src/main.rs:5381|&session_id
+src/main.rs:5388|self.mirror_reply_sessions.insert(session_id);
+src/main.rs:5427|accepted = true;
+src/main.rs:5555|.filter(|bot| !bot.is_private)
+src/main.rs:5884|else {
+src/main.rs:6103|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:6456|if pending.sent {
+src/main.rs:6610|.elicitations
+src/main.rs:6903|/// 关闭当帧对话框还在退场动画里，焦点会被浮层盖住，所以延后一帧再还。
+src/main.rs:7240|window: &mut Window
+src/main.rs:745|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
+src/main.rs:7714|/// 执行命令面板的一项（关面板由调用方保证）。
+src/main.rs:795|enum MsgKind {
+src/main.rs:797|Reasoning
+src/main.rs:8524|if let Some(side) = this.side_chat.as_mut() {
+src/main.rs:8773|.filter(|bot| !bot.is_private)
+src/main.rs:9363|match &id {
+src/main.rs:9644|tri!("已保存密钥：{name}", "Saved secret: {name}")
+src/main.rs:9764|("例如：每日简报", String::new())
+src/main.rs:9783|.settings_detail_entries
+src/main.rs:9828|let mut days_row = div().flex().items_center().gap(px(ui::S1));
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
@@ -289,19 +288,19 @@ src/privacy.rs:201|pub fn precheck(
 src/privacy.rs:51|pub fn archived_private_bots() -> Vec<ArchivedPrivateBot> {
 src/privacy.rs:80|pub fn archive_private_bot(id: &str, name: &str, directory: &str) -> Result<(), 
 src/privacy.rs:98|pub fn release_archive(id: &str) -> Result<(), String> {
-src/rpi_engine.rs:1020|let mut input_tokens = 0i64;
-src/rpi_engine.rs:1096|pub async fn open(options: OpenOptions) -> Result<Self, String> {
-src/rpi_engine.rs:1297|pub async fn steer(&self, text: String, images: Vec<ImageContent>) {
-src/rpi_engine.rs:1320|pub async fn abort(&self) {
+src/rpi_engine.rs:1022|let mut input_tokens = 0i64;
+src/rpi_engine.rs:1098|pub async fn open(options: OpenOptions) -> Result<Self, String> {
+src/rpi_engine.rs:1299|pub async fn steer(&self, text: String, images: Vec<ImageContent>) {
+src/rpi_engine.rs:1322|pub async fn abort(&self) {
 src/rpi_engine.rs:144|let limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
 src/rpi_engine.rs:147|model.max_tokens = max_tokens.max(1) as u64;
-src/rpi_engine.rs:1589|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
-src/rpi_engine.rs:1628|collect_search(&path, needle, limit, private_workspaces, out);
-src/rpi_engine.rs:1642|if !private_workspaces.is_empty()
-src/rpi_engine.rs:1784|pub fn usage_grouped(days: usize) -> GroupedUsage {
-src/rpi_engine.rs:1967|.find(|bot| !bot.directory.trim().is_empty() && bot.directory.eq_ignore_ascii_ca
-src/rpi_engine.rs:2104|pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageCo
-src/rpi_engine.rs:2170|name: "ask_user_question".to_string()
+src/rpi_engine.rs:1591|pub fn search_sessions(query: &str, limit: usize) -> Vec<crate::session_db::Sear
+src/rpi_engine.rs:1630|collect_search(&path, needle, limit, private_workspaces, out);
+src/rpi_engine.rs:1644|if !private_workspaces.is_empty()
+src/rpi_engine.rs:1786|pub fn usage_grouped(days: usize) -> GroupedUsage {
+src/rpi_engine.rs:1969|.find(|bot| !bot.directory.trim().is_empty() && bot.directory.eq_ignore_ascii_ca
+src/rpi_engine.rs:2106|pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageCo
+src/rpi_engine.rs:2172|name: "ask_user_question".to_string()
 src/rpi_engine.rs:327|fn sessions_root() -> PathBuf {
 src/rpi_engine.rs:338|pub fn system_prompt_for(workspace: &Path) -> String {
 src/rpi_engine.rs:346|pub fn system_prompt_for_bot(workspace: &Path, bot_id: Option<&str>, context_win
@@ -310,9 +309,9 @@ src/rpi_engine.rs:371|}
 src/rpi_engine.rs:373|fn tool_set(workspace: &Path) -> Vec<HarnessTool> {
 src/rpi_engine.rs:422|pub fn hook(self: &Arc<Self>) -> BeforeToolCall {
 src/rpi_engine.rs:435|async fn decide(
-src/rpi_engine.rs:450|let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref
-src/rpi_engine.rs:501|async fn ask_permission(
-src/rpi_engine.rs:529|options: {
+src/rpi_engine.rs:451|let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref
+src/rpi_engine.rs:503|async fn ask_permission(
+src/rpi_engine.rs:531|options: {
 src/schedule_builder.rs:179|pub fn describe(when: &When) -> String {
 src/schedule_builder.rs:19|pub enum When {
 src/schedule_builder.rs:56|pub fn to_request(when: &When, now_ms: i64, offset_secs: i32) -> Result<Schedule
@@ -329,10 +328,10 @@ src/tool_render.rs:26|pub fn family(name: &str) -> ToolFamily {
 src/tool_render.rs:68||| has("browser")
 src/tool_scope.rs:1|//! 浏览器 / 电脑控制的「使用范围」。
 src/tool_scope.rs:9|//! 因此设置页关掉后立即生效，不必重开会话。
-src/ui_kit.rs:128|fn pointer(mut self) -> Self {
-src/ui_kit.rs:25|pub const S1: f32 = 4.;
-src/ui_kit.rs:406|button_state(id, text, false)
-src/ui_kit.rs:454|button_ghost_state(id, text, false)
-src/update.rs:209|pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
-src/update.rs:322|pub fn spawn_swap_and_restart(current_exe: &Path, staged: &StagedUpdate) -> Resu
+src/ui_kit.rs:129|fn pointer(mut self) -> Self {
+src/ui_kit.rs:26|pub const S1: f32 = 4.;
+src/ui_kit.rs:407|button_state(id, text, false)
+src/ui_kit.rs:455|button_ghost_state(id, text, false)
+src/update.rs:212|pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
+src/update.rs:355|pub fn spawn_swap_and_restart(current_exe: &Path, staged: &StagedUpdate) -> Resu
 src/update.rs:69|pub fn check(timeout: Duration) -> Check {

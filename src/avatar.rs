@@ -105,14 +105,14 @@ pub fn app_icon(size: f32, radius: f32) -> AnyElement {
         .rounded(px(radius))
         .overflow_hidden()
         // 微信绿底白标：与 app.png / app.ico 完全一致（#07C160）。
-        .bg(gpui::rgb(0x07c160))
+        .bg(gpui::rgb(0x0da869))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-bubble.svg"),
             gpui::rgb(0xffffff),
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-visor.svg"),
-            gpui::rgb(0x07c160),
+            gpui::rgb(0x0da869),
         ))
         .child(layer(
             include_bytes!("../assets/icons/app-layer-eyes.svg"),

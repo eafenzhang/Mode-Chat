@@ -22,7 +22,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.6.2"
+version = "0.7.0"
 publish = false
 
 [workspace.dependencies]
@@ -37,7 +37,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [package]
 name = "bot-gpui-pilot"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 publish = false
 description = "Mode Chat desktop client (Rust + GPUI)"
@@ -47,9 +47,9 @@ name = "bot-gpui-pilot"
 path = "src/main.rs"
 
 [dependencies]
-# UI 框架切到 gpui-kit（内部固定 gpui-pre 0.3.12 + gpui-pre-platform）。
+# UI 框架切到 gpui-kit（内部固定 gpui-pre 0.3.14 + gpui-pre-platform）。
 # 依赖名仍叫 gpui，现有 `use gpui::...` 通过 kit 的 facade 继续解析。
-gpui = { package = "gpui-kit", version = "=0.10.0", default-features = false, features = ["component"] }
+gpui = { package = "gpui-kit", version = "=0.11.0", default-features = false, features = ["component"] }
 unicode-segmentation = "1"
 # 真实控制面：与 Mode Bot 壳同一套 Agent 运行时（spawn / createSession / send / subscribe）。
 # 审批判定矩阵直接复用产品纯 Rust 逻辑（ask/auto/full + allowlist）。

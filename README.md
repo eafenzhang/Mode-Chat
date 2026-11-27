@@ -44,7 +44,7 @@ node scripts/package-mode-chat.mjs --version=0.2.1 --require-installer
 ## 数据
 
 数据根与 Mode Bot 相同：`~/.mode-bot/.mode`（名册、群聊、会话、凭据、自动化）。
-用 `MODE_BOT_DATA_ROOT` 可隔离一个测试实例。
+用 `BOT_PILOT_DATA_ROOT`（数据根）和 `BOT_PILOT_STATE_FILE`（单实例锁与窗口状态）可隔离一个测试实例。
 
 ## 目录结构
 

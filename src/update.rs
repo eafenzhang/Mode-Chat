@@ -206,7 +206,21 @@ pub struct StagedUpdate {
 }
 
 /// 下载 zip、校验大小/SHA-256、解压并定位新 exe。
+///
+/// 非测试构建用 `download_and_stage_with_progress`（UI 要进度）；本函数保留给单测。
+#[allow(dead_code)]
 pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
+    download_and_stage_with_progress(target, |_, _| {})
+}
+
+/// 带下载进度的版本：`progress(已下载字节, 总字节)`，每 120ms 回调一次。
+///
+/// 用 curl 子进程 + 轮询临时文件大小，而不是引入新的 HTTP 栈：
+/// 现有下载/校验/解压链路一行不改，只把「等 curl 结束」变成「边等边报进度」。
+pub fn download_and_stage_with_progress(
+    target: &Target,
+    progress: impl Fn(u64, Option<u64>) + Send + Sync + 'static,
+) -> Result<StagedUpdate, String> {
     let work_dir = std::env::temp_dir().join(format!(
         "modebot-gpui-update-{}",
         uuid::Uuid::new_v4()
@@ -228,15 +242,33 @@ pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
     .arg(&zip_path)
     .arg(&target.url)
     .stdin(Stdio::null())
+    .stdout(Stdio::null())
     .stderr(Stdio::piped());
     crate::process_console::no_console(&mut curl);
-    let output = curl
-        .output()
+    let mut child = curl
+        .spawn()
         .map_err(|error| format!("调用 curl 失败：{error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                let bytes = std::fs::metadata(&zip_path)
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                progress(bytes, target.size);
+                std::thread::sleep(std::time::Duration::from_millis(120));
+            }
+            Err(error) => return Err(format!("等待 curl 失败：{error}")),
+        }
+    };
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        use std::io::Read as _;
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    if !status.success() {
         let detail = if stderr.trim().is_empty() {
-            format!("curl 退出码 {:?}", output.status.code())
+            format!("curl 退出码 {:?}", status.code())
         } else {
             stderr.trim().to_string()
         };
@@ -245,6 +277,7 @@ pub fn download_and_stage(target: &Target) -> Result<StagedUpdate, String> {
     let bytes = std::fs::metadata(&zip_path)
         .map_err(|error| format!("读取更新包失败：{error}"))?
         .len();
+    progress(bytes, Some(bytes));
     if let Some(expected) = target.size
         && bytes != expected
     {

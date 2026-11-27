@@ -1370,6 +1370,15 @@ async fn run_agent(
                                     },
                                 );
                                 active_internal.insert(key.clone(), key.clone());
+                                // 切历史会话要把旧 transcript 回放给 UI（EnsureSession 同路径已发）。
+                                // 之前这里只发 Ready，切过去是一张空白会话。
+                                let history = crate::rpi_engine::history_entries(&path);
+                                if !history.is_empty() {
+                                    let _ = events.send(BackendEvent::Session {
+                                        key: key.clone(),
+                                        event: SessionEvent::History(history),
+                                    });
+                                }
                                 let _ = events.send(BackendEvent::Session {
                                     key: key.clone(),
                                     event: SessionEvent::Ready {

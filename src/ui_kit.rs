@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 use gpui::prelude::*;
+use gpui::component::scroll::ScrollableElement as _;
 use gpui::{
     div, px, AnyElement, Div, Hsla, IntoElement, ParentElement, Rgba, SharedString, Stateful,
 };
@@ -829,21 +830,27 @@ impl DetailPanel {
                 .on_click(cx.listener(move |this, _event, window, cx| handler(this, window, cx))),
             None => ui_close_button(),
         };
-        let head = div()
+        let is_modal = modal_width.is_some();
+        let mut head = div()
             .flex_shrink_0()
-            .px(px(S3))
+            // 居中弹窗用 16：与页面/表单的 16 内边距一致；侧栏模式仍是 12。
+            .px(px(if is_modal { S4 } else { S3 }))
             .py(px(S2))
             .flex()
             .items_center()
             .gap(px(S2))
             .border_b_1()
-            .border_color(edge())
-            .child(
+            .border_color(edge());
+        if !is_modal {
+            // 弹窗模式只留标题 + ✕（与 IM 新建弹窗同款）；返回按钮只属于侧栏形态。
+            head = head.child(
                 button_ghost("detail-back", i18n::t("返回"))
                     .on_click(cx.listener(move |this, _event, window, cx| {
                         on_back(this, window, cx);
                     })),
-            )
+            );
+        }
+        let head = head
             .child(
                 div()
                     .flex_1()
@@ -862,13 +869,13 @@ impl DetailPanel {
             .id("detail-panel-body")
             .flex_1()
             .min_h(px(0.))
-            .overflow_y_scroll()
-            .scrollbar_width(px(6.))
-            .px(px(S3))
-            .py(px(S3))
+            // 常显滚动条：弹窗内容再长也能看出还能滚。
+            .overflow_y_scrollbar()
+            .px(px(if is_modal { S4 } else { S3 }))
+            .py(px(if is_modal { S4 } else { S3 }))
             .flex()
             .flex_col()
-            .gap(px(S3));
+            .gap(px(if is_modal { S4 } else { S3 }));
         if let Some(subtitle) = subtitle {
             body = body.child(
                 div()
@@ -902,7 +909,7 @@ impl DetailPanel {
             panel = panel.child(
                 div()
                     .flex_shrink_0()
-                    .px(px(S3))
+                    .px(px(if is_modal { S4 } else { S3 }))
                     .pb(px(S2))
                     .child(
                         div()
@@ -922,7 +929,7 @@ impl DetailPanel {
         if !self.actions.is_empty() {
             let mut actions = div()
                 .flex_shrink_0()
-                .px(px(S3))
+                .px(px(if is_modal { S4 } else { S3 }))
                 .py(px(S2))
                 .flex()
                 .items_center()

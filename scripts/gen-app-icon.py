@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_PNG = os.path.join(ROOT, "assets", "icons", "app.png")
 OUT_ICO = os.path.join(ROOT, "assets", "icons", "app.ico")
 
-WECHAT_GREEN = (0x07, 0xC1, 0x60, 255)
+WECHAT_GREEN = (0x0D, 0xA8, 0x69, 255)
 WHITE = (255, 255, 255, 255)
 
 # 图形整体缩小系数：0.93 = 比原版小 7%（用户要求「缩小一点点」）。

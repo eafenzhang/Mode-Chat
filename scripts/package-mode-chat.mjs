@@ -98,6 +98,8 @@ function makeInstaller(stageDir, setupPath) {
   }
   const nsiPath = join(distDir, "installer.nsi");
   const escape = (value) => value.replace(/"/g, "'");
+  const appIcon = join(repoRoot, "assets", "icons", "app.ico");
+  const versionQuad = [...version.split("."), "0", "0", "0", "0"].slice(0, 4).join(".");
   const script =
     "\uFEFF" +
     `Unicode true
@@ -106,23 +108,51 @@ SetCompressor /SOLID lzma
 
 !define APP_NAME "Mode Chat"
 !define APP_EXE "${exeName}"
+!define MUI_ICON "${escape(appIcon)}"
+!define MUI_UNICON "${escape(appIcon)}"
+!define MUI_WELCOMEPAGE_TITLE "安装 Mode Chat ${version}"
+!define MUI_WELCOMEPAGE_TEXT "Mode Chat 是 Rust + GPUI 桌面客户端，内置对话引擎。$\\r$\\n$\\r$\\n安装程序会先卸载旧版本，再按用户安装到 %LOCALAPPDATA%。"
+!define MUI_FINISHPAGE_TITLE "Mode Chat 安装完成"
 Name "\${APP_NAME}"
 OutFile "${escape(setupPath)}"
+BrandingText "Mode Chat ${version}"
 InstallDir "$LOCALAPPDATA\\Programs\\ModeChat"
 InstallDirRegKey HKCU "Software\\ModeChat" "InstallDir"
 RequestExecutionLevel user
 ShowInstDetails show
 ShowUninstDetails show
 
+VIProductVersion "${versionQuad}"
+VIAddVersionKey "ProductName" "Mode Chat"
+VIAddVersionKey "FileDescription" "Mode Chat 安装程序"
+VIAddVersionKey "FileVersion" "${version}"
+VIAddVersionKey "ProductVersion" "${version}"
+VIAddVersionKey "CompanyName" "Mode Chat"
+VIAddVersionKey "LegalCopyright" "MIT"
+
 !define MUI_ABORTWARNING
 AutoCloseWindow true
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-Section "install"
+Function .onInit
+  ; 先静默卸载旧版本：只删程序文件与快捷方式，用户数据（~/.mode-bot）不动。
+  ReadRegStr $0 HKCU "Software\\ModeChat" "InstallDir"
+  StrCmp $0 "" done
+  IfFileExists "$0\\uninstall.exe" 0 done
+  DetailPrint "卸载旧版本：$0"
+  ExecWait '"$0\\uninstall.exe" /S _?=$0'
+  done:
+FunctionEnd
+
+Section "主程序（必需）" SecMain
+  SectionIn RO
   nsExec::Exec '"$SYSDIR\\taskkill.exe" /F /IM \${APP_EXE}'
   Pop $0
   Sleep 800
@@ -144,6 +174,15 @@ Section "install"
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ModeChat" "NoRepair" 1
 SectionEnd
 
+Section "创建桌面图标" SecDesktop
+  CreateShortcut "$DESKTOP\\\${APP_NAME}.lnk" "$INSTDIR\\\${APP_EXE}"
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT \${SecMain} "Mode Chat 主程序与运行文件。"
+  !insertmacro MUI_DESCRIPTION_TEXT \${SecDesktop} "在桌面创建快捷方式（默认勾选）。"
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
 Section "Uninstall"
   SetAutoClose true
   nsExec::Exec '"$SYSDIR\\taskkill.exe" /F /IM \${APP_EXE}'
@@ -156,6 +195,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\\\${APP_NAME}\\\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\\\${APP_NAME}\\卸载.lnk"
   RMDir "$SMPROGRAMS\\\${APP_NAME}"
+  Delete "$DESKTOP\\\${APP_NAME}.lnk"
   DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ModeChat"
   DeleteRegKey HKCU "Software\\ModeChat"
 SectionEnd

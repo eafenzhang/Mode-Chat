@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui::{linear_color_stop, linear_gradient, px, Background, BoxShadow, Hsla, Rgba};
+use gpui::{linear_color_stop, linear_gradient, Background, Rgba};
 
 const fn rgb(value: u32) -> Rgba {
     rgba(value, 255)
@@ -57,7 +57,7 @@ fn pick_alpha(dark: u32, dark_a: u8, light_value: u32, light_a: u8) -> Rgba {
 
 /// 用户选择的主题色；默认微信绿（不再固定绿色）。
 fn accent_color() -> Rgba {
-    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x07c160))
+    crate::theme::accent_custom().unwrap_or_else(|| rgb(0x0da869))
 }
 
 /// 在给定底色上选可读的文字色（深色底用白字）。
@@ -233,85 +233,7 @@ pub fn group_avatar_bg() -> Rgba {
     rgb(0xf2f2f2)
 }
 
-/// 导轨/列表背景：微信是纯色，这里仍返回 Background 方便调用点统一。
-/// 液态玻璃的三档表面：[顶亮, 底暗] 的白叠加量（深色 / 浅色）。
-///
-/// GPUI 没有 `backdrop-filter`，磨砂感由四件事拼出来：
-/// 1) 半透明白**渐变**叠在窗口底上（不是替换底色，才能透出底层）；
-/// 2) 顶部 1px 内高光 + 底部 1px 内暗边（`glass_sheen` / `glass_depth`）；
-/// 3) 栏与栏之间的 1px 细边（`glass_edge`）；
-/// 4) 栏顶一层从左上到右下的斜向高光（`glass_glow`）。
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Glass {
-    /// 顶部标题栏。
-    Titlebar,
-    /// 左侧导轨。
-    Rail,
-    /// 会话列表 / 设置菜单列。
-    List,
-}
-
-fn glass_alphas(glass: Glass) -> (u8, u8) {
-    if light() {
-        match glass {
-            Glass::Titlebar => (236, 212),
-            Glass::Rail => (228, 198),
-            Glass::List => (218, 188),
-        }
-    } else {
-        match glass {
-            Glass::Titlebar => (30, 12),
-            Glass::Rail => (26, 9),
-            Glass::List => (22, 8),
-        }
-    }
-}
-
-/// 玻璃表面：180° 白渐变（顶部更亮）。
-pub fn glass_gradient(glass: Glass) -> Background {
-    let (top, bottom) = glass_alphas(glass);
-    linear_gradient(
-        180.0,
-        linear_color_stop(rgba(0xffffff, top), 0.0),
-        linear_color_stop(rgba(0xffffff, bottom), 1.0),
-    )
-}
-
-/// 栏顶斜向高光（「液态」的那层反光），从透明渐变回透明。
-pub fn glass_glow() -> Background {
-    let color = if light() {
-        rgba(0xffffff, 120)
-    } else {
-        rgba(0xffffff, 14)
-    };
-    linear_gradient(
-        160.0,
-        linear_color_stop(color, 0.0),
-        linear_color_stop(rgba(0xffffff, 0), 1.0),
-    )
-}
-
-/// 栏与栏之间的 1px 细边。
-pub fn glass_edge() -> Rgba {
-    pick_alpha(0xffffff, 18, 0x000000, 16)
-}
-
-/// 顶部 1px 内高光。
-pub fn glass_sheen() -> BoxShadow {
-    let color = if light() {
-        rgba(0xffffff, 235)
-    } else {
-        rgba(0xffffff, 32)
-    };
-    BoxShadow::new(px(0.), px(1.), Hsla::from(color)).inset()
-}
-
-/// 底部 1px 内暗边（玻璃的「厚度」）。
-pub fn glass_depth() -> BoxShadow {
-    let color = pick_alpha(0x000000, 52, 0x000000, 14);
-    BoxShadow::new(px(0.), px(-1.), Hsla::from(color)).inset()
-}
-
+/// 导轨背景：微信是纯色，这里仍返回 Background 方便调用点统一。
 pub fn nav_gradient() -> Background {
     let color = pick(0x252526, 0xe7e7e7);
     linear_gradient(
@@ -330,19 +252,9 @@ pub fn list_gradient() -> Background {
     )
 }
 
-/// 选中会话行：浅色微信是整行实心主题色；深色仍是 22% 淡染。
+/// 选中会话行：直接用主题色实色（深浅色一致），不再做半透明叠加。
 pub fn selected_gradient() -> Background {
-    let color = if light() {
-        accent_color()
-    } else {
-        let accent = accent_color();
-        Rgba {
-            r: accent.r,
-            g: accent.g,
-            b: accent.b,
-            a: 0.22,
-        }
-    };
+    let color = accent_color();
     linear_gradient(
         90.0,
         linear_color_stop(color, 0.0),

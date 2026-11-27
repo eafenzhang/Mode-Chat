@@ -27,6 +27,7 @@ pub enum Icon {
     X,
     Check,
     ArrowUp,
+    ArrowDown,
     Stop,
     ChevronLeft,
     ChevronRight,
@@ -59,6 +60,7 @@ pub enum Icon {
     Folder,
     Scissors,
     Mic,
+    Copy,
     BellOff,
     Key,
     Info,
@@ -98,7 +100,7 @@ pub enum Weight {
 impl Icon {
     /// 全部图标（测试与清单用；顺序与 `svg()` 无关）。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const ALL: [Icon; 56] = [
+    pub const ALL: [Icon; 58] = [
         Icon::Search,
         Icon::Plus,
         Icon::Ellipsis,
@@ -106,6 +108,7 @@ impl Icon {
         Icon::X,
         Icon::Check,
         Icon::ArrowUp,
+        Icon::ArrowDown,
         Icon::Stop,
         Icon::ChevronLeft,
         Icon::ChevronRight,
@@ -138,6 +141,7 @@ impl Icon {
         Icon::Folder,
         Icon::Scissors,
         Icon::Mic,
+        Icon::Copy,
         Icon::BellOff,
         Icon::Key,
         Icon::Info,
@@ -180,6 +184,7 @@ impl Icon {
             Icon::X => include_bytes!("../assets/icons/ui/x.svg"),
             Icon::Check => include_bytes!("../assets/icons/ui/check.svg"),
             Icon::ArrowUp => include_bytes!("../assets/icons/ui/arrow-up.svg"),
+            Icon::ArrowDown => include_bytes!("../assets/icons/ui/arrow-down.svg"),
             Icon::Stop => include_bytes!("../assets/icons/ui/circle-stop.svg"),
             Icon::ChevronLeft => include_bytes!("../assets/icons/ui/chevron-left.svg"),
             Icon::ChevronRight => include_bytes!("../assets/icons/ui/chevron-right.svg"),
@@ -213,6 +218,7 @@ impl Icon {
             Icon::Folder => include_bytes!("../assets/icons/ui/folder.svg"),
             Icon::Scissors => include_bytes!("../assets/icons/ui/scissors.svg"),
             Icon::Mic => include_bytes!("../assets/icons/ui/mic.svg"),
+            Icon::Copy => include_bytes!("../assets/icons/ui/copy.svg"),
             Icon::BellOff => include_bytes!("../assets/icons/ui/bell-off.svg"),
             Icon::Key => include_bytes!("../assets/icons/ui/key.svg"),
             Icon::Info => include_bytes!("../assets/icons/ui/info.svg"),
@@ -288,7 +294,7 @@ mod tests {
 
     #[test]
     fn icon_set_matches_design_inventory() {
-        assert_eq!(Icon::ALL.len(), 56);
+        assert_eq!(Icon::ALL.len(), 58);
     }
 
     #[test]
