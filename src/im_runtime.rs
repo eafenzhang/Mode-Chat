@@ -55,6 +55,7 @@ use bots_service::{
     BotProvider, BotRegisteredUser, BotsRepo,
 };
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::im_service::{BindCodeStore, ReqwestHttpPort, TokenLoader, TokenVault, now_ms};
@@ -117,6 +118,13 @@ struct RunningDingtalk {
     _lock: Option<BotRuntimeLock>,
 }
 
+/// 外挂适配器运行句柄（bot_id → 子进程 + 回复句柄）。
+struct RunningAdapter {
+    shared: Arc<std::sync::Mutex<Option<crate::im_adapter::AdapterProcess>>>,
+    fingerprint: u64,
+    _lock: Option<BotRuntimeLock>,
+}
+
 /// 微信轮询 / 企微长连接运行时管理器。
 pub struct ImRuntimeManager {
     data_root: std::path::PathBuf,
@@ -127,6 +135,7 @@ pub struct ImRuntimeManager {
     running: Mutex<HashMap<String, RunningLoop>>,
     running_wecom: Mutex<HashMap<String, RunningWecom>>,
     running_dingtalk: Mutex<HashMap<String, RunningDingtalk>>,
+    running_adapter: Mutex<HashMap<String, RunningAdapter>>,
     heartbeat_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stopped: AtomicBool,
 }
@@ -147,6 +156,7 @@ impl ImRuntimeManager {
             running: Mutex::new(HashMap::new()),
             running_wecom: Mutex::new(HashMap::new()),
             running_dingtalk: Mutex::new(HashMap::new()),
+            running_adapter: Mutex::new(HashMap::new()),
             heartbeat_task: Mutex::new(None),
             stopped: AtomicBool::new(false),
         })
@@ -302,6 +312,7 @@ impl ImRuntimeManager {
         }
         self.refresh_wecom()?;
         self.refresh_dingtalk()?;
+        self.refresh_adapters()?;
         Ok(())
     }
 
@@ -312,6 +323,10 @@ impl ImRuntimeManager {
             return Ok(());
         }
         let config = BotsRepo::new(&self.data_root).read_config()?;
+        // 适配器包里有钉钉适配器时优先走适配器（内置 Stream 实现回落）。
+        let adapter_managed = crate::im_adapter::load_manifest()
+            .ok()
+            .is_some_and(|manifest| manifest.covers("dingtalk"));
         let desired: Vec<(BotConfig, Option<String>)> = config
             .bots
             .into_iter()
@@ -321,6 +336,7 @@ impl ImRuntimeManager {
                     .as_deref()
                     .is_some_and(|value| !value.trim().is_empty())
             })
+            .filter(|_bot| !adapter_managed)
             .map(|bot| {
                 let secret = self.tokens.load(&bot.id);
                 (bot, secret)
@@ -368,6 +384,195 @@ impl ImRuntimeManager {
             self.start_dingtalk_loop(bot, secret);
         }
         Ok(())
+    }
+
+    /// 对齐外挂适配器：manifest 覆盖的 provider 的启用 bot 全部走适配器进程。
+    fn refresh_adapters(self: &Arc<Self>) -> Result<(), String> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let manifest = match crate::im_adapter::load_manifest() {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                im_log!("[im] 适配器清单不可用：{error}");
+                return Ok(());
+            }
+        };
+        let config = BotsRepo::new(&self.data_root).read_config()?;
+        let desired: Vec<(BotConfig, Option<String>)> = config
+            .bots
+            .into_iter()
+            .filter(|bot| bot.enabled)
+            .filter(|bot| {
+                manifest.covers(bot.provider.as_str())
+                    && matches!(bot.provider, BotProvider::Wecom | BotProvider::Dingtalk | BotProvider::Feishu | BotProvider::Lark)
+            })
+            .map(|bot| {
+                let secret = self.tokens.load(&bot.id);
+                (bot, secret)
+            })
+            .collect();
+        let desired_ids: Vec<String> = desired.iter().map(|(bot, _)| bot.id.clone()).collect();
+        let mut to_start = Vec::new();
+        {
+            let mut running = self
+                .running_adapter
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let stale: Vec<String> = running
+                .keys()
+                .filter(|bot_id| !desired_ids.contains(bot_id))
+                .cloned()
+                .collect();
+            for bot_id in stale {
+                if let Some(entry) = running.remove(&bot_id)
+                    && let Some(process) = entry.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+                {
+                    tokio::spawn(async move { process.shutdown().await });
+                }
+                self.statuses.remove(&bot_id);
+            }
+            for (bot, secret) in desired {
+                let fingerprint = adapter_fingerprint(&bot, secret.as_deref());
+                match running.get(&bot.id) {
+                    Some(entry) if entry.fingerprint == fingerprint => {}
+                    Some(_) => {
+                        if let Some(entry) = running.remove(&bot.id)
+                            && let Some(process) = entry.shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+                        {
+                            tokio::spawn(async move { process.shutdown().await });
+                        }
+                        self.statuses.remove(&bot.id);
+                        to_start.push((bot, secret));
+                    }
+                    None => to_start.push((bot, secret)),
+                }
+            }
+        }
+        for (bot, secret) in to_start {
+            if self.stopped.load(Ordering::SeqCst) {
+                break;
+            }
+            self.start_adapter_loop(&manifest, bot, secret);
+        }
+        Ok(())
+    }
+
+    fn start_adapter_loop(
+        self: &Arc<Self>,
+        manifest: &crate::im_adapter::AdapterManifest,
+        bot: BotConfig,
+        secret: Option<String>,
+    ) {
+        let bot_id = bot.id.clone();
+        let Some(entry) = manifest.entry_for(bot.provider.as_str()) else {
+            return;
+        };
+        let fingerprint = adapter_fingerprint(&bot, secret.as_deref());
+        let lock_root = self.data_root.join("v2").join("bots-runtime-locks");
+        let lock = match acquire_bot_runtime_lock(&lock_root, "adapter", &bot_id) {
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) => {
+                self.set_wecom_status(&bot_id, "handled_elsewhere", Some("该 Bot 由另一个 Mode 窗口的适配器处理".to_string()));
+                return;
+            }
+            Err(error) => {
+                im_log!("[im] 适配器运行时锁失败 bot={bot_id}: {error}");
+                None
+            }
+        };
+        self.set_wecom_status(&bot_id, "connecting", None);
+        let provider = bot.provider.as_str().to_string();
+        let provider_label: &'static str = Box::leak(provider.clone().into_boxed_str());
+        let config =
+            crate::im_adapter::AdapterCredentialSource.config_for(&provider, &bot, secret);
+        let statuses = self.statuses.clone();
+        let _log_bot_id = bot_id.clone();
+        let _data_root = self.data_root.clone();
+        let ops: Arc<dyn BotTurnOps> = turn_ops(&self.data_root);
+        let shared: Arc<std::sync::Mutex<Option<crate::im_adapter::AdapterProcess>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let (reply_tx, mut reply_rx) =
+            tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+        let sink: Arc<dyn BotReplySink> = Arc::new(AdapterReplySink {
+            reply_tx,
+            supports_media: provider == "wecom",
+        });
+        let inner: Arc<dyn WeixinMessageHandler> = Arc::new(
+            ImWeixinHandler::new(
+                self.data_root.clone(),
+                bot,
+                Arc::clone(&self.bind_codes),
+                ops,
+                Arc::clone(&sink),
+                Arc::clone(&self.http) as Arc<dyn HttpJsonPort>,
+            )
+            .with_provider_label(provider_label),
+        );
+        let shared_for_spawn = Arc::clone(&shared);
+        let handler = Arc::clone(&inner);
+        let message_bot_id = bot_id.clone();
+        let status_bot_id = bot_id.clone();
+        let log_bot_id = bot_id.clone();
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::try_current().ok().map(|handle| {
+                handle.block_on(crate::im_adapter::spawn_adapter(
+                    &entry,
+                    &bot_id,
+                    config,
+                    move |value| {
+                        let message = weixin_inbound_from_adapter(&value, &message_bot_id);
+                        if let Some(message) = message {
+                            let handler = Arc::clone(&handler);
+                            tokio::spawn(async move {
+                                if let Err(error) = handler.handle(&message.bot_id, &message).await {
+                                    im_log!("[im] 适配器回合失败 bot={}: {error}", message.bot_id);
+                                }
+                            });
+                        }
+                    },
+                    move |status, detail| {
+                        set_adapter_status(&statuses, &status_bot_id, provider_label, status, detail);
+                    },
+                    move |line| {
+                        im_log!("[im] 适配器 bot={log_bot_id}: {line}");
+                    },
+                ))
+            })
+        });
+        let process = match result {
+            Some(Ok(process)) => process,
+            Some(Err(error)) => {
+                self.set_wecom_status(&bot_id, "error", Some(error));
+                return;
+            }
+            None => {
+                self.set_wecom_status(&bot_id, "error", Some("没有可用的 tokio 运行时".to_string()));
+                return;
+            }
+        };
+        // 回复转发：sink → 子进程 stdin（spawn 前积压的也会按序送达）。
+        let reply_stdin = Arc::clone(&process.stdin);
+        tokio::spawn(async move {
+            while let Some(op) = reply_rx.recv().await {
+                if AdapterReplySink::write_reply(&reply_stdin, op).await.is_err() {
+                    break;
+                }
+            }
+        });
+        *shared_for_spawn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(process);
+        let mut running = self
+            .running_adapter
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        running.insert(
+            bot_id,
+            RunningAdapter {
+                shared,
+                fingerprint,
+                _lock: lock,
+            },
+        );
     }
 
     fn start_dingtalk_loop(self: &Arc<Self>, bot: BotConfig, secret: Option<String>) {
@@ -455,10 +660,15 @@ impl ImRuntimeManager {
             return Ok(());
         }
         let config = BotsRepo::new(&self.data_root).read_config()?;
+        // 适配器包里有 wecom 适配器时，企微全部走适配器（内置协议只作回落）。
+        let adapter_managed = crate::im_adapter::load_manifest()
+            .ok()
+            .is_some_and(|manifest| manifest.covers("wecom"));
         let desired: Vec<BotConfig> = config
             .bots
             .into_iter()
             .filter(|bot| bot.enabled && bot.provider == BotProvider::Wecom)
+            .filter(|_bot| !adapter_managed)
             .collect();
         let desired_ids: Vec<String> = desired.iter().map(|bot| bot.id.clone()).collect();
         let mut to_start = Vec::new();
@@ -988,6 +1198,167 @@ fn dingtalk_fingerprint(bot: &BotConfig, secret: Option<&str>) -> u64 {
         .wrapping_mul(1_099_511_628_211)
         .wrapping_add(secret.unwrap_or_default().len() as u64);
     hash
+}
+
+/// 适配器指纹：配置或凭据变化即重启适配器进程。
+fn adapter_fingerprint(bot: &BotConfig, secret: Option<&str>) -> u64 {
+    let mut hash = config_fingerprint(bot);
+    hash = hash
+        .wrapping_mul(1_099_511_628_211)
+        .wrapping_add(secret.unwrap_or_default().len() as u64);
+    hash
+}
+
+/// 适配器状态条：provider 标回原通道名（UI 不需要知道背后是适配器）。
+fn set_adapter_status(
+    statuses: &WeixinStatusRegistry,
+    bot_id: &str,
+    provider_label: &'static str,
+    status: &str,
+    detail: Option<String>,
+) {
+    // 状态字面量来自适配器 JSON，映射回 &'static 白名单（new 的签名要求）。
+    let status_static: &'static str = match status {
+        "connecting" => "connecting",
+        "connected" => "connected",
+        "error" => "error",
+        "handled_elsewhere" => "handled_elsewhere",
+        _ => "reconnecting",
+    };
+    let mut entry = WeixinRuntimeStatus::new(bot_id, status_static, detail);
+    entry.provider = provider_label;
+    entry.last_update_at = Some(now_ms());
+    statuses.set(entry);
+}
+
+/// 适配器 message 事件 → 统一入站模型（contextToken 原样透传）。
+fn weixin_inbound_from_adapter(value: &Value, bot_id: &str) -> Option<WeixinInboundMessage> {
+    let text = value.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let sender_id = value
+        .get("senderId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if sender_id.is_empty() {
+        return None;
+    }
+    Some(WeixinInboundMessage {
+        bot_id: bot_id.to_string(),
+        text,
+        attachments: Vec::new(),
+        actor: WeixinInboundActor {
+            provider_user_id: sender_id,
+            display_name: value
+                .get("senderNick")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            chat_type: value
+                .get("chatType")
+                .and_then(Value::as_str)
+                .unwrap_or("private")
+                .to_string(),
+            chat_id: value
+                .get("chatId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            provider_message_id: value
+                .get("messageId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            provider_context_token: value
+                .get("contextToken")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+    })
+}
+
+/// 适配器回复链：`op.reply` 写通道，由转发任务落子进程 stdin
+/// （spawn 前就要构造 sink，所以走 channel 解开循环依赖）。
+struct AdapterReplySink {
+    reply_tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+    /// 钉钉/飞书的 webhook/OpenAPI 回复链只支持文本；企微适配器支持媒体。
+    supports_media: bool,
+}
+
+impl AdapterReplySink {
+    async fn write_reply(
+        stdin: &crate::im_adapter::AdapterShared,
+        op: serde_json::Value,
+    ) -> Result<(), String> {
+        let mut writer = stdin.lock().await;
+        writer
+            .write_all(format!("{op}\n").as_bytes())
+            .await
+            .map_err(|error| format!("写适配器回复失败：{error}"))?;
+        writer.flush().await.map_err(|error| format!("{error}"))
+    }
+}
+
+impl BotReplySink for AdapterReplySink {
+    fn send_reply<'a>(
+        &'a self,
+        _bot_id: &'a str,
+        conversation_key: &'a str,
+        context_token: Option<&'a str>,
+        text: &'a str,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<(), String>> {
+        let reply_tx = self.reply_tx.clone();
+        Box::pin(async move {
+            reply_tx
+                .send(serde_json::json!({
+                    "op": "reply",
+                    "context_token": context_token.unwrap_or_default(),
+                    "text": text,
+                    "media_path": null,
+                    "caption": null,
+                    "chat_id": conversation_key,
+                }))
+                .map_err(|_| "适配器连接已关闭，回复未发送".to_string())
+        })
+    }
+
+    fn send_media<'a>(
+        &'a self,
+        _bot_id: &'a str,
+        conversation_key: &'a str,
+        context_token: Option<&'a str>,
+        media: bots_service::conversation::OutboundMedia,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<(), String>> {
+        let reply_tx = self.reply_tx.clone();
+        Box::pin(async move {
+            if !self.supports_media {
+                return Err("该通道适配器暂不支持发送文件".to_string());
+            }
+            // bytes 落临时文件，适配器按 path 读（进程间不传大二进制）。
+            let outbox = crate::data::data_root().join("v2").join("im-adapters");
+            let _ = std::fs::create_dir_all(&outbox);
+            let path = outbox.join(format!(
+                "media-{}-{}",
+                now_ms(),
+                media.filename.replace(['/', '\\', ':'], "_")
+            ));
+            std::fs::write(&path, &media.bytes)
+                .map_err(|error| format!("写临时媒体文件失败：{error}"))?;
+            let result = reply_tx
+                .send(serde_json::json!({
+                    "op": "reply",
+                    "context_token": context_token.unwrap_or_default(),
+                    "text": "",
+                    "media_path": path.to_string_lossy(),
+                    "caption": media.caption,
+                    "chat_id": conversation_key,
+                }))
+                .map_err(|_| "适配器连接已关闭，回复未发送".to_string());
+            let _ = std::fs::remove_file(&path);
+            result
+        })
+    }
 }
 
 /// 钉钉状态条（与企微同一张注册表，provider 标 dingtalk 供 UI 区分）。

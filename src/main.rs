@@ -47,6 +47,7 @@ mod memory_review;
 mod memory_tools;
 mod model_limits;
 mod privacy;
+mod im_adapter;
 mod schedule_builder;
 mod search_index;
 mod automations;
@@ -3242,6 +3243,9 @@ struct ImCreateView {
     /// 钉钉通道：Client ID 与 Client Secret（Stream 模式凭据）。
     dingtalk_client_id: Entity<SimpleInput>,
     dingtalk_secret: Entity<SimpleInput>,
+    /// 飞书通道：App ID 与 App Secret（长连接适配器凭据）。
+    feishu_app_id: Entity<SimpleInput>,
+    feishu_secret: Entity<SimpleInput>,
     free_access: bool,
     group_activation: bots_service::BotGroupActivation,
     enabled: bool,
@@ -13856,9 +13860,18 @@ impl PilotApp {
         });
         let dingtalk_secret =
             cx.new(|cx| SimpleInput::new(i18n::t("App Secret"), theme::ink_tertiary, cx));
+        let feishu_app_id =
+            cx.new(|cx| SimpleInput::new(i18n::t("App ID"), theme::ink_tertiary, cx));
+        let feishu_secret =
+            cx.new(|cx| SimpleInput::new(i18n::t("App Secret"), theme::ink_tertiary, cx));
         let root = self.roster.data_root.clone();
-        // 钉钉不扫码：没有草稿 bot，submit 时按表单创建并写凭据。
-        let draft_id = if provider == bots_service::BotProvider::Dingtalk {
+        // 凭据创建通道（钉钉/飞书）不扫码：没有草稿 bot，submit 时按表单创建并写凭据。
+        let draft_id = if matches!(
+            provider,
+            bots_service::BotProvider::Dingtalk
+                | bots_service::BotProvider::Feishu
+                | bots_service::BotProvider::Lark
+        ) {
             None
         } else {
             let created = if provider == bots_service::BotProvider::Weixin {
@@ -13892,6 +13905,8 @@ impl PilotApp {
             heartbeat,
             dingtalk_client_id,
             dingtalk_secret,
+            feishu_app_id,
+            feishu_secret,
             free_access: true,
             group_activation: bots_service::BotGroupActivation::Disabled,
             enabled: true,
@@ -13961,6 +13976,11 @@ impl PilotApp {
             None => {
                 if provider == bots_service::BotProvider::Dingtalk {
                     im::create_dingtalk_bot_named(&root, &name)
+                } else if matches!(
+                    provider,
+                    bots_service::BotProvider::Feishu | bots_service::BotProvider::Lark
+                ) {
+                    im::create_feishu_bot_named(&root, &name)
                 } else if provider == bots_service::BotProvider::Weixin {
                     im::create_weixin_bot_named(&root, &name)
                 } else {
@@ -13973,6 +13993,18 @@ impl PilotApp {
                 let bot_id = bot.id.clone();
                 let reused_draft = draft_id.as_deref() == Some(bot_id.as_str());
                 let mut error = None;
+                if matches!(
+                    provider,
+                    bots_service::BotProvider::Feishu | bots_service::BotProvider::Lark
+                ) {
+                    let app_id = view.feishu_app_id.read(cx).content().trim().to_string();
+                    let secret = view.feishu_secret.read(cx).content().trim().to_string();
+                    if let Err(message) =
+                        im::set_feishu_credentials(&root, &bot_id, &app_id, &secret)
+                    {
+                        error = Some(message);
+                    }
+                }
                 if provider == bots_service::BotProvider::Dingtalk {
                     let client_id = view
                         .dingtalk_client_id
@@ -14021,7 +14053,12 @@ impl PilotApp {
                 self.im_heartbeat_input
                     .update(cx, |input, cx| input.set_content(minutes.to_string(), cx));
                 if !reused_draft
-                    && provider != bots_service::BotProvider::Dingtalk
+                    && !matches!(
+                        provider,
+                        bots_service::BotProvider::Dingtalk
+                            | bots_service::BotProvider::Feishu
+                            | bots_service::BotProvider::Lark
+                    )
                     && let Some(service) = im_service::handle()
                 {
                     if provider == bots_service::BotProvider::Weixin {
@@ -14117,19 +14154,32 @@ impl PilotApp {
             );
         }
         let dingtalk = provider == bots_service::BotProvider::Dingtalk;
+        let feishu = matches!(
+            provider,
+            bots_service::BotProvider::Feishu | bots_service::BotProvider::Lark
+        );
         let dingtalk_client_id = view.dingtalk_client_id.clone();
         let dingtalk_secret = view.dingtalk_secret.clone();
+        let feishu_app_id = view.feishu_app_id.clone();
+        let feishu_secret = view.feishu_secret.clone();
         let mut body = settings_page_body("");
-        if dingtalk {
+        if dingtalk || feishu {
             body = body
                 .child(settings_section(i18n::t("凭据")))
                 .child(settings_note(i18n::t(
-                    "钉钉开放平台建机器人（Stream 模式）后，把 App Key / App Secret 填到这里。",
+                    "在开放平台创建机器人后，把凭据填到这里；通道连接由外挂适配器完成。",
                 )))
-                .child(settings_group(vec![
-                    im_field(i18n::t("App Key（Client ID）"), dingtalk_client_id.clone()),
-                    im_field(i18n::t("App Secret"), dingtalk_secret.clone()),
-                ]));
+                .child(settings_group(if dingtalk {
+                    vec![
+                        im_field(i18n::t("App Key（Client ID）"), dingtalk_client_id.clone()),
+                        im_field(i18n::t("App Secret"), dingtalk_secret.clone()),
+                    ]
+                } else {
+                    vec![
+                        im_field(i18n::t("App ID"), feishu_app_id.clone()),
+                        im_field(i18n::t("App Secret"), feishu_secret.clone()),
+                    ]
+                }));
         } else {
             body = body.child(settings_section(i18n::t("扫码绑定")));
             body = if let Some(bot_id) = draft_id {
@@ -14364,99 +14414,6 @@ impl PilotApp {
     /// v0.5.0 只交付能真跑的微信/企微；飞书/钉钉的配置字段与卡片协议都在 v0.6.0。
     /// 这里做成明确的"不可用"空态，而不是看起来能点、点进去报错的假入口
     /// （规范 §10 + 群记忆：v0.5 不保留假入口）。
-    fn im_platform_card_planned(
-        &self,
-        id: &'static str,
-        title: &'static str,
-        reason: &'static str,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let wechat = wechat_theme::active();
-        div()
-            .id(id)
-            .flex_1()
-            .min_w(px(180.))
-            .h(px(84.))
-            .rounded(px(theme::RADIUS_FIELD))
-            .border_1()
-            .border_color(if wechat {
-                wechat_theme::panel_divider()
-            } else {
-                theme::edge()
-            })
-            .bg(if wechat {
-                wechat_theme::panel_card_bg()
-            } else {
-                theme::card()
-            })
-            .px(px(14.))
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            // 灰化 + 徽标 + 不跳转共同表达"不可用"（契约 §2.9）。
-            // 仍保留点击：只弹 toast 复述原因，绝不打开创建页——否则用户会以为界面卡了。
-            .pointer()
-            .opacity(0.55)
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.toast(reason, cx);
-            }))
-            .child(
-                div()
-                    .size(px(36.))
-                    .rounded_full()
-                    .bg(if wechat {
-                        wechat_theme::panel_divider()
-                    } else {
-                        theme::inset()
-                    })
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(icons::icon(icons::Icon::Calendar, 18., theme::ink_tertiary())),
-            )
-            .child(
-                div()
-                    .min_w(px(0.))
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .font_family(if wechat {
-                                        wechat_theme::FONT_FAMILY
-                                    } else {
-                                        theme::FONT_FAMILY
-                                    })
-                                    .text_size(px(ui_kit::T_TITLE))
-                                    .line_height(px(18.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(theme::ink_secondary())
-                                    .child(title),
-                            )
-                            .child(ui_kit::badge(i18n::t("未支持"), ui_kit::Tone::Neutral)),
-                    )
-                    .child(
-                        div()
-                            .font_family(if wechat {
-                                wechat_theme::FONT_FAMILY
-                            } else {
-                                theme::FONT_FAMILY
-                            })
-                            .text_size(px(ui_kit::T_LABEL))
-                            .line_height(px(16.))
-                            .text_color(theme::ink_tertiary())
-                            .child(reason),
-                    ),
-            )
-            .into_any_element()
-    }
-
     fn settings_page_im(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         self.ensure_im_ticker(cx);
         // 新建机器人 / 扫码绑定是二级页面：不再整页替换 IM 列表，
@@ -14473,6 +14430,71 @@ impl PilotApp {
             }
         };
         body = body
+            .child(settings_section(i18n::t("适配器")))
+            .child({
+                let version = crate::im_adapter::load_manifest()
+                    .map(|manifest| manifest.version)
+                    .unwrap_or(0);
+                settings_row(
+                    tri!("通道适配器 · v{version}", "Channel adapter · v{version}").to_string(),
+                    None,
+                )
+                .child(
+                    settings_button("adapter-check-update", i18n::t("检查更新")).on_click(
+                        cx.listener(|_this, _event, _window, cx| {
+                            cx.spawn(async move |this, cx| {
+                                let checked = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        crate::im_adapter::check_update().await
+                                    })
+                                    .await;
+                                let _ = this.update(cx, |this, cx| match checked {
+                                    Ok(Some((remote, _package))) => {
+                                        let version = remote.version;
+                                        this.toast(
+                                            tri!(
+                                                "发现适配器 v{version}，正在更新…",
+                                                "Adapter v{version} found, updating…"
+                                            )
+                                            .to_string(),
+                                            cx,
+                                        );
+                                        cx.spawn(async move |this, cx| {
+                                            let result =
+                                                crate::im_adapter::update().await;
+                                            let _ = this.update(cx, |this, cx| match result {
+                                                Ok(new_version) => {
+                                                    this.toast(
+                                                        tri!(
+                                                            "适配器已更新到 v{new_version}",
+                                                            "Adapter updated to v{new_version}"
+                                                        )
+                                                        .to_string(),
+                                                        cx,
+                                                    );
+                                                    if let Some(service) = im_service::handle() {
+                                                        service.refresh_runtime();
+                                                    }
+                                                    cx.notify();
+                                                }
+                                                Err(message) => this.toast(message, cx),
+                                            });
+                                        })
+                                        .detach();
+                                    }
+                                    Ok(None) => {
+                                        this.toast(i18n::t("适配器已是最新").to_string(), cx);
+                                    }
+                                    Err(message) => this.toast(message, cx),
+                                });
+                            })
+                            .detach();
+                        }),
+                    ),
+                )
+                .into_any_element()
+            })
             .child(settings_section(i18n::t("新建机器人")))
             .child(
                 div()
@@ -14495,17 +14517,18 @@ impl PilotApp {
                         cx,
                     )),
             )
-            // 飞书「暂不支持」的卡：明确不可用，不打开创建页（见 im_platform_card_planned）。
-            // 不要写「计划 vX.Y」——发版当天承诺下一版，等于把没做的事变成欠条。
-            // 钉钉已接 Stream 模式（协议公开，凭据创建）；飞书长连接协议未公开，仍灰。
+            // 钉钉/飞书走外挂适配器（凭据创建）；微信/企微扫码创建。
+            // 适配器协议实现可在线更新，见 adapters/README.md。
             .child(
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(self.im_platform_card_planned(
+                    .child(self.im_platform_card(
                         "im-new-feishu",
+                        "feishu",
                         i18n::t("飞书"),
-                        i18n::t("暂不支持飞书通道"),
+                        i18n::t("凭据创建（适配器）"),
+                        bots_service::BotProvider::Feishu,
                         cx,
                     ))
                     .child(self.im_platform_card(
@@ -24295,6 +24318,9 @@ impl PilotApp {
             modal_title = Some(SharedString::from(match provider {
                 bots_service::BotProvider::Weixin => i18n::t("新建微信机器人"),
                 bots_service::BotProvider::Dingtalk => i18n::t("新建钉钉机器人"),
+                bots_service::BotProvider::Feishu | bots_service::BotProvider::Lark => {
+                    i18n::t("新建飞书机器人")
+                }
                 _ => i18n::t("新建企业微信机器人"),
             }));
             body = Some(self.im_create_page(cx));

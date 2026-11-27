@@ -61,6 +61,11 @@ fn runtime_node_dir() -> PathBuf {
     data_root().join("runtime").join("node")
 }
 
+/// 便携版 Node 目录（适配器等外挂进程共用）。
+pub fn runtime_node_dir_public() -> PathBuf {
+    runtime_node_dir()
+}
+
 fn node_exe_name() -> &'static str {
     if cfg!(windows) { "node.exe" } else { "node" }
 }

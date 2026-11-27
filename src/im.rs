@@ -119,6 +119,39 @@ pub fn create_dingtalk_bot_named(data_root: &Path, name: &str) -> Result<BotConf
     )
 }
 
+/// 新建飞书 bot（草稿）：凭据由创建页「完成」时写入。
+/// 空名回落默认「飞书 Bot」。
+pub fn create_feishu_bot_named(data_root: &Path, name: &str) -> Result<BotConfig, String> {
+    let name = name.trim();
+    create_draft_bot(
+        data_root,
+        BotProvider::Feishu,
+        if name.is_empty() { "飞书 Bot" } else { name },
+    )
+}
+
+/// 写飞书凭据：app_id 进 config，secret 走 TokenVault。
+pub fn set_feishu_credentials(
+    data_root: &Path,
+    bot_id: &str,
+    app_id: &str,
+    app_secret: &str,
+) -> Result<(), String> {
+    let app_id = app_id.trim();
+    let app_secret = app_secret.trim();
+    if app_id.is_empty() || app_secret.is_empty() {
+        return Err("App ID 与 App Secret 不能为空".to_string());
+    }
+    let mut bot = bot(data_root, bot_id)?.ok_or_else(|| format!("Bot 不存在：{bot_id}"))?;
+    bot.feishu_app_id = Some(app_id.to_string());
+    service_with_vault(data_root).save_bot(&BotSaveParams {
+        bot,
+        credential_value: Some(app_secret.to_string()),
+        webhook_secret_value: None,
+    })?;
+    Ok(())
+}
+
 /// 写钉钉凭据：client_id 进 config，secret 走 TokenVault（同企微 secret 通道）。
 pub fn set_dingtalk_credentials(
     data_root: &Path,

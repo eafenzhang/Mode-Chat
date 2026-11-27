@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "runtime": "node",
+  "adapters": {
+    "dingtalk": { "entry": "dingtalk/adapter.mjs", "providers": ["dingtalk"] },
+    "feishu": { "entry": "feishu/adapter.mjs", "providers": ["feishu", "lark"] },
+    "wecom": { "entry": "wecom/adapter.mjs", "providers": ["wecom"] }
+  }
+}
