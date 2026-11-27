@@ -324,7 +324,7 @@ pub fn default_model_spec(identity: &str, workspace: &str) -> Option<ModelSpec> 
     })
 }
 
-fn sessions_root() -> PathBuf {
+pub fn sessions_root() -> PathBuf {
     crate::data::data_root()
         .join("v2")
         .join("mode-chat-sessions")

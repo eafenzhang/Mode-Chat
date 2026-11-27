@@ -355,7 +355,7 @@ async fn open_rpi_session(
     // 官方插件开关（workspace `.mode/config.json` 的 enabledPlugins）也参与放行：
     // 没有可读的 config.json 时不限制；显式关闭才停注对应工具族。
     let (browser_plugin_on, computer_plugin_on) =
-        crate::data::read_plugin_switches(workspace).map_or((true, true), |(b, c)| (b, c));
+        crate::data::read_plugin_switches(workspace).unwrap_or((true, true));
     if controls && browser_plugin_on && crate::tool_scope::allowed(crate::tool_scope::Family::Browser, identity) {
         extra_tools.extend(crate::browser_tools::tools(identity));
     }
@@ -1157,7 +1157,7 @@ async fn run_agent(
                         // 官方插件开关（enabledPlugins）参与放行：无可读 config.json 不限制。
                         let (browser_plugin_on, computer_plugin_on) =
                             crate::data::read_plugin_switches(&workspace)
-                                .map_or((true, true), |(b, c)| (b, c));
+                                .unwrap_or((true, true));
                         if browser_plugin_on
                             && crate::tool_scope::allowed(
                                 crate::tool_scope::Family::Browser,

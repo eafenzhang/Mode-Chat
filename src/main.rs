@@ -48,6 +48,7 @@ mod memory_tools;
 mod model_limits;
 mod privacy;
 mod schedule_builder;
+mod search_index;
 mod automations;
 mod automation_scheduler;
 mod automation_scope;
@@ -7280,10 +7281,16 @@ impl PilotApp {
                     .background_executor()
                     .spawn(async move {
                         // 旧会话库 + 当前 pi-rust JSONL 两路合并；JSONL 覆盖全部新会话。
+                        // JSONL 路走 FTS 索引（先增量 refresh），索引不可用时回退线性扫描。
                         let mut results = session_db::search_messages(&query, 8);
                         let remaining = 8usize.saturating_sub(results.len());
                         if remaining > 0 {
-                            results.extend(crate::rpi_engine::search_sessions(&query, remaining));
+                            crate::search_index::refresh();
+                            let indexed = match crate::search_index::search(&query, remaining) {
+                                Some(indexed) => indexed,
+                                None => crate::rpi_engine::search_sessions(&query, remaining),
+                            };
+                            results.extend(indexed);
                         }
                         results.sort_by_key(|hit| std::cmp::Reverse(hit.at));
                         results.truncate(8);

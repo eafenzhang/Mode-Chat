@@ -96,16 +96,15 @@ src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
 src/backend.rs:144|pub struct ElicitationCard {
-src/backend.rs:1507|let internal = member_session_key(&spec.group_key, &member.member_id);
-src/backend.rs:1612|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
-src/backend.rs:1620|let chosen: Vec<usize> = if !mentioned.is_empty() {
-src/backend.rs:1622|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
-src/backend.rs:1676|memory: crate::data::group_memory_context(
+src/backend.rs:1507|member.name.clone()
+src/backend.rs:1620|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
+src/backend.rs:1622|.members
+src/backend.rs:1676|goal_prompt: crate::data::group_goal_prompt(&spec.info.group_id)
 src/backend.rs:191|Delta {
 src/backend.rs:194|}
-src/backend.rs:2170|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
-src/backend.rs:2248|async fn run_memory_review(
-src/backend.rs:2256|};
+src/backend.rs:2170|let start = prompt.find(marker)? + marker.len();
+src/backend.rs:2248|let _ = atomic_file::write_json_atomic(
+src/backend.rs:2256|async fn run_memory_review(
 src/backend.rs:320|async fn open_rpi_session(
 src/backend.rs:335|let (approval_level, allowlist) = crate::rpi_engine::approval_policy(identity, w
 src/backend.rs:345|let mut extra_tools = crate::mcp_host::for_workspace(workspace)
@@ -176,14 +175,14 @@ src/i18n.rs:319|"会话还没有可导出的消息" => Some("This conversation h
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
 src/im_runtime.rs:1434|crate::backend::SessionEvent::Question(card) => {
 src/im_runtime.rs:169|pub async fn deliver_mirror(
-src/im_runtime.rs:1885|fn handle_bind(&self, message: &WeixinInboundMessage, code: &str) -> bool {
-src/im_runtime.rs:2211|"可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径
-src/im_runtime.rs:2354|BotCommand::PermissionRespond { value } => {
+src/im_runtime.rs:1885|evaluate_inbound_gate(
+src/im_runtime.rs:2211|fn conversation_context(&self, conversation_key: &str) -> Option<ConversationCon
+src/im_runtime.rs:2366|BotCommand::PermissionRespond { value } => {
 src/im_runtime.rs:238|/// 读配置并对齐循环：启用的微信 bot 启动，删除/停用的停止；配置指纹变化即重建。
-src/im_runtime.rs:2402|BotCommand::Deny { request_id } => {
-src/im_runtime.rs:2433|BotCommand::QuestionRespond { value } => {
-src/im_runtime.rs:2437|let prompts = match self.ops.pending_questions(&context).await {
-src/im_runtime.rs:2491|let prompts = match self.ops.pending_questions(&context).await {
+src/im_runtime.rs:2402|let Some((request_id, option_id, name)) = picked else {
+src/im_runtime.rs:2433|return "没有可用的拒绝选项。".to_string();
+src/im_runtime.rs:2437|.resolve_interaction(&context, &request_id, &option_id)
+src/im_runtime.rs:2491|.ops
 src/im_runtime.rs:350|fn start_wecom_loop(self: &Arc<Self>, bot: BotConfig, secret: Option<String>) {
 src/im_runtime.rs:520|pub fn start_heartbeat_scheduler(self: &Arc<Self>) {
 src/im_runtime.rs:547|async fn tick_heartbeats(&self) {
@@ -193,84 +192,85 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10196|SettingsDetail::AddModel {
-src/main.rs:10281|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
-src/main.rs:10583|panel = panel.body(view);
-src/main.rs:10776|let Some(form) = this.settings_detail_group.clone() else {
-src/main.rs:1092|#[derive(Clone, PartialEq, Eq)]
-src/main.rs:1124|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11333|.filter(|bot| !bot.is_private)
-src/main.rs:11343|.filter(|bot| !bot.is_private)
-src/main.rs:11350|.filter(|bot| !bot.is_private)
-src/main.rs:11940|let archives = crate::privacy::archived_private_bots();
-src/main.rs:11980|.truncate()
-src/main.rs:12520|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:12850|this.settings_detail_input = None;
-src/main.rs:13682|if !hidden.is_empty() {
-src/main.rs:14146|.h(px(84.))
-src/main.rs:15325|SharedString::from(format!("connector-signin-{}", spec.id))
-src/main.rs:15761|.child(ui::stat_card(
-src/main.rs:15782|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
-src/main.rs:15869|.into_any_element()
-src/main.rs:1629|strip = strip.child(stage_action_chip(
-src/main.rs:1655|strip = strip.child(stage_action_chip(
-src/main.rs:1676|strip = strip.child(stage_action_chip(
-src/main.rs:1720|.id(SharedString::from(format!(
-src/main.rs:18190|fn delete_group_and_reselect(&mut self, group_id: &str, cx: &mut Context<Self>) 
-src/main.rs:18527|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:18931|fn approval_note(level: &str) -> &'static str {
-src/main.rs:19114|.wrapping_add(u64::from(*expanded) * 104_729);
-src/main.rs:19555|attachment_meta
-src/main.rs:19820|cx: &mut gpui::App
-src/main.rs:19900|fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
-src/main.rs:20296|} else {
-src/main.rs:20328|let image_metas: Vec<&backend::HistoryAttachment> = metas
-src/main.rs:20360|img(path)
-src/main.rs:20375|.rounded(px(theme::RADIUS_TAG))
-src/main.rs:20479|const SETTINGS_PAGES: [&str; 13] = [
-src/main.rs:20499|enum SettingsDetail {
-src/main.rs:2092|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:211|fn panel_target_width(
-src/main.rs:2136|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
-src/main.rs:21380|.child(label)
-src/main.rs:21985|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:22078|if rows.is_empty() {
-src/main.rs:228|}
-src/main.rs:2302|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
-src/main.rs:2382|"task-reassign-{}"
-src/main.rs:2425|"task-reassign-{}-{}"
-src/main.rs:24295|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
-src/main.rs:249|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:2496|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:26508|handle.focus(window, cx);
-src/main.rs:2851|fn push_member_delta(&mut self, member: &str, delta: &str) {
-src/main.rs:2869|fn finish_member(&mut self, member: &str) {
-src/main.rs:3303|usage_group: usize
-src/main.rs:3685|ToolGroup {
-src/main.rs:4342|.filter(|bot| !bot.is_private)
-src/main.rs:4344|let workspace = match &group.directory {
-src/main.rs:4634|.filter(|bot| !bot.is_private)
-src/main.rs:5381|&session_id
-src/main.rs:5388|self.mirror_reply_sessions.insert(session_id);
-src/main.rs:5427|accepted = true;
-src/main.rs:5555|.filter(|bot| !bot.is_private)
-src/main.rs:5884|else {
-src/main.rs:6103|.on_click(cx.listener(move |this, _event, _window, cx| {
-src/main.rs:6456|if pending.sent {
-src/main.rs:6610|.elicitations
-src/main.rs:6903|/// 关闭当帧对话框还在退场动画里，焦点会被浮层盖住，所以延后一帧再还。
-src/main.rs:7240|window: &mut Window
-src/main.rs:745|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7714|/// 执行命令面板的一项（关面板由调用方保证）。
-src/main.rs:795|enum MsgKind {
-src/main.rs:797|Reasoning
-src/main.rs:8524|if let Some(side) = this.side_chat.as_mut() {
-src/main.rs:8773|.filter(|bot| !bot.is_private)
-src/main.rs:9364|match &id {
-src/main.rs:9645|tri!("已保存密钥：{name}", "Saved secret: {name}")
-src/main.rs:9765|("例如：每日简报", String::new())
-src/main.rs:9784|.settings_detail_entries
-src/main.rs:9829|let mut days_row = div().flex().items_center().gap(px(ui::S1));
+src/main.rs:10198|cx.notify();
+src/main.rs:10288|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:10585|self.settings_detail_view = Some(view.into());
+src/main.rs:10796|SettingsDetail::Allowlist { bot_id } => {
+src/main.rs:1093|#[derive(Clone, PartialEq, Eq)]
+src/main.rs:1125|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
+src/main.rs:11335|) -> Option<Entity<GroupFormState>> {
+src/main.rs:11345|GroupFormRequest::New => {
+src/main.rs:11352|.collect();
+src/main.rs:12000|let archives = crate::privacy::archived_private_bots();
+src/main.rs:12046|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12580|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:12916|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:13684|.into_any_element()
+src/main.rs:14148|theme::FONT_FAMILY
+src/main.rs:15327|if toggled_on {
+src/main.rs:15826|.child(ui::stat_card(
+src/main.rs:15847|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
+src/main.rs:15934|.into_any_element()
+src/main.rs:1630|strip = strip.child(stage_action_chip(
+src/main.rs:1656|strip = strip.child(stage_action_chip(
+src/main.rs:1677|strip = strip.child(stage_action_chip(
+src/main.rs:1721|.id(SharedString::from(format!(
+src/main.rs:18253|fn delete_group_and_reselect(&mut self, group_id: &str, cx: &mut Context<Self>) 
+src/main.rs:18590|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+src/main.rs:18994|fn approval_note(level: &str) -> &'static str {
+src/main.rs:19116||| (text.starts_with("你是这个群")
+src/main.rs:19557|.on_click(move |_event, _window, cx| {
+src/main.rs:19822|expanded
+src/main.rs:19963|fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
+src/main.rs:20298|let weak_copy = weak.clone();
+src/main.rs:20330|let quote_body = text.to_string();
+src/main.rs:20362|} else if inside {
+src/main.rs:20377|metas: &[backend::HistoryAttachment]
+src/main.rs:20481|.child(
+src/main.rs:20542|const SETTINGS_PAGES: [&str; 13] = [
+src/main.rs:20562|enum SettingsDetail {
+src/main.rs:2093|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
+src/main.rs:212|fn panel_target_width(
+src/main.rs:2137|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
+src/main.rs:21382|} else {
+src/main.rs:22048|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:22080|Some(tool_render::ToolFamily::Edit) => i18n::t("正在改文件")
+src/main.rs:229|}
+src/main.rs:2303|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
+src/main.rs:2383|"task-reassign-{}"
+src/main.rs:2426|"task-reassign-{}-{}"
+src/main.rs:24378|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:2497|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
+src/main.rs:250|const TRANSCRIPT_WINDOW: usize = 120;
+src/main.rs:26510|.text_size(px(13.))
+src/main.rs:2852|fn push_member_delta(&mut self, member: &str, delta: &str) {
+src/main.rs:2870|fn finish_member(&mut self, member: &str) {
+src/main.rs:3304|usage_group: usize
+src/main.rs:3686|ToolGroup {
+src/main.rs:4343|.filter(|bot| !bot.is_private)
+src/main.rs:4345|let workspace = match &group.directory {
+src/main.rs:4635|.filter(|bot| !bot.is_private)
+src/main.rs:5382|&session_id
+src/main.rs:5389|self.mirror_reply_sessions.insert(session_id);
+src/main.rs:5428|accepted = true;
+src/main.rs:5556|.filter(|bot| !bot.is_private)
+src/main.rs:5885|else {
+src/main.rs:6104|.on_click(cx.listener(move |this, _event, _window, cx| {
+src/main.rs:6457|if pending.sent {
+src/main.rs:6611|.elicitations
+src/main.rs:6904|/// 关闭当帧对话框还在退场动画里，焦点会被浮层盖住，所以延后一帧再还。
+src/main.rs:7241|window: &mut Window
+src/main.rs:746|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
+src/main.rs:7716|self.palette = None;
+src/main.rs:796|enum MsgKind {
+src/main.rs:798|Reasoning
+src/main.rs:8526|answer_key.clone()
+src/main.rs:8775|let needle = query.to_lowercase();
+src/main.rs:9366|if name.is_empty() {
+src/main.rs:9668|SettingsDetail::ConnectorSecret { connector_id } => {
+src/main.rs:9786|let advanced = flags[1];
+src/main.rs:9790|let once_hours = self
+src/main.rs:9831|cx.notify();
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
@@ -301,7 +301,7 @@ src/rpi_engine.rs:1786|pub fn usage_grouped(days: usize) -> GroupedUsage {
 src/rpi_engine.rs:1969|.find(|bot| !bot.directory.trim().is_empty() && bot.directory.eq_ignore_ascii_ca
 src/rpi_engine.rs:2106|pub fn images_from_attachments(files: &[AttachmentUpload]) -> Result<Vec<ImageCo
 src/rpi_engine.rs:2172|name: "ask_user_question".to_string()
-src/rpi_engine.rs:327|fn sessions_root() -> PathBuf {
+src/rpi_engine.rs:327|pub fn sessions_root() -> PathBuf {
 src/rpi_engine.rs:338|pub fn system_prompt_for(workspace: &Path) -> String {
 src/rpi_engine.rs:346|pub fn system_prompt_for_bot(workspace: &Path, bot_id: Option<&str>, context_win
 src/rpi_engine.rs:364|let own = crate::data::bot_memory_context(bot_id, budget);
