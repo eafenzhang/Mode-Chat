@@ -26,6 +26,8 @@ pub enum BotCommand {
     ReplySet { value: String },
     ReplyList,
     Stop,
+    /// 手动压缩会话上下文（`/compact`；内嵌 pi-rust 引擎支持）。
+    Compact,
     Send { value: String },
     PermissionRespond { value: String },
     /// 作答提问卡（`ask_user_question`）：`/question <序号>` 或 `/question <自由文本>`。
@@ -130,6 +132,8 @@ pub fn parse_bot_command(text: &str) -> BotCommand {
             }
         }
         "stop" | "停止" => BotCommand::Stop,
+        // 手动压缩会话上下文（IM 侧入口；桌面端命令面板已有同一能力）。
+        "compact" | "压缩" => BotCommand::Compact,
         "send" | "发送" => {
             if rest.is_empty() {
                 unknown()

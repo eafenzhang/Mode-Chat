@@ -1612,6 +1612,18 @@ impl BotTurnOps for RpiTurnOps {
         })
     }
 
+    /// 手动压缩会话上下文（IM 的 `/compact`）：对当前会话调引擎压缩。
+    /// 返回文案与 `RpiSession::compact` 同口径——`Ok` 也可能是"上下文还很短"。
+    fn compact_session<'a>(
+        &'a self,
+        context: &'a ConversationContext,
+    ) -> bots_service::conversation::RuntimeFuture<'a, Result<String, String>> {
+        Box::pin(async move {
+            let entry = self.entry_for(context).await?;
+            entry.session.compact().await
+        })
+    }
+
     fn resolve_interaction<'a>(
         &'a self,
         context: &'a ConversationContext,
@@ -2208,7 +2220,7 @@ impl ImWeixinHandler {
     }
 
     fn help_text(&self) -> String {
-        "可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径> 切换\n/stop 停止当前生成\n/permission <序号> 作答审批\n/deny 拒绝当前审批\n/question <序号或答案> 作答提问（单独 /question = 取消）\n/bind <绑定码> 绑定账号\n/model 查看模型、/model set <provider>/<模型> 切换\n/mode 查看审批策略、/mode set ask|auto|full 切换\n\n文件发送仅企微通道支持；其余命令以桌面端为准。".to_string()
+        "可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径> 切换\n/stop 停止当前生成\n/compact 压缩会话上下文\n/permission <序号> 作答审批\n/deny 拒绝当前审批\n/question <序号或答案> 作答提问（单独 /question = 取消）\n/bind <绑定码> 绑定账号\n/model 查看模型、/model set <provider>/<模型> 切换\n/mode 查看审批策略、/mode set ask|auto|full 切换\n\n文件发送仅企微通道支持；其余命令以桌面端为准。".to_string()
     }
 
     fn render_command_reply(&self, reply: CommandReply) -> String {
@@ -2505,6 +2517,15 @@ impl ImWeixinHandler {
                 }
             }
             BotCommand::Send { value } => self.handle_send_media(message, &value).await,
+            BotCommand::Compact => {
+                let Some(context) = self.conversation_context(&conversation_key) else {
+                    return "还没有会话上下文：先发一条消息建立会话，再发送 /compact。".to_string();
+                };
+                match self.ops.compact_session(&context).await {
+                    Ok(reply) => reply,
+                    Err(error) => error,
+                }
+            }
             BotCommand::ModelList => self.handle_model_list(message),
             BotCommand::ModelSet { value } => self.handle_model_set(message, &value),
             BotCommand::ModeList => self.handle_mode_list(message),

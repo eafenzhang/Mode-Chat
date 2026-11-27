@@ -568,6 +568,14 @@ pub trait BotTurnOps: Send + Sync {
     ) -> RuntimeFuture<'a, Result<Vec<PendingQuestionPrompt>, String>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+
+    /// 手动压缩会话上下文（IM 的 `/compact`）。默认不支持；内嵌 pi-rust 引擎覆写。
+    fn compact_session<'a>(
+        &'a self,
+        _context: &'a ConversationContext,
+    ) -> RuntimeFuture<'a, Result<String, String>> {
+        Box::pin(async { Err("当前引擎不支持手动压缩".to_string()) })
+    }
 }
 
 /// IM 里的提问卡（`ask_user_question`）：问题 + 选项。渲染由通道自己决定。
