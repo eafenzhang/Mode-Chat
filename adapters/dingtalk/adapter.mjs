@@ -127,7 +127,18 @@ async function pump(socket) {
           if (event) {
             if (event.messageId && seen.has(event.messageId)) break;
             if (event.messageId) seen.add(event.messageId);
-            send({ event: "message", ...event });
+            send({
+              event: "message",
+              ...event,
+              // 回复凭据：文本走 sessionWebhook；发文件走 OpenAPI，
+              // 需要会话/发送者上下文（适配器自定内容，宿主原样透传）。
+              contextToken: JSON.stringify({
+                webhook: event.contextToken,
+                chatType: event.chatType,
+                chatId: event.chatId,
+                senderId: event.senderId,
+              }),
+            });
           }
           break;
         }
@@ -170,6 +181,81 @@ async function reply(webhook, text) {
   if (!res.ok) throw new Error(`钉钉 webhook 回复失败（HTTP ${res.status}）`);
 }
 
+// ---------- 发文件（OpenAPI：媒体上传 + 机器人消息） ----------
+
+async function accessToken() {
+  const res = await fetch("https://api.dingtalk.com/v1.0/oauth2/accessToken", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ appKey: config.clientId, appSecret: config.clientSecret }),
+  });
+  const payload = await res.json();
+  const token = payload.accessToken || "";
+  if (!token) throw new Error(`钉钉 accessToken 获取失败：${payload.message || res.status}`);
+  return token;
+}
+
+async function uploadMedia(path) {
+  const fs = await import("node:fs/promises");
+  const bytes = await fs.readFile(path);
+  const filename = path.split(/[\\/]/).pop() || "file";
+  const form = new FormData();
+  form.append("media", new Blob([bytes]), filename);
+  const token = await accessToken();
+  const res = await fetch(
+    `https://oapi.dingtalk.com/media/upload?access_token=${encodeURIComponent(token)}&type=file`,
+    { method: "POST", body: form },
+  );
+  const payload = await res.json();
+  const mediaId = payload.media_id || "";
+  if (!mediaId) throw new Error(`钉钉媒体上传失败：${payload.errmsg || res.status}`);
+  return mediaId;
+}
+
+async function sendFile(ctx, path) {
+  const mediaId = await uploadMedia(path);
+  const token = await accessToken();
+  const isPrivate = ctx.chatType === "private";
+  const url = isPrivate
+    ? "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
+    : "https://api.dingtalk.com/v1.0/robot/groupMessages/send";
+  const body = isPrivate
+    ? {
+        robotCode: config.clientId,
+        userIds: [ctx.senderId],
+        msgKey: "sampleFile",
+        msgParam: JSON.stringify({ mediaId }),
+      }
+    : {
+        robotCode: config.clientId,
+        openConversationId: ctx.chatId,
+        msgKey: "sampleFile",
+        msgParam: JSON.stringify({ mediaId }),
+      };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": token,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`钉钉发文件失败（HTTP ${res.status}）`);
+}
+
+async function handleReply(op) {
+  let ctx = {};
+  try { ctx = JSON.parse(op.context_token || "{}"); } catch {}
+  if (op.media_path) {
+    await sendFile(ctx, op.media_path);
+    if (op.caption) await reply(ctx.webhook, op.caption);
+    return;
+  }
+  const text = (op.text || "").trim();
+  if (!text) return;
+  await reply(ctx.webhook || "", text);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -195,7 +281,7 @@ process.stdin.on("data", (chunk) => {
       aborted = false;
       connectLoop();
     } else if (op.op === "reply") {
-      reply(op.context_token, op.text).catch((error) => log(`回复失败：${error.message || error}`));
+      handleReply(op).catch((error) => log(`回复失败：${error.message || error}`));
     }
   }
 });

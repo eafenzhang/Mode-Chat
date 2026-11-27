@@ -48,6 +48,7 @@ mod memory_tools;
 mod model_limits;
 mod privacy;
 mod im_adapter;
+mod oauth;
 mod schedule_builder;
 mod search_index;
 mod automations;
@@ -3256,6 +3257,8 @@ struct PilotApp {
     search_input: Entity<SimpleInput>,
     #[allow(dead_code)]     // v0.7 decision: browser URL input, no wechat-shell entry point yet.
     browser_url_input: Entity<SimpleInput>,
+    /// 适配器更新源 URL（prefs `im_adapter_source_url` 的编辑框）。
+    adapter_source_input: Entity<SimpleInput>,
     /// 浏览器最近 URL（按 Bot，懒加载 prefs.json）。
     browser_recents: HashMap<String, Vec<String>>,
     search_open: bool,
@@ -3734,6 +3737,13 @@ impl PilotApp {
         let search_input = cx.new(|cx| {
             SimpleInput::new(i18n::t("搜索"), theme::ink_tertiary, cx)
         });
+        let adapter_source_input = cx.new(|cx| {
+            SimpleInput::new(
+                i18n::t("适配器更新源 URL（留空 = 默认）"),
+                theme::ink_tertiary,
+                cx,
+            )
+        });
         let browser_url_input = cx.new(|cx| {
             SimpleInput::new("https://…", theme::ink_tertiary, cx)
         });
@@ -3794,6 +3804,7 @@ impl PilotApp {
             input,
             search_input,
             browser_url_input,
+            adapter_source_input,
             browser_recents: HashMap::new(),
             confirm_remove_secret: None,
             im_selected: None,
@@ -14432,6 +14443,53 @@ impl PilotApp {
         body = body
             .child(settings_section(i18n::t("适配器")))
             .child({
+                // 更新源：留空 = 默认仓库地址；保存写 prefs `im_adapter_source_url`。
+                let current_source = crate::im_adapter::source_url();
+                let input = self.adapter_source_input.clone();
+                input.update(cx, |input, cx| {
+                    if input.content().trim() != current_source
+                        && input.content().trim().is_empty()
+                    {
+                        input.set_content(&current_source, cx);
+                    }
+                });
+                settings_row(i18n::t("更新源").to_string(), None)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .w(px(320.))
+                                    .relative()
+                                    .top(px(-4.))
+                                    .child(self.adapter_source_input.clone()),
+                            )
+                            .child(
+                                settings_button("adapter-source-save", i18n::t("保存")).on_click(
+                                    cx.listener(|this, _event, _window, cx| {
+                                        let value = this
+                                            .adapter_source_input
+                                            .read(cx)
+                                            .content()
+                                            .trim()
+                                            .to_string();
+                                        match crate::im_adapter::set_source_url(&value) {
+                                            Ok(()) => this.toast(
+                                                i18n::t("更新源已保存").to_string(),
+                                                cx,
+                                            ),
+                                            Err(message) => this.toast(message, cx),
+                                        }
+                                        cx.notify();
+                                    }),
+                                ),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .child({
                 let version = crate::im_adapter::load_manifest()
                     .map(|manifest| manifest.version)
                     .unwrap_or(0);
@@ -14667,10 +14725,7 @@ impl PilotApp {
                 kv_row(
                     if !bot.enabled {
                         i18n::t("已停用").to_string()
-                    } else if matches!(
-                        bot.provider,
-                        bots_service::BotProvider::Weixin | bots_service::BotProvider::Wecom
-                    ) {
+                    } else {
                         match &runtime {
                             Some(status) => format!(
                                 "{}{}",
@@ -14684,10 +14739,25 @@ impl PilotApp {
                             None if running => i18n::t("运行中").to_string(),
                             None => i18n::t("待启动").to_string(),
                         }
-                    } else {
-                        i18n::t("运行时未移植").to_string()
                     },
                     i18n::t("运行状态"),
+                )
+                .into_any_element(),
+                kv_row(
+                    {
+                        let manifest = crate::im_adapter::load_manifest();
+                        let covers = manifest
+                            .as_ref()
+                            .is_ok_and(|manifest| manifest.covers(bot.provider.as_str()));
+                        match (covers, manifest.map(|manifest| manifest.version)) {
+                            (true, Ok(version)) => {
+                                tri!("适配器 · v{version}", "Adapter · v{version}").to_string()
+                            }
+                            (true, Err(_)) => i18n::t("适配器").to_string(),
+                            (false, _) => i18n::t("内置协议").to_string(),
+                        }
+                    },
+                    i18n::t("通道实现"),
                 )
                 .into_any_element(),
             ]));
@@ -15523,6 +15593,98 @@ impl PilotApp {
             }
             body = body.child(div().flex().flex_wrap().gap(px(8.)).children(cards));
         }
+        // OAuth 授权（K04）：客户端凭据在「密钥」页维护
+        // （oauth_client_id:<平台> + oauth_client_secret:<平台>），
+        // 登录后 token 写 oauth:<平台>，远程连接器按 Bearer 直接可用。
+        let mut oauth_rows: Vec<gpui::AnyElement> = Vec::new();
+        for provider in crate::oauth::PROVIDERS {
+            let authorized = crate::oauth::authorized(provider.id);
+            let configured = crate::oauth::client_configured(provider.id);
+            let provider_id = provider.id;
+            let about = provider.about;
+            let mut actions = div().flex().items_center().gap(px(6.));
+            if authorized {
+                actions = actions.child(settings_button(
+                    SharedString::from(format!("oauth-revoke-{provider_id}")),
+                    i18n::t("撤销"),
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    match crate::oauth::revoke(provider_id) {
+                        Ok(()) => this.toast(i18n::t("已撤销授权").to_string(), cx),
+                        Err(message) => this.toast(message, cx),
+                    }
+                    cx.notify();
+                })));
+            } else {
+                actions = actions.child(settings_button(
+                    SharedString::from(format!("oauth-login-{provider_id}")),
+                    i18n::t("登录"),
+                )
+                .on_click(cx.listener(move |_this, _event, _window, cx| {
+                    if !crate::oauth::client_configured(provider_id) {
+                        cx.notify();
+                        return;
+                    }
+                    let pending = crate::oauth::begin(provider_id);
+                    let Ok((pending, url)) = pending else {
+                        return;
+                    };
+                    let _ = crate::shell_open::open_url(&url);
+                    cx.spawn(async move |this, cx| {
+                        let callback = cx
+                            .background_executor()
+                            .spawn(async move {
+                                crate::oauth::wait_callback(std::time::Duration::from_secs(180))
+                                    .await
+                            })
+                            .await;
+                        let outcome = match callback {
+                            Ok((code, state)) => {
+                                crate::oauth::finish(&pending, &code, &state).await
+                            }
+                            Err(message) => Err(message),
+                        };
+                        let _ = this.update(cx, |this, cx| match outcome {
+                            Ok(()) => this.toast(
+                                i18n::t("授权完成，连接器可直接使用").to_string(),
+                                cx,
+                            ),
+                            Err(message) => this.toast(message, cx),
+                        });
+                    })
+                    .detach();
+                    cx.notify();
+                })));
+            }
+            oauth_rows.push(
+                settings_row(
+                    provider.name.to_string(),
+                    Some(if authorized {
+                        tri!("已授权 · {about}", "Authorized · {about}").to_string()
+                    } else if configured {
+                        tri!("已配置 · {about}", "Configured · {about}").to_string()
+                    } else {
+                        tri!("未配置 · {about}", "Not configured · {about}").to_string()
+                    }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .children((!authorized && !configured).then(|| {
+                            settings_note(i18n::t(
+                                "在「密钥」加 oauth_client_id/oauth_client_secret",
+                            ))
+                        }))
+                        .child(actions),
+                )
+                .into_any_element(),
+            );
+        }
+        body = body
+            .child(settings_section(i18n::t("OAuth 授权")))
+            .child(settings_group(oauth_rows));
         body.into_any_element()
     }
 
@@ -15848,12 +16010,12 @@ impl PilotApp {
         // ---- 概览：四张统计卡 ----
         body = body.child(ui::section_action(
             i18n::t("概览"),
-            // W9：范围 chip（1/7/30/90 天）+ 分组 chip（不分组/按 Bot/按模型）。
+            // W9：范围 chip（1/7/30/90/180/365 天）+ 分组 chip（不分组/按 Bot/按模型）。
             div()
                 .flex()
                 .items_center()
                 .gap(px(ui::S1))
-                .children([1usize, 7, 30, 90].into_iter().map(|days| {
+                .children([1usize, 7, 30, 90, 180, 365].into_iter().map(|days| {
                     ui::chip(
                         SharedString::from(format!("usage-range-{days}")),
                         tri!("{days} 天", "{days}d"),

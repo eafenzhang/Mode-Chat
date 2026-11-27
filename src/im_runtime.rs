@@ -496,7 +496,8 @@ impl ImRuntimeManager {
             tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
         let sink: Arc<dyn BotReplySink> = Arc::new(AdapterReplySink {
             reply_tx,
-            supports_media: provider == "wecom",
+            // 钉钉/飞书适配器已实现 OpenAPI 媒体上传；企微走三步分片上传。
+            supports_media: true,
         });
         let inner: Arc<dyn WeixinMessageHandler> = Arc::new(
             ImWeixinHandler::new(

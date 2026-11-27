@@ -220,11 +220,8 @@ async function await_bytes(data) {
 }
 
 // 飞书回复走 OpenAPI 发消息（im/v1/messages）；首版文本回复。
-async function reply(contextToken, text) {
-  let ctx = {};
-  try { ctx = JSON.parse(contextToken || "{}"); } catch {}
+async function sendMessage(chatId, msgType, content) {
   const token = await appAccessToken();
-  const chatId = ctx.chatId || "";
   if (!chatId) throw new Error("缺少 chatId，无法回复");
   const res = await fetch(`${DOMAIN}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
     method: "POST",
@@ -234,12 +231,70 @@ async function reply(contextToken, text) {
     },
     body: JSON.stringify({
       receive_id: chatId,
-      msg_type: "text",
-      content: JSON.stringify({ text }),
+      msg_type: msgType,
+      content: JSON.stringify(content),
     }),
   });
   const payload = await res.json();
   if ((payload.code ?? 0) !== 0) throw new Error(`飞书发消息失败：${payload.msg || res.status}`);
+}
+
+async function reply(contextToken, text) {
+  let ctx = {};
+  try { ctx = JSON.parse(contextToken || "{}"); } catch {}
+  await sendMessage(ctx.chatId || "", "text", { text });
+}
+
+// ---------- 发文件 / 图片（OpenAPI 媒体上传 → 消息） ----------
+
+async function uploadMedia(path, isImage) {
+  const fs = await import("node:fs/promises");
+  const bytes = await fs.readFile(path);
+  const filename = path.split(/[\\/]/).pop() || (isImage ? "image.png" : "file");
+  const token = await appAccessToken();
+  const form = new FormData();
+  if (isImage) {
+    form.append("image_type", "message");
+    form.append("image", new Blob([bytes]), filename);
+  } else {
+    form.append("file_type", "stream");
+    form.append("file_name", filename);
+    form.append("file", new Blob([bytes]), filename);
+  }
+  const url = isImage
+    ? `${DOMAIN}/open-apis/im/v1/images`
+    : `${DOMAIN}/open-apis/im/v1/files`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const payload = await res.json();
+  const data = payload.data || {};
+  const key = isImage ? data.image_key : data.file_key;
+  if ((payload.code ?? 0) !== 0 || !key) {
+    throw new Error(`飞书媒体上传失败：${payload.msg || res.status}`);
+  }
+  return key;
+}
+
+async function handleReply(op) {
+  let ctx = {};
+  try { ctx = JSON.parse(op.context_token || "{}"); } catch {}
+  if (op.media_path) {
+    const isImage = /\.(png|jpe?g|gif|bmp|webp)$/i.test(op.media_path);
+    const key = await uploadMedia(op.media_path, isImage);
+    if (isImage) {
+      await sendMessage(ctx.chatId || "", "image", { image_key: key });
+    } else {
+      await sendMessage(ctx.chatId || "", "file", { file_key: key });
+    }
+    if (op.caption) await reply(op.context_token, op.caption);
+    return;
+  }
+  const text = (op.text || "").trim();
+  if (!text) return;
+  await reply(op.context_token, text);
 }
 
 function sleep(ms) {
@@ -267,7 +322,7 @@ process.stdin.on("data", (chunk) => {
       aborted = false;
       connectLoop();
     } else if (op.op === "reply") {
-      reply(op.context_token, op.text).catch((error) => log(`回复失败：${error.message || error}`));
+      handleReply(op).catch((error) => log(`回复失败：${error.message || error}`));
     }
   }
 });

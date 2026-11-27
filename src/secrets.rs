@@ -29,6 +29,15 @@ pub fn path(data_root: &Path) -> PathBuf {
     data_root.join("v2").join("secrets.json")
 }
 
+/// 读单个密钥的值（OAuth token 交换等内部流程用；设置页仍只列名称）。
+pub fn get(data_root: &Path, name: &str) -> Option<String> {
+    read(&path(data_root))
+        .secrets
+        .get(name)
+        .cloned()
+        .filter(|value| !value.is_empty())
+}
+
 /// 只返回名称（升序）；缺失/损坏文件按空库处理。
 pub fn list(data_root: &Path) -> Result<Vec<String>, String> {
     Ok(names_of(&read(&path(data_root))))

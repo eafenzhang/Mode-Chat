@@ -49,8 +49,7 @@ pub fn source_url() -> String {
         .unwrap_or_else(|| DEFAULT_SOURCE_URL.to_string())
 }
 
-/// 源 URL 可配置：设置 UI 化之前的预留入口（README 已承诺）。
-#[allow(dead_code)]
+/// 源 URL 可配置（IM 频道页「更新源」）。
 pub fn set_source_url(value: &str) -> Result<(), String> {
     prefs_write_string("im_adapter_source_url", value.trim())
 }
@@ -69,8 +68,7 @@ fn prefs_read_string(key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-#[allow(dead_code)]
-fn prefs_write_string(key: &str, value: &str) -> Result<(), String> {
+pub fn prefs_write_string(key: &str, value: &str) -> Result<(), String> {
     let path = prefs_path();
     let mut root: serde_json::Value = std::fs::read(&path)
         .ok()
@@ -148,7 +146,19 @@ pub fn load_manifest() -> Result<AdapterManifest, String> {
 fn ensure_builtin_installed() -> Result<(), String> {
     let path = manifest_path();
     if path.exists() {
-        return Ok(());
+        // 应用升级带来更新的内置适配器包时覆盖本地（在线更新的包 version
+        // 只会更高，因此不会被旧内置包顶掉）。
+        let local_version = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<AdapterManifest>(&bytes).ok())
+            .map(|manifest| manifest.version)
+            .unwrap_or(0);
+        let builtin_version = serde_json::from_str::<AdapterManifest>(BUILTIN_MANIFEST)
+            .map(|manifest| manifest.version)
+            .unwrap_or(0);
+        if builtin_version <= local_version {
+            return Ok(());
+        }
     }
     std::fs::create_dir_all(adapters_dir())
         .map_err(|error| format!("创建适配器目录失败：{error}"))?;
