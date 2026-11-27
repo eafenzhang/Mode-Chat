@@ -1056,6 +1056,24 @@ pub async fn probe_provider(provider_id: &str) -> Result<String, String> {
     }
 }
 
+/// provider 配置文件存在但读不了时的原因（U-05：区分「没配置」和「配置损坏」）。
+/// `None` = 文件还没建（首次使用）或解析正常；`Some` = 模型页应显示错误态而不是引导空态。
+pub fn provider_config_error() -> Option<String> {
+    let path = provider_config_path();
+    if !path.exists() {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(error) => return Some(format!("provider_config.json 解析失败：{error}")),
+    };
+    if provider_rules(&value).is_none() {
+        return Some("provider_config.json 缺少 providerRules 结构".to_string());
+    }
+    None
+}
+
 pub fn provider_entries() -> Vec<ProviderEntry> {
     let Ok(bytes) = std::fs::read(provider_config_path()) else {
         return Vec::new();

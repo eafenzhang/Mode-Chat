@@ -8901,6 +8901,7 @@ impl PilotApp {
                     }))
                     .child(
                         div()
+                            .min_w(px(0.))
                             .truncate()
                             .font_family(theme::FONT_FAMILY)
                             .text_size(px(11.))
@@ -12781,6 +12782,10 @@ impl PilotApp {
             ),
         ));
         if providers.is_empty() {
+            // U-05：文件损坏时给错误态（danger 语义），而不是误导成「还没配置」的引导。
+            if let Some(error) = data::provider_config_error() {
+                return body.child(ui::error(error)).into_any_element();
+            }
             return body
                 .child(ui::empty(i18n::t("还没有配置 provider。")))
                 .into_any_element();
@@ -19354,6 +19359,7 @@ fn wechat_list_row(entry: &WecomEntry, weak: &gpui::WeakEntity<PilotApp>) -> gpu
                 )
                 .child(
                     div()
+                        .min_w(px(0.))
                         .truncate()
                         .font_family(wechat_theme::FONT_FAMILY)
                         .text_size(px(12.))
@@ -23555,6 +23561,10 @@ impl PilotApp {
         };
         if self.wechat_nav != WecomNav::Channels {
             for (index, bot) in self.roster.bots.iter().enumerate() {
+                if bot.is_main {
+                    // A12：主 Bot 用列表顶部的卡位，不再在下面重复占一行。
+                    continue;
+                }
                 let chat = self.chats.get(&bot_key(&bot.id));
                 let at = chat
                     .and_then(|chat| chat.messages.last().map(|message| message.at))
@@ -23650,6 +23660,111 @@ impl PilotApp {
             }
         }
         rows
+    }
+
+    /// 会话列表顶部的主 Bot 卡（A12）：名册 `is_main` 的 Bot 固定突出展示，
+    /// 点击直接进入它的会话；名册里没有主 Bot 时整个卡不占位。
+    fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let (index, bot) = self
+            .roster
+            .bots
+            .iter()
+            .enumerate()
+            .find(|(_, bot)| bot.is_main)?;
+        let key = bot_key(&bot.id);
+        let preview = self
+            .chats
+            .get(&key)
+            .and_then(|chat| {
+                chat.messages
+                    .iter()
+                    .rev()
+                    .find(|message| !message.text.trim().is_empty())
+                    .map(|message| collapse_whitespace_prefix(&message.text, 96))
+            })
+            .map(|text| truncate_chars(&text, 32))
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| i18n::t("主 Bot 的专属会话").to_string());
+        let status = chat_runtime_status(self.chats.get(&key));
+        let active = self
+            .selected_bot()
+            .is_some_and(|selected| selected.id == bot.id);
+        let avatar = Self::wechat_avatar(&bot.id, &bot.name, 36.);
+        let name = bot.name.clone();
+        let card = div()
+            .id("wechat-main-bot")
+            .mx(px(12.))
+            .mb(px(8.))
+            .px(px(10.))
+            .py(px(8.))
+            .rounded(px(theme::RADIUS_CARD))
+            .when(active, |el| el.bg(wechat_theme::selected_gradient()))
+            .when(!active, |el| el.bg(theme::accent_soft()))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .pointer()
+            .when(!active, |el| {
+                el.hover(|style| style.bg(wechat_theme::list_hover()))
+            })
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.select_bot(index, cx);
+            }))
+            .child(avatar)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .children(status_dot_color(status).map(|color| {
+                                div().size(px(6.)).rounded_full().bg(color)
+                            }))
+                            .child(
+                                div()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .font_family(wechat_theme::FONT_FAMILY)
+                                    .text_size(px(13.))
+                                    .line_height(px(18.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(if active {
+                                        wechat_theme::list_title_selected()
+                                    } else {
+                                        wechat_theme::chat_title()
+                                    })
+                                    .child(name),
+                            )
+                            // 选中态的绿色渐变底上，accent 绿字会没进底色里：换中性徽标。
+                            .child(if active {
+                                ui_kit::badge(tri!("主 Bot", "Chief bot"), ui_kit::Tone::Neutral)
+                            } else {
+                                ui_kit::badge(tri!("主 Bot", "Chief bot"), ui_kit::Tone::Accent)
+                            }),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .truncate()
+                            .font_family(wechat_theme::FONT_FAMILY)
+                            .text_size(px(11.))
+                            .line_height(px(15.))
+                            .text_color(if active {
+                                wechat_theme::list_preview_selected()
+                            } else {
+                                wechat_theme::list_preview()
+                            })
+                            .child(preview),
+                    ),
+            )
+            .into_any_element();
+        Some(card)
     }
 
     fn wechat_list(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -23844,12 +23959,25 @@ impl PilotApp {
         } else {
             let rows = std::sync::Arc::new(rows);
             let weak = cx.weak_entity();
-            gpui::list(
+            let list = gpui::list(
                 self.wechat_list_state.clone(),
                 move |index, _window, _cx| wechat_list_row_el(&rows[index], &weak),
             )
             .size_full()
-            .into_any_element()
+            .into_any_element();
+            // A12：主 Bot 卡固定在滚动列表上方，不随列表滚动。
+            // h_full 必须显式给：column 是中间层，缺它整个列表区会塌成 0 高。
+            let mut column = div()
+                .h_full()
+                .flex_1()
+                .min_h(px(0.))
+                .flex()
+                .flex_col();
+            if let Some(card) = self.main_bot_card(cx) {
+                column = column.child(card);
+            }
+            column = column.child(div().flex_1().min_h(px(0.)).child(list));
+            column.into_any_element()
         };
         list.child(
             div()

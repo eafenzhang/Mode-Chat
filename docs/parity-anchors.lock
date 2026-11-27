@@ -129,17 +129,17 @@ src/computer_tools.rs:98|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/connectors.rs:38|pub fn missing_secrets(spec: &ConnectorSpec, configured: &[String]) -> Vec<&'sta
 src/cua_tree.rs:272|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/cua_tree.rs:320|
-src/data.rs:1359|write_provider_value(&value)
-src/data.rs:1363|pub fn remove_model(provider_id: &str, model_id: &str) -> Result<(), String> {
-src/data.rs:1548|.and_then(|path| std::fs::read(&path).ok())
+src/data.rs:1359|.or_insert_with(|| serde_json::json!({}))
+src/data.rs:1363|} else if !enabled {
+src/data.rs:1563|pub fn provider_templates() -> Vec<ProviderTemplate> {
 src/data.rs:160|instructions: String::new()
 src/data.rs:17|pub struct ModelSpec {
 src/data.rs:175|demote_other_chiefs(&mut file, &new_id);
-src/data.rs:1824|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
-src/data.rs:1843|pub fn update_group(id: &str, draft: GroupDraft) -> Result<Group, String> {
-src/data.rs:1876|pub fn delete_group(id: &str) -> Result<(), String> {
-src/data.rs:2336|description: self.description.trim().to_string()
-src/data.rs:2676|fn plugin_switch_preserves_other_keys() {
+src/data.rs:1824|.map(|id| id.trim().to_string())
+src/data.rs:1843|if draft.name.trim().is_empty() {
+src/data.rs:1876|let approval_override = record.approval_override.clone();
+src/data.rs:2336|Some(ModelSpec {
+src/data.rs:2676|assert_eq!(entries.len(), 1, "编辑不能新增条目");
 src/data.rs:289|fn cli_storage_dir() -> Option<String> {
 src/data.rs:345|const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
 src/data.rs:352|];
@@ -193,56 +193,56 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10195|SettingsDetail::AddModel {
-src/main.rs:10280|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
-src/main.rs:10582|panel = panel.body(view);
-src/main.rs:10775|let Some(form) = this.settings_detail_group.clone() else {
+src/main.rs:10196|SettingsDetail::AddModel {
+src/main.rs:10281|let mut panel = ui::DetailPanel::new(i18n::t("添加服务商"))
+src/main.rs:10583|panel = panel.body(view);
+src/main.rs:10776|let Some(form) = this.settings_detail_group.clone() else {
 src/main.rs:1092|#[derive(Clone, PartialEq, Eq)]
 src/main.rs:1124|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11332|.filter(|bot| !bot.is_private)
-src/main.rs:11342|.filter(|bot| !bot.is_private)
-src/main.rs:11349|.filter(|bot| !bot.is_private)
-src/main.rs:11933|settings_row(i18n::t("测试通知").to_string(), None)
-src/main.rs:11979|.text_color(theme::ink())
-src/main.rs:12513|this.settings_dropdown = None;
-src/main.rs:12845|ui::button_ghost(
-src/main.rs:13677|body = body.child(settings_section(i18n::t("已隐藏")));
-src/main.rs:14141|settings_button("im-create-cancel", i18n::t("取消")).on_click(
-src/main.rs:15320|let toggled_on = !on;
-src/main.rs:15777|let token = |value: Option<i64>| {
-src/main.rs:15846|.child(ui::stat_card(
-src/main.rs:15864|);
+src/main.rs:11333|.filter(|bot| !bot.is_private)
+src/main.rs:11343|.filter(|bot| !bot.is_private)
+src/main.rs:11350|.filter(|bot| !bot.is_private)
+src/main.rs:11940|let archives = crate::privacy::archived_private_bots();
+src/main.rs:11980|.truncate()
+src/main.rs:12520|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:12850|this.settings_detail_input = None;
+src/main.rs:13682|if !hidden.is_empty() {
+src/main.rs:14146|.h(px(84.))
+src/main.rs:15325|SharedString::from(format!("connector-signin-{}", spec.id))
+src/main.rs:15761|.child(ui::stat_card(
+src/main.rs:15782|1 => body = body.child(ui::section(i18n::t("按 Bot"))).child(usage_table_bot(&gro
+src/main.rs:15869|.into_any_element()
 src/main.rs:1629|strip = strip.child(stage_action_chip(
 src/main.rs:1655|strip = strip.child(stage_action_chip(
 src/main.rs:1676|strip = strip.child(stage_action_chip(
 src/main.rs:1720|.id(SharedString::from(format!(
-src/main.rs:18264|true
-src/main.rs:18597|.unwrap_or(true);
-src/main.rs:19001|rendered = true;
-src/main.rs:19109|.filter(|bot| !bot.is_private)
-src/main.rs:19549|fn wechat_row_el(
-src/main.rs:19814|.line_height(px(18.))
-src/main.rs:19973|"发送失败"
-src/main.rs:20290|fn wechat_message_actions(
-src/main.rs:20322|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
-src/main.rs:20354|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
-src/main.rs:20369|fn fenced_code(text: &str) -> Option<String> {
-src/main.rs:20553|.text_size(px(11.))
-src/main.rs:20571|"IM频道"
+src/main.rs:18190|fn delete_group_and_reselect(&mut self, group_id: &str, cx: &mut Context<Self>) 
+src/main.rs:18527|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+src/main.rs:18931|fn approval_note(level: &str) -> &'static str {
+src/main.rs:19114|.wrapping_add(u64::from(*expanded) * 104_729);
+src/main.rs:19555|attachment_meta
+src/main.rs:19820|cx: &mut gpui::App
+src/main.rs:19900|fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
+src/main.rs:20296|} else {
+src/main.rs:20328|let image_metas: Vec<&backend::HistoryAttachment> = metas
+src/main.rs:20360|img(path)
+src/main.rs:20375|.rounded(px(theme::RADIUS_TAG))
+src/main.rs:20479|const SETTINGS_PAGES: [&str; 13] = [
+src/main.rs:20499|enum SettingsDetail {
 src/main.rs:2092|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:211|fn panel_target_width(
 src/main.rs:2136|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
-src/main.rs:21374|crate::ui_kit::error(text)
-src/main.rs:22070|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:22072|.selectable(true)
+src/main.rs:21380|.child(label)
+src/main.rs:21985|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:22078|if rows.is_empty() {
 src/main.rs:228|}
 src/main.rs:2302|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:2382|"task-reassign-{}"
 src/main.rs:2425|"task-reassign-{}-{}"
-src/main.rs:24278|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:24295|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
 src/main.rs:249|const TRANSCRIPT_WINDOW: usize = 120;
 src/main.rs:2496|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:26400|.id("wechat-send")
+src/main.rs:26508|handle.focus(window, cx);
 src/main.rs:2851|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2869|fn finish_member(&mut self, member: &str) {
 src/main.rs:3303|usage_group: usize
@@ -266,11 +266,11 @@ src/main.rs:795|enum MsgKind {
 src/main.rs:797|Reasoning
 src/main.rs:8524|if let Some(side) = this.side_chat.as_mut() {
 src/main.rs:8773|.filter(|bot| !bot.is_private)
-src/main.rs:9363|match &id {
-src/main.rs:9644|tri!("已保存密钥：{name}", "Saved secret: {name}")
-src/main.rs:9764|("例如：每日简报", String::new())
-src/main.rs:9783|.settings_detail_entries
-src/main.rs:9828|let mut days_row = div().flex().items_center().gap(px(ui::S1));
+src/main.rs:9364|match &id {
+src/main.rs:9645|tri!("已保存密钥：{name}", "Saved secret: {name}")
+src/main.rs:9765|("例如：每日简报", String::new())
+src/main.rs:9784|.settings_detail_entries
+src/main.rs:9829|let mut days_row = div().flex().items_center().gap(px(ui::S1));
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|pub fn harness_tools(self: &Arc<Self>) -> Vec<HarnessTool> {
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
