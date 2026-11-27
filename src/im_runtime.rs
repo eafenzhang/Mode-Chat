@@ -2208,7 +2208,7 @@ impl ImWeixinHandler {
     }
 
     fn help_text(&self) -> String {
-        "可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径> 切换\n/stop 停止当前生成\n/permission <序号> 作答审批\n/deny 拒绝当前审批\n/question <序号或答案> 作答提问（单独 /question = 取消）\n/bind <绑定码> 绑定账号\n\n文件发送与模型/模式命令暂未接入 GPUI，请在桌面端处理。".to_string()
+        "可用命令：\n/status 查看会话状态\n/new [工作区] 开始新会话\n/workspace 列出工作区\n/workspace <序号|id|路径> 切换\n/stop 停止当前生成\n/permission <序号> 作答审批\n/deny 拒绝当前审批\n/question <序号或答案> 作答提问（单独 /question = 取消）\n/bind <绑定码> 绑定账号\n/model 查看模型、/model set <provider>/<模型> 切换\n/mode 查看审批策略、/mode set ask|auto|full 切换\n\n文件发送仅企微通道支持；其余命令以桌面端为准。".to_string()
     }
 
     fn render_command_reply(&self, reply: CommandReply) -> String {
@@ -2505,8 +2505,95 @@ impl ImWeixinHandler {
                 }
             }
             BotCommand::Send { value } => self.handle_send_media(message, &value).await,
+            BotCommand::ModelList => self.handle_model_list(message),
+            BotCommand::ModelSet { value } => self.handle_model_set(message, &value),
+            BotCommand::ModeList => self.handle_mode_list(message),
+            BotCommand::ModeSet { value } => self.handle_mode_set(message, &value),
             BotCommand::Unknown { .. } => self.help_text(),
+            // ThoughtLevel / Task / Reply / Elicitation 提交等命令仍是桌面端独占。
             _ => "该命令暂未接入 GPUI 版，请在桌面端处理。".to_string(),
+        }
+    }
+
+    /// `/model`：当前 Bot 的模型 + 可选清单（读名册与 provider 配置）。
+    fn handle_model_list(&self, message: &WeixinInboundMessage) -> String {
+        let roster = crate::data::Roster::load();
+        let current = roster
+            .bots
+            .iter()
+            .find(|bot| bot.id == message.bot_id)
+            .and_then(|bot| bot.model.clone());
+        let current_line = current
+            .as_ref()
+            .map(|model| format!("当前模型：{}", model.label()))
+            .unwrap_or_else(|| "当前模型：跟随默认模型".to_string());
+        let models = crate::data::available_models();
+        if models.is_empty() {
+            return format!("{current_line}\n（还没有可用模型；先在桌面端「模型」页添加服务商）");
+        }
+        let mut lines = vec![current_line, String::new(), "可用模型：".to_string()];
+        for option in models {
+            lines.push(format!("- {}/{}", option.provider_id, option.model_id));
+        }
+        lines.push(String::new());
+        lines.push("切换：/model set <provider>/<模型>".to_string());
+        lines.join("\n")
+    }
+
+    /// `/model set <provider>/<模型>`：写名册并立即生效（IM 每回合按 Bot 配置开新会话）。
+    fn handle_model_set(&self, message: &WeixinInboundMessage, value: &str) -> String {
+        let (provider_id, model_id) = match value.split_once('/') {
+            Some((provider, model))
+                if !provider.trim().is_empty() && !model.trim().is_empty() =>
+            {
+                (provider.trim().to_string(), model.trim().to_string())
+            }
+            _ => {
+                return "格式：/model set <provider>/<模型>，例如 /model set deepseek/deepseek-flash"
+                    .to_string();
+            }
+        };
+        let spec = crate::data::ModelSpec {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            reasoning_level: None,
+        };
+        match crate::data::set_bot_model(&message.bot_id, Some(&spec)) {
+            Ok(()) => format!("模型已切换：{}/{}（下一条消息生效）", provider_id, model_id),
+            Err(error) => format!("切换失败：{error}"),
+        }
+    }
+
+    /// `/mode`：当前 Bot 的审批策略（ask / auto / full）。
+    fn handle_mode_list(&self, message: &WeixinInboundMessage) -> String {
+        let roster = crate::data::Roster::load();
+        let level = roster
+            .bots
+            .iter()
+            .find(|bot| bot.id == message.bot_id)
+            .map(|bot| bot.approval_level.clone())
+            .unwrap_or_default();
+        let current = bot_team::approval::parse_level(&level)
+            .map(|level| match level {
+                bot_team::approval::ApprovalLevel::Ask => "ask（每次询问）",
+                bot_team::approval::ApprovalLevel::Auto => "auto（只读自动放行）",
+                bot_team::approval::ApprovalLevel::Full => "full（完全自主）",
+            })
+            .unwrap_or(level.as_str())
+            .to_string();
+        format!("当前审批策略：{current}\n切换：/mode set ask|auto|full")
+    }
+
+    /// `/mode set ask|auto|full`：写名册并立即生效（审批决策每个回合读取）。
+    fn handle_mode_set(&self, message: &WeixinInboundMessage, value: &str) -> String {
+        let level = value.trim().to_lowercase();
+        match level.as_str() {
+            "ask" | "auto" | "full" => {}
+            other => return format!("未知策略：{other}；可选 ask / auto / full"),
+        }
+        match crate::data::set_bot_approval_level(&message.bot_id, &level) {
+            Ok(()) => format!("审批策略已切换：{level}"),
+            Err(error) => format!("切换失败：{error}"),
         }
     }
 }

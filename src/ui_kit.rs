@@ -521,6 +521,69 @@ pub fn chip(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>, activ
         )
 }
 
+/// 页内 tab：固定 120 宽、38 高；选中项 2px 主题色下划线 + 600 字重。
+///
+/// 连接器/插件、Bot/群聊/分组两处原本各写一遍，字号、悬停、下划线各改各的；
+/// 收口到这里后页面只负责挂 on_click。
+pub fn tab_item(
+    id: impl Into<gpui::ElementId>,
+    text: impl Into<SharedString>,
+    active: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(38.))
+        .w(px(120.))
+        .px(px(S3))
+        .flex()
+        .items_center()
+        .justify_center()
+        // 和容器的 1px 分隔线重叠对齐（-1 抵消）。
+        .border_b_2()
+        .border_color(if active {
+            accent()
+        } else {
+            Rgba {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: 0.,
+            }
+        })
+        .mb(px(-1.))
+        .cursor_pointer()
+        .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+        .child(
+            div()
+                .font_family(font())
+                .text_size(px(T_TITLE))
+                .line_height(px(20.))
+                .font_weight(if active {
+                    gpui::FontWeight::SEMIBOLD
+                } else {
+                    gpui::FontWeight::NORMAL
+                })
+                .text_color(if active {
+                    wechat_theme::chat_title()
+                } else {
+                    wechat_theme::list_preview()
+                })
+                .child(text.into()),
+        )
+}
+
+/// 页内 tab 的横条容器（1px 分隔线 + tab 行）。
+pub fn tab_bar(children: Vec<AnyElement>) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .border_b_1()
+        .border_color(wechat_theme::divider())
+        .children(children)
+}
+
 /// 徽标色调。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tone {

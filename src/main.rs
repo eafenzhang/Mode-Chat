@@ -11919,16 +11919,6 @@ impl PilotApp {
                         i18n::t("启动后检查，之后每 4 小时一次").to_string()
                     }),
                 )
-                // 这行没有可点的控件（自动检查固定开启），右侧留白会让人以为
-                // 「控件没渲染出来」。给一个只读状态徽标，说明当前是开还是关。
-                .child(crate::ui_kit::badge(
-                    if cfg!(debug_assertions) {
-                        i18n::t("未启用")
-                    } else {
-                        i18n::t("已启用")
-                    },
-                    crate::ui_kit::Tone::Neutral,
-                ))
                 .into_any_element(),
                 settings_row(i18n::t("测试通知").to_string(), None)
                     .child(
@@ -13121,57 +13111,22 @@ impl PilotApp {
     ) -> gpui::AnyElement {
         const TABS: [&str; 2] = ["连接器", "插件"];
         let active = self.connection_tab.min(TABS.len() - 1);
-        let mut tab_row = div()
-            .w_full()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .border_b_1()
-            .border_color(wechat_theme::divider());
-        for (index, label) in TABS.iter().enumerate() {
-            let is_active = index == active;
-            tab_row = tab_row.child(
-                div()
-                    .id(SharedString::from(format!("connection-tab-{index}")))
-                    .h(px(38.))
-                    // 固定宽度：不随窗口拉成等分大块，保持微信 tab 的紧凑尺寸。
-                    .w(px(120.))
-                    .px(px(ui_kit::S3))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .border_b_2()
-                    .border_color(if is_active {
-                        wechat_theme::send_enabled()
-                    } else {
-                        gpui::rgba(0x00000000)
-                    })
-                    .mb(px(-1.))
-                    .pointer()
-                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+        let tab_row = ui_kit::tab_bar(
+            TABS.into_iter().enumerate()
+                .map(|(index, label)| {
+                    ui_kit::tab_item(
+                        SharedString::from(format!("connection-tab-{index}")),
+                        i18n::t(label),
+                        index == active,
+                    )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.connection_tab = index;
                         cx.notify();
                     }))
-                    .child(
-                        div()
-                            .font_family(wechat_theme::FONT_FAMILY)
-                            .text_size(px(13.))
-                            .line_height(px(20.))
-                            .font_weight(if is_active {
-                                gpui::FontWeight::SEMIBOLD
-                            } else {
-                                gpui::FontWeight::NORMAL
-                            })
-                            .text_color(if is_active {
-                                wechat_theme::chat_title()
-                            } else {
-                                wechat_theme::list_preview()
-                            })
-                            .child(i18n::t(label)),
-                    ),
-            );
-        }
+                    .into_any_element()
+                })
+                .collect(),
+        );
         let inner = match active {
             0 => self.settings_page_connectors(content_width, cx),
             _ => self.settings_page_plugins(cx),
@@ -13188,10 +13143,8 @@ impl PilotApp {
     fn settings_page_plugins(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         use crate::ui_kit as ui;
 
-        let mut cards: Vec<gpui::AnyElement> = Vec::new();
-
         // 插件宿主（当前未接入）
-        cards.push(
+        let mut cards: Vec<gpui::AnyElement> = vec![
             ui::icon_card(
                 icons::icon(icons::Icon::Plug, 18., ui::ink_secondary()),
                 i18n::t("插件宿主"),
@@ -13199,7 +13152,7 @@ impl PilotApp {
                 Some(ui::badge(i18n::t("未接入"), ui::Tone::Neutral).into_any_element()),
             )
             .into_any_element(),
-        );
+        ];
 
         // 浏览器 / 电脑操控：现有子页已经组件化，套上卡片头
         cards.push(
@@ -13224,9 +13177,6 @@ impl PilotApp {
         );
 
         ui::page()
-            .child(ui::section(tri!(
-                "插件 · {}", "Plugins · {}", cards.len()
-            )))
             .child(
                 div()
                     .w_full()
@@ -13337,9 +13287,7 @@ impl PilotApp {
                 )
             };
 
-            let tone = if is_current {
-                ui::Tone::Accent
-            } else if agent.wired {
+            let tone = if is_current || agent.wired {
                 ui::Tone::Success
             } else if installed {
                 ui::Tone::Neutral
@@ -13544,59 +13492,22 @@ impl PilotApp {
         const TABS: [&str; 3] = ["Bot", "群聊", "分组"];
         let active = self.bot_team_tab.min(TABS.len() - 1);
 
-        let mut tab_row = div()
-            .w_full()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .border_b_1()
-            .border_color(wechat_theme::divider());
-        for (index, label) in TABS.iter().enumerate() {
-            let is_active = index == active;
-            tab_row = tab_row.child(
-                div()
-                    .id(SharedString::from(format!("bot-team-tab-{index}")))
-                    .h(px(38.))
-                    // 固定宽度：选中加粗不再改变 tab 宽度/位置。
-                    .w(px(120.))
-                    .px(px(ui_kit::S3))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    // 选中项画 2px 下划线，和容器的 1px 分隔线重叠对齐。
-                    .border_b_2()
-                    .border_color(if is_active {
-                        wechat_theme::send_enabled()
-                    } else {
-                        gpui::rgba(0x00000000)
-                    })
-                    .mb(px(-1.))
-                    .pointer()
-                    // 选中/未选中都给 hover 反馈，三个 tab 行为一致。
-                    .hover(|style| style.bg(wechat_theme::nav_item_hover_bg()))
+        let tab_row = ui_kit::tab_bar(
+            TABS.into_iter().enumerate()
+                .map(|(index, label)| {
+                    ui_kit::tab_item(
+                        SharedString::from(format!("bot-team-tab-{index}")),
+                        i18n::t(label),
+                        index == active,
+                    )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.bot_team_tab = index;
                         cx.notify();
                     }))
-                    .child(
-                        div()
-                            .font_family(wechat_theme::FONT_FAMILY)
-                            .text_size(px(13.))
-                            .line_height(px(20.))
-                            .font_weight(if is_active {
-                                gpui::FontWeight::SEMIBOLD
-                            } else {
-                                gpui::FontWeight::NORMAL
-                            })
-                            .text_color(if is_active {
-                                wechat_theme::chat_title()
-                            } else {
-                                wechat_theme::list_preview()
-                            })
-                            .child(i18n::t(label)),
-                    ),
-            );
-        }
+                    .into_any_element()
+                })
+                .collect(),
+        );
 
         let inner = match active {
             0 => self.settings_page_bots(cx),
@@ -14475,8 +14386,7 @@ impl PilotApp {
                         i18n::t("暂不支持钉钉通道"),
                         cx,
                     )),
-            )
-            .child(settings_note(i18n::t("扫码后给 Bot 发一条消息激活。")));
+            );
         if rows.is_empty() {
             body = body.child(settings_empty(i18n::t("还没有 IM频道机器人。")));
             return body.into_any_element();
@@ -15124,7 +15034,7 @@ impl PilotApp {
             .child(self.team_memory_section(cx))
             .child(settings_section(i18n::t("群聊文件记忆")));
         if self.roster.groups.is_empty() {
-            body = body.child(settings_empty(i18n::t("名册里还没有群聊")));
+            body = body.child(settings_empty(i18n::t("还没有群聊")));
         }
         let mut memory_group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &self.roster.groups {
@@ -15292,7 +15202,7 @@ impl PilotApp {
         // 卡片统一宽度：按可用宽度算出列数，所有分区共用同一卡片宽度，
         // 避免 2 张的分区被拉宽、6 张的分区被挤窄。
         const CARD_GAP: f32 = 8.;
-        const TARGET_CARD_WIDTH: f32 = 300.;
+        const TARGET_CARD_WIDTH: f32 = 280.;
         // 预留 4px：`columns * card_width + gaps` 正好等于 content_width 时，
         // 滚动条槽或 1px 边框会把最后一列挤到下一行（flex_wrap），结果右缘空出
         // 整整一列的宽度。1920 宽窗口实测：应 5 列，实际折成 4 列 + 右侧 288px 空白。
@@ -15673,7 +15583,7 @@ impl PilotApp {
         ));
         if names.is_empty() {
             body = body.child(settings_empty(i18n::t(
-                "还没有密钥。Bot 需要时，会在对话里弹出一张卡片。",
+                "还没有密钥",
             )));
         }
         let mut secret_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -16018,11 +15928,8 @@ impl PilotApp {
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| fallback.to_string())
         };
-        let session_db = env_value(
-            "MODE_SESSION_DB_PATH",
-            i18n::t("默认（未设置 MODE_SESSION_DB_PATH，与主程序同库）"),
-        );
-        let storage_dir = env_value("MODE_STORAGE_DIR", i18n::t("默认（未设置 MODE_STORAGE_DIR）"));
+        let session_db = env_value("MODE_SESSION_DB_PATH", i18n::t("与主程序同库"));
+        let storage_dir = env_value("MODE_STORAGE_DIR", i18n::t("默认"));
         let version = update::current_version();
         let diagnostics = format!(
             "Mode Chat {version}\nplatform: Windows\nui: Rust + GPUI (gpui-kit 0.11 / gpui-pre 0.3.14)",
@@ -16161,7 +16068,9 @@ impl PilotApp {
                 Some(update::Check::NoRelease) => {
                     tri!("发布源暂无版本（尚未发布）", "No release published yet")
                 }
-                Some(update::Check::Failed(error)) => tri!("检查失败：{error}", "Check failed: {error}"),
+                Some(update::Check::Failed(_)) => {
+                    tri!("检查更新失败：网络不可用", "Update check failed: network unavailable")
+                }
             }
         };
         let status_color = match &self.update_check {
@@ -21673,12 +21582,12 @@ fn settings_row_inner(
     // 而且每行高度被说明撑高一倍。
     let mut row = div()
         .w_full()
-        .min_h(px(42.))
-        .px(px(12.))
-        .py(px(9.))
+        .min_h(px(40.))
+        .px(px(ui_kit::S3))
+        .py(px(ui_kit::S2))
         .flex()
         .items_center()
-        .gap(px(14.));
+        .gap(px(ui_kit::S3));
     if let Some(leading) = leading {
         row = row.child(leading);
     }
