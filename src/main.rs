@@ -11730,6 +11730,12 @@ impl PilotApp {
                     ),
             )
             .child(settings_section(i18n::t("使用范围")))
+            .child(self.plugin_switch_row(
+                "browser",
+                crate::data::PLUGIN_BROWSER,
+                "浏览器插件",
+                cx,
+            ))
             .child(settings_tool_scope_section(
                 crate::tool_scope::Family::Browser,
                 self.browser_enabled,
@@ -11745,6 +11751,47 @@ impl PilotApp {
                 cx,
             ));
         body.into_any_element()
+    }
+
+    /// 官方插件开关行：switch 只开确认对话框，写回走 `apply_plugin_switch`
+    /// （workspace `.mode/config.json`，重开会话生效）。没有选中 Bot 时状态落 off，
+    /// 写回由 `set_plugin_switch` 的错误提示兜底。
+    fn plugin_switch_row(
+        &self,
+        id: &str,
+        plugin: &'static str,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let directory = self
+            .selected_bot()
+            .map(|bot| bot.directory.clone())
+            .unwrap_or_default();
+        let on = crate::data::read_plugin_switches(&directory).is_some_and(|(b, c)| {
+            if plugin == crate::data::PLUGIN_BROWSER {
+                b
+            } else {
+                c
+            }
+        });
+        let scope = directory.clone();
+        let row_id = SharedString::from(format!("plugin-switch-{id}"));
+        settings_row(i18n::t("官方插件").to_string(), None)
+            .child(
+                switch(row_id, on).on_click(cx.listener(move |this, _event, window, cx| {
+                    this.open_plugin_confirm_dialog(
+                        PluginSwitchConfirm {
+                            directory: scope.clone(),
+                            plugin,
+                            label,
+                            next_on: !on,
+                        },
+                        window,
+                        cx,
+                    );
+                })),
+            )
+            .into_any_element()
     }
 
     fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -11773,6 +11820,12 @@ impl PilotApp {
                 ),
             )
             .child(settings_section(i18n::t("使用范围")))
+            .child(self.plugin_switch_row(
+                "computer",
+                crate::data::PLUGIN_COMPUTER,
+                "电脑操控插件",
+                cx,
+            ))
             .child(settings_tool_scope_section(
                 crate::tool_scope::Family::Computer,
                 self.computer_enabled,
@@ -13148,13 +13201,18 @@ impl PilotApp {
     fn settings_page_plugins(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         use crate::ui_kit as ui;
 
-        // 插件宿主（当前未接入）
+        // 插件说明：内置插件的开关在「浏览器」「电脑操控」子页（写 workspace
+        // enabledPlugins，重开会话生效）；第三方能力走「连接器」（MCP 宿主）。
         let mut cards: Vec<gpui::AnyElement> = vec![
             ui::icon_card(
                 icons::icon(icons::Icon::Plug, 18., ui::ink_secondary()),
-                i18n::t("插件宿主"),
-                Some(i18n::t("MCP 连接器见「连接器」。").to_string().into()),
-                Some(ui::badge(i18n::t("未接入"), ui::Tone::Neutral).into_any_element()),
+                i18n::t("插件"),
+                Some(
+                    i18n::t("浏览器/电脑操控在各自子页开关；第三方能力走「连接器」接入。")
+                        .to_string()
+                        .into(),
+                ),
+                None,
             )
             .into_any_element(),
         ];
@@ -16435,7 +16493,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
     }
 
     /// 插件开关二次确认：确认后才写 workspace 的 `.mode/config.json`。
-    #[allow(dead_code)]     // v0.7 decision: workspace .mode/config.json switch writer.
     fn apply_plugin_switch(&mut self, confirm: &PluginSwitchConfirm, cx: &mut Context<Self>) {
         match data::set_plugin_switch(&confirm.directory, confirm.plugin, confirm.next_on) {
             Ok(()) => {
@@ -16464,7 +16521,6 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
         }
     }
 
-    #[allow(dead_code)]     // v0.7 decision: switch confirm dialog.
     fn open_plugin_confirm_dialog(
         &mut self,
         confirm: PluginSwitchConfirm,

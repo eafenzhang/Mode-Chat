@@ -352,14 +352,14 @@ async fn open_rpi_session(
     ));
     // 记忆回顾是隐藏的 JSON 任务，不给控制类工具，也不给记忆写入工具。
     let controls = !key.starts_with("memory-review:");
-    if controls {
-        extra_tools.extend(crate::memory_tools::tools(bot_id.as_deref()));
-        extra_tools.extend(crate::bot_tools::tools(identity));
-    }
-    if controls && crate::tool_scope::allowed(crate::tool_scope::Family::Browser, identity) {
+    // 官方插件开关（workspace `.mode/config.json` 的 enabledPlugins）也参与放行：
+    // 没有可读的 config.json 时不限制；显式关闭才停注对应工具族。
+    let (browser_plugin_on, computer_plugin_on) =
+        crate::data::read_plugin_switches(workspace).map_or((true, true), |(b, c)| (b, c));
+    if controls && browser_plugin_on && crate::tool_scope::allowed(crate::tool_scope::Family::Browser, identity) {
         extra_tools.extend(crate::browser_tools::tools(identity));
     }
-    if controls && crate::tool_scope::allowed(crate::tool_scope::Family::Computer, identity) {
+    if controls && computer_plugin_on && crate::tool_scope::allowed(crate::tool_scope::Family::Computer, identity) {
         extra_tools.extend(crate::computer_tools::tools(identity));
         extra_tools.extend(crate::cua_tree::tools(identity));
     }
@@ -1154,16 +1154,24 @@ async fn run_agent(
                             &workspace,
                             &identity,
                         ));
-                        if crate::tool_scope::allowed(
-                            crate::tool_scope::Family::Browser,
-                            &identity,
-                        ) {
+                        // 官方插件开关（enabledPlugins）参与放行：无可读 config.json 不限制。
+                        let (browser_plugin_on, computer_plugin_on) =
+                            crate::data::read_plugin_switches(&workspace)
+                                .map_or((true, true), |(b, c)| (b, c));
+                        if browser_plugin_on
+                            && crate::tool_scope::allowed(
+                                crate::tool_scope::Family::Browser,
+                                &identity,
+                            )
+                        {
                             extra_tools.extend(crate::browser_tools::tools(&identity));
                         }
-                        if crate::tool_scope::allowed(
-                            crate::tool_scope::Family::Computer,
-                            &identity,
-                        ) {
+                        if computer_plugin_on
+                            && crate::tool_scope::allowed(
+                                crate::tool_scope::Family::Computer,
+                                &identity,
+                            )
+                        {
                             extra_tools.extend(crate::computer_tools::tools(&identity));
                             extra_tools.extend(crate::cua_tree::tools(&identity));
                         }
