@@ -32,16 +32,16 @@
 ## 1. 引擎与工具链
 
 ### 1.1 内嵌引擎（rpi / pi-rust）— 已有
-- 引擎接入：`src/rpi_engine.rs:1098`（`RpiSession::open`）、`:1282` send、`:1299` steer、`:1322` abort
-- 会话持久化 + 恢复：`src/rpi_engine.rs:1330`（import_markdown_session）、`:1431`（history_entries）
+- 引擎接入：`src/rpi_engine.rs:1108`（`RpiSession::open`）、`:1282` send、`:1299` steer、`:1322` abort
+- 会话持久化 + 恢复：`src/rpi_engine.rs:1350`（import_markdown_session）、`:1431`（history_entries）
 - 系统提示：`src/rpi_engine.rs:338`（`system_prompt_for`，拼 `AGENTS.md` + 团队记忆；v0.5 起 `:346` 的 `system_prompt_for_bot` 追加 Bot 自己的记忆）
 - 内置工具只有 4 个：`src/rpi_engine.rs:373`（`tool_set`：read / write / edit / bash）
 - 结论：引擎本体完整，**不需要改架构**。
 
 ### 1.2 上下文压缩（compaction）— 半成品（隐式已有，UI 无感知）
 - rpi 侧默认开启：`rpi-harness/src/types.rs:325`（`DEFAULT_COMPACTION_SETTINGS { enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000 }`）
-- MC 没有覆盖该配置：`src/rpi_engine.rs:1192`（`AgentHarnessOptions::default()`）到 `:1213` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
-- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 ``fn compact_tokens`（`src/main.rs`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:902` 结构体、`:918` emit）不认识该事件
+- MC 没有覆盖该配置：`src/rpi_engine.rs:1202`（`AgentHarnessOptions::default()`）到 `:1213` 只设了 model/tools/system_prompt/thinking/session/emitter/before_tool_call，**所以自动压缩其实在跑**
+- 但压缩进度事件没接：`rpi-harness/src/events.rs:147`（`HarnessEvent::CompactionProgress`）。MC 侧 `CompactionSettings` / `HarnessEvent::Compaction` / `/compact` 三个词在 `src` + `crates` 全仓 **0 命中**（`grep compact` 命中的 46 处全是 `compact_tokens` 这个数字格式化函数，如 ``fn compact_tokens`（`src/main.rs`），与上下文压缩无关）；`UiEmitter`（`src/rpi_engine.rs:912` 结构体、`:918` emit）不认识该事件
 - 也没有 `/compact` 手动触发入口
 - 分类：**补实现**。接一个事件 + 一个命令项即可，1～2 小时。
 
@@ -57,13 +57,13 @@
 
 ### 1.4 show_view（图表/表单渲染）— 框架性缺口
 - DS：`ds-bot/src/host/tools.js:726`（工具定义）、`ds-bot/src/client/widget-cell.js`、`cells.js`（渲染）
-- MC：grep `show_view` **0 命中**；只有 `ask_user_question`（`src/rpi_engine.rs:2266`）这一种结构化交互
+- MC：grep `show_view` **0 命中**；只有 `ask_user_question`（`src/rpi_engine.rs:2286`）这一种结构化交互
 - 分类：**框架性**。GPUI 侧要新写 chart/table/form 三种组件 + 一份 JSON 协议，属 UI 侧大件。建议排阶段 3 之后；时间不够可先只做 form + table。
 
 ### 1.5 技能（Skills）与能力（Capabilities）— 框架性缺口
 - DS：`ds-bot/src/host/capabilities.js:54`（install）、`:92`-`:131`（mcp / skill / pack 三种 kind），skills 由 DSH 注入
 - rpi 侧有现成挂点：`AgentHarnessResources.skills`（`rpi-harness/src/types.rs` 的 `resources` 字段）
-- MC：`src/rpi_engine.rs:1192`-`1158` **没有设置 `resources`**；`AgentHarnessResources` 在 `src` + `crates` **0 命中**；`skills` 在 `src` **0 命中**（唯一相关是注释 `src/acp.rs:835`）
+- MC：`src/rpi_engine.rs:1202`-`1158` **没有设置 `resources`**；`AgentHarnessResources` 在 `src` + `crates` **0 命中**；`skills` 在 `src` **0 命中**（唯一相关是注释 `src/acp.rs:835`）
 - 能力页是只读 4 行硬编码：`src/capabilities.rs:15`（`rows()`）
 - 分类：**框架性**。要定 `skills/<name>/SKILL.md` 目录约定 + 扫描 + 注入 resources + 能力页改可编辑。
 
@@ -76,7 +76,7 @@
 - 分类：**无需改动**，这是 MC 的强项。
 
 ### 2.2 记忆注入 — 半成品（预算写死）
-- MC：`src/rpi_engine.rs:357` 注入团队记忆、`src/backend.rs:1740` 注入群记忆，两处都是 `memory_context(root, 4_000)` 固定 4000 字符（`src/data.rs:384`、`:401`）
+- MC：`src/rpi_engine.rs:357` 注入团队记忆、`src/backend.rs:1808` 注入群记忆，两处都是 `memory_context(root, 4_000)` 固定 4000 字符（`src/data.rs:384`、`:401`）
 - DS：按模型上下文窗口动态算预算，`ds-bot/src/host/memory.js:688`（`shownEntries`）+ `ds-bot/src/host/memory-entries.js:75`（`fitWindow`）
 - 分类：**补实现**。`memory_context` 已有 `max_chars` 参数，把 4000 换成按模型窗口算的比例即可。
 
@@ -88,11 +88,11 @@
 
 ### 2.4 Bot 私有记忆面板 — 半成品（缺页面）
 - DS：`ds-bot/src/client/memory-panel.js:325`（`MemoryDialog`，文件 449 行）
-- MC：只有团队记忆页 `src/main.rs:15788`（`settings_page_team_memory`）和群记忆区 `src/main.rs:17208`（`group_memory_section`）
+- MC：只有团队记忆页 `src/main.rs:15782`（`settings_page_team_memory`）和群记忆区 `src/main.rs:17202`（`group_memory_section`）
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
-- `src/memory_review.rs:86`（build_prompt）、`:196`（parse_operations）、`:318`（apply_operations）、`src/backend.rs:755`（memory_review）、`:2248`（run_memory_review）
+- `src/memory_review.rs:86`（build_prompt）、`:196`（parse_operations）、`:318`（apply_operations）、`src/backend.rs:771`（memory_review）、`:2248`（run_memory_review）
 - 分类：无需改动。
 
 ---
@@ -101,7 +101,7 @@
 
 ### 3.1 群任务台账与派活 — 已有
 - `crates/bot-team/src/tasks.rs`：状态机 `:18`（`TaskState`）、`apply_transition:207`、`route_task:763`
-- `src/team_tools.rs:300`（team_assign）、`src/backend.rs:1512`（只有 Chief 拿到团队工具）、`:1966`（note_dispatch）、`src/main.rs:4090`（每回合派活上限 4 次）
+- `src/team_tools.rs:300`（team_assign）、`src/backend.rs:1580`（只有 Chief 拿到团队工具）、`:1966`（note_dispatch）、`src/main.rs:4090`（每回合派活上限 4 次）
 - 分类：**无需改架构**。
 
 ### 3.2 群目标（Goal）— 半成品（缺验收/证据/打回）
@@ -127,7 +127,7 @@
 
 ### 4.2 缺的隔离 — 框架性缺口（安全级）
 - DS 有三道守卫：`ds-bot/src/host/privacy.js:242`（guardFiles 文件读写归属）、`:98`（ownerOfPath）、`:308`（privateClash 冲突检测）、`:172`（guardTeam 团队外发审批）
-- MC：只有 `is_private` 布尔；`before_tool_call` 里只做审批策略（`src/rpi_engine.rs:422` `hook()` → `:435` `decide()`），**没有文件路径归属判定**
+- MC：只有 `is_private` 布尔；`before_tool_call` 里只做审批策略（`src/rpi_engine.rs:428` `hook()` → `:435` `decide()`），**没有文件路径归属判定**
 - 后果：隐私 Bot 的 read/write/edit/bash 可读任意路径，包括别的 Bot 目录。`README.zh.md:84` 的承诺不成立。
 - 分类：**框架性**。要在 `ApprovalGate::decide` 前加"路径归属 → 越界即审批/拒绝"，并定义"哪些目录属于哪个 Bot"。**v0.5 必做。**
 
@@ -257,7 +257,7 @@
 
 ## 12. 用量
 
-- MC 已有：本会话 `src/rpi_engine.rs:2036`（`session_usage`）、总量 `:2048`（`usage_totals`）、按天 `:1747`（`usage_daily`），页面 `src/main.rs:16568`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
+- MC 已有：本会话 `src/rpi_engine.rs:2056`（`session_usage`）、总量 `:2048`（`usage_totals`）、按天 `:1747`（`usage_daily`），页面 `src/main.rs:16562`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
 - 缺：**按 Bot / 按模型分组**（DS：`ds-bot/src/host/usage.js:182` SQL `GROUP BY session, provider, model, kind, slot`，客户端 `usage-page.js` 732 行）；费用估算两边都没有价格表，不算差距
 - 分类：**补实现**。`UsageSummary`（`src/session_db.rs`）加 provider/model 维度聚合 + 页面加分组切换。半天。
 
@@ -269,7 +269,7 @@
 2. **隐私 Bot 文件隔离**（4.2）——改动会碰所有工具的 `before_tool_call` 路径，需回归全部工具。但这是安全承诺，不能拖。
 3. **IM 抽象层重构**（5.3）——`im_runtime.rs` 2498 行、`im_service.rs` 782 行，抽 trait 会动现有微信/企微两条已跑通通道，回归成本高。建议先写飞书适配器、**不动**微信/企微代码路径，用注册表旁挂。
 4. **数据结构改动必须有迁移**（群目标加 acceptance、多档位、浏览器 profile）——按 goal 规则"旧 `~/.mode-bot` 数据不得丢失"，每个字段按"缺失即默认"处理，不允许收紧 `deny_unknown_fields`。
-5. **会话显示名的键是「路径字符串」，不是路径身份**（2026-11-26 记录，v0.6 不修，留给下一版）——`titles` 用完整 jsonl 路径当 key（`src/state.rs:143` 的 `title()`、`src/state.rs:148` 的 `set_title()`），`sessions` / `history` 存的也是同一份路径串（`src/backend.rs:1213` 的 `session_id: path`），而这份路径的**拼写**取决于 `data_root()`（`src/data.rs:2240`）当时从哪里拿到根：
+5. **会话显示名的键是「路径字符串」，不是路径身份**（2026-11-26 记录，v0.6 不修，留给下一版）——`titles` 用完整 jsonl 路径当 key（`src/state.rs:143` 的 `title()`、`src/state.rs:148` 的 `set_title()`），`sessions` / `history` 存的也是同一份路径串（`src/backend.rs:1233` 的 `session_id: path`），而这份路径的**拼写**取决于 `data_root()`（`src/data.rs:2240`）当时从哪里拿到根：
 
    - `BOT_PILOT_DATA_ROOT` 给什么就用什么；
    - 否则 `MODE_DATA_BASE_DIR`；
@@ -277,7 +277,7 @@
 
    本机实测两种拼写**同时存在**：`USERPROFILE` 是长名 `C:\Users\Administrator`，`TEMP` 是 8.3 短名 `C:\Users\ADMINI~1\...`。验收时隔离根建在 `TEMP` 下，于是 `titles` 的 key 带 `ADMINI~1`；生产默认走 `USERPROFILE`，key 带长名。
 
-   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:25480` 的 `filter(|id| live != id)` 判不等。
+   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:25474` 的 `filter(|id| live != id)` 判不等。
 
    表现是**改名静默失效**：弹窗能开、能保存、写盘成功、重启后名字没了，而 `set_title` 不报错。触发条件不是「将来上游换写法」，而是**同一台机器上两种来源混用**：在短名隔离根里改过名，再用默认根启动，名字就不见了。
 
@@ -315,11 +315,11 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 语音朗读 | 0 命中（`tts`/`speech`/`voice` 在 `src` 全为 0） | `ds-bot/src/client/voice.js:81`（`VoiceMode`）、`ds-bot/src/client/speech.js`(152)、`ds-bot/src/client/read-page.js:22`（`readPage`） | 缺失 | 框架性（接系统 TTS） |
 | 手机端 / 远程配对 | 0 命中（`pairing`/`PairCode`/`mobile` 全为 0） | `link/src/pairing.ts:55`（`pairingUri`）、`ds-bot/src/host/phone.js:18`、`ds-bot/src/host/mobile.js:160`、`mobile/`（React Native 整套） | 缺失 | 框架性（独立子系统，v0.6） |
 | 学习卡（技能自学习） | 0 命中（`learning` 全为 0） | `ds-bot/src/client/learning-card.js:164`（`LearningTurnTail`）、`ds-bot/src/host/learning.js:296`（install） | 缺失 | 框架性 |
-| 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:15457`（`settings_page_feedback`，内容是一段静态格式化串 `:15386`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
+| 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:15451`（`settings_page_feedback`，内容是一段静态格式化串 `:15386`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
 | 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wechat_theme.rs`(236)、`src/main.rs:12881`（`fn accent_row`） | `client/themes.js`(124) | 已有 | — |
 | 托盘 / 自启 / 自动更新 | 已有：`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs`(215) | 已有 | — |
 | 头像 / Bot 图标 | 已有：`src/avatar.rs`(262)、`bot_icon.rs`(120)、`agent_icons.rs`(70)、`brand_icons.rs`(307) | `client/avatar-library.js`(149)、`agent-logos.js`(52) | 已有 | — |
-| 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1080`（`FindState`）+ `:2924`（`find_dialog`）、隐私过滤 `:6682`、`src/rpi_engine.rs:1591`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
+| 会话全文搜索 | 已有：`src/session_db.rs`(381)、`src/main.rs:1080`（`FindState`）+ `:2924`（`find_dialog`）、隐私过滤 `:6682`、`src/rpi_engine.rs:1611`（`search_sessions`） | `ds-bot/src/host/chat-index.js`(276) | 已有 | — |
 | 旁路会话（side chat） | 已有：`src/main.rs:7733`（`PaletteCmd::SideChat` 定义 → `:7823` 派发 / `:8151` `open_side`） | `ds-bot/src/client/side-chat.js`(155)、`host/side.js`(377) | 已有 | — |
 | 队列可视化 | 有上限 5 条但无独立 UI：`src/main.rs:4885` | `ds-bot/src/client/queue-dock.js:99`（`QueueDock`） | 半成品 | 补实现 |
 
@@ -334,19 +334,19 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 3 | Bot | 每 Bot 模型选择 | 已有 | `src/main.rs:10732`（models 页）、`src/rpi_engine.rs:55` | `ds-bot/src/host/models.js:101` |
 | 4 | Bot | 工作目录切换 | 已有 | `src/data.rs:563` | `ds-bot/src/host/tools.js:363` |
 | 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:267`（approval_policy）、`:422`（hook） | `ds-bot/src/host/approvals.js`(110) |
-| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:15755`、`:9773` | `ds-bot/src/client/memory-panel.js:325` |
+| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:15749`、`:9773` | `ds-bot/src/client/memory-panel.js:325` |
 | 7 | Bot | 记忆写入工具 remember/forget/recall | 缺失 | 0 命中 | `ds-bot/src/host/memory.js:1075/1114/1151` |
-| 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:717`（interject）、`src/rpi_engine.rs:1300` | `ds-bot/src/host/steer.js`(255) |
+| 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:733`（interject）、`src/rpi_engine.rs:1320` | `ds-bot/src/host/steer.js`(255) |
 | 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:8248`（open_side） | `ds-bot/src/host/side.js`(377) |
-| 10 | Bot | 会话全文搜索 | 已有 | `src/main.rs:1080`、`src/rpi_engine.rs:1591` | `ds-bot/src/host/chat-index.js`(276) |
+| 10 | Bot | 会话全文搜索 | 已有 | `src/main.rs:1080`、`src/rpi_engine.rs:1611` | `ds-bot/src/host/chat-index.js`(276) |
 | 11 | Main bot | Chief 身份与降级规则 | 已有 | `src/data.rs:90`、`:590` | `ds-bot/src/host/roster.js`(900) |
 | 12 | Main bot | 管理其它 Bot/群（工具化） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:325/363/496/526/590` |
 | 13 | 群聊 | 建群/改群/删群 | 已有 | `src/data.rs:1865`（create_group）、`src/main.rs:3830` | `ds-bot/src/host/groups.js`(1885) |
-| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:20663`（route_group_members） | `ds-bot/src/host/groups.js` |
-| 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:300`、`src/backend.rs:1512` | `ds-bot/src/host/tools.js` |
+| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:20657`（route_group_members） | `ds-bot/src/host/groups.js` |
+| 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:300`、`src/backend.rs:1580` | `ds-bot/src/host/tools.js` |
 | 16 | 群聊 | 群目标（阶段） | 半成品 | `crates/bot-team/src/goal.rs:53/64` | `ds-bot/src/host/goals.js:670` |
 | 17 | 群聊 | 目标验收标准 pass/rework | 缺失 | 0 命中 | `ds-bot/src/host/goals.js:760/767` |
-| 18 | 群聊 | 群记忆自动回顾 | 已有 | `src/memory_review.rs:86`、`src/backend.rs:2482` | `ds-bot/src/host/memory-review.js:23` |
+| 18 | 群聊 | 群记忆自动回顾 | 已有 | `src/memory_review.rs:86`、`src/backend.rs:2560` | `ds-bot/src/host/memory-review.js:23` |
 | 19 | 群聊 | 排队消息 dock | 半成品 | `src/main.rs:4885` | `ds-bot/src/client/queue-dock.js:99` |
 | 20 | 隐私 bot | 独立会话落盘 + 搜索排除 | 已有 | `src/backend.rs:369`、`src/main.rs:6758` | `ds-bot/src/host/privacy.js:222` |
 | 21 | 隐私 bot | 文件归属守卫 | 缺失 | 0 命中 | `ds-bot/src/host/privacy.js:242` |
@@ -375,7 +375,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 44 | 能力 | Skill 注入到引擎 | 缺失 | 0 命中（未设 resources） | `ds-bot/src/host/capabilities.js:125` |
 | 45 | 能力 | show_view（图表/表格/表单） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:726` |
 | 46 | Office | docx/pptx/xlsx 读写与渲染检查 | 缺失 | 只有 MIME：`crates/bots-service/src/media.rs:126` | `ds-bot/src/office/docx.js`(612) 等 9 个 |
-| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:2036/2048/1747`、`src/main.rs:16568` | `ds-bot/src/host/usage.js`(630) |
+| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:2056/2068/1767`、`src/main.rs:16562` | `ds-bot/src/host/usage.js`(630) |
 | 48 | 用量 | 按 Bot / 模型分组 | 缺失 | 未见聚合维度 | `ds-bot/src/host/usage.js:182` |
 | 49 | 记忆 | Markdown 记忆 + 索引 + 历史 + 撤销 | 已有 | `crates/bots-service/src/memory_store.rs:659/1224/1258` | `ds-bot/src/host/memory.js` |
 | 50 | 记忆 | 团队/群双作用域 | 已有 | `src/data.rs:380/396` | `ds-bot/src/host/memory.js:854` |
@@ -385,11 +385,11 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 54 | 定时任务 | Agent 侧创建/查询定时任务工具 | 已有 | `src/automation_tools.rs:71/89/124` | `ds-bot/src/host/schedules.js:211` |
 | 55 | ACP | 会话/权限卡/提问卡 | 已有 | `src/acp.rs:387/472/108` | `ds-bot/src/host/local-agents/acp.js` |
 | 56 | ACP | 断线重连 / 会话恢复 | 已有 | `src/acp.rs:167`（resume 走 session/load） | `ds-bot/src/host/resume.js`(451) |
-| 57 | 通用 | 供 Agent 使用的 ask_user | 已有 | `src/rpi_engine.rs:2266` | `ds-bot/src/host/tools.js:670` |
+| 57 | 通用 | 供 Agent 使用的 ask_user | 已有 | `src/rpi_engine.rs:2286` | `ds-bot/src/host/tools.js:670` |
 | 58 | 通用 | 多语言（>2） | 缺失 | `src/i18n.rs:12`（只 zh/en） | `ds-bot/src/client/i18n.js:1695` |
 | 59 | 通用 | 语音朗读 | 缺失 | 0 命中 | `ds-bot/src/client/voice.js:81`、`ds-bot/src/client/read-page.js:22` |
 | 60 | 通用 | 手机端 / 远程配对 | 缺失 | 0 命中 | `link/src/pairing.ts:55`、`ds-bot/src/host/mobile.js:160` |
-| 61 | 通用 | 诊断 / 反馈 | 半成品 | `src/main.rs:15457` | `ds-bot/src/client/diagnostics.js:42`、`ds-bot/src/client/feedback.js:46` |
+| 61 | 通用 | 诊断 / 反馈 | 半成品 | `src/main.rs:15451` | `ds-bot/src/client/diagnostics.js:42`、`ds-bot/src/client/feedback.js:46` |
 | 62 | 通用 | 主题 / 托盘 / 自启 / 自动更新 | 已有 | `src/theme.rs`、`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs` |
 | 63 | 通用 | 密钥库（只看已存名字） | 已有 | `src/secrets.rs:33/44` | `ds-bot/src/host/secrets.js`(553) |
 
@@ -465,7 +465,7 @@ SELF-CHECK OK
 
 回填规则只看位置：同一行里、在 `:N` 之前**最近**的那个完整锚点。所以一行里出现多个文件时，裸行号会被归给紧邻的那一个，哪怕它语义上属于更早提到的文件。
 
-真实的漏检（`docs/prd-0.6.md` 的 O-3 那一行）：句子先写"`wechat_working_row`，`src/main.rs:26472` 起"，中间插了一个 `tool_render.rs` 的 `:26` 引用，后面的裸 `:26395` / `:26401` 就被归给 `tool_render.rs`：
+真实的漏检（`docs/prd-0.6.md` 的 O-3 那一行）：句子先写"`wechat_working_row`，`src/main.rs:26476` 起"，中间插了一个 `tool_render.rs` 的 `:26` 引用，后面的裸 `:26395` / `:26401` 就被归给 `tool_render.rs`：
 
 ```
 src/tool_render.rs :25011 (裸行号) -> OUT OF RANGE (max 434)
@@ -568,11 +568,11 @@ write       src/main.rs:9135         set_title(&session_id, &title)      ← 写
 
 这才是真正的边界：**`263-3` 成立是因为行上的 label 和改名按钮的 id 来自同一次 `history_of` 迭代**，不是因为「路径 key 的形态碰巧一致」。前者是结构保证，后者是运气。
 
-**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:25780` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
+**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:25774` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
 
 这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
 
-**另有一处口径**：`chat.session_id` 对 ACP 引擎（`acp.rs` 的 `AcpEvent::Ready`）是协议给的 opaque id，对 pi-rust 引擎（`src/backend.rs:1213` 的 `session_id: path`）是文件全路径。两套来源都能进 `history`，所以 `titles` 的 key 实际上混着两种形态——但它们各自自洽，因为每条记录的写入和读取都走同一条来源。**跨引擎切换同一个 Bot 时才需要额外小心**，这一点记在风险清单第 5 条里。
+**另有一处口径**：`chat.session_id` 对 ACP 引擎（`acp.rs` 的 `AcpEvent::Ready`）是协议给的 opaque id，对 pi-rust 引擎（`src/backend.rs:1233` 的 `session_id: path`）是文件全路径。两套来源都能进 `history`，所以 `titles` 的 key 实际上混着两种形态——但它们各自自洽，因为每条记录的写入和读取都走同一条来源。**跨引擎切换同一个 Bot 时才需要额外小心**，这一点记在风险清单第 5 条里。
 
 ### 18.8 `4b` 的视觉证据可以用一条穷举证明替代：`chat_detail` 全仓只有 8 处
 
@@ -591,8 +591,8 @@ src/main.rs:24970  this.chat_detail = None;                 点「改名」跳�
 
 **这条穷举能证明的事，比一张截图强：**
 
-1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:25272`-`:25194` 的 `matches!` 带 `if` 守卫）。
-2. **整个程序里只有 `src/main.rs:17895` 能把它设成 `Some`**，而那里只在点「⋯ → 运行状态」时执行。
+1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:25266`-`:25194` 的 `matches!` 带 `if` 守卫）。
+2. **整个程序里只有 `src/main.rs:17889` 能把它设成 `Some`**，而那里只在点「⋯ → 运行状态」时执行。
 3. **三个清空点之外没有第四个写入者**，也没有从 `pilot-state.json` / `ui-prefs` 反序列化回来的路径——`chat_detail` 只挂在 `PilotApp` 上（`:3279`），`save_ui_prefs` 存的是 `muted / topmost / pinned_settings / right_panel_open` 四项，不含它（`src/main.rs:762`-`:768`）。
 
 所以「关右栏再展开，绿边不回来」这件事**不需要靠截图证明**：从 `11255` 清掉之后，能再把它设回去的代码只有 `16815`，而重新展开走的 `11251`-`:11256` 那条路径里没有它。

@@ -94,20 +94,21 @@ src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
 src/backend.rs:144|pub struct ElicitationCard {
-src/backend.rs:1578|for member in &spec.members {
-src/backend.rs:1684|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
-src/backend.rs:1686|.members
-src/backend.rs:1740|goal_prompt: crate::data::group_goal_prompt(&spec.info.group_id)
+src/backend.rs:1647|let internal = member_session_key(&spec.group_key, &member.member_id);
+src/backend.rs:1752|let parsed = bot_team::mentions::parse_mentions(&text, &member_pairs);
+src/backend.rs:1760|let chosen: Vec<usize> = if !mentioned.is_empty() {
+src/backend.rs:1762|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
+src/backend.rs:1808|goal_prompt: crate::data::group_goal_prompt(&spec.info.group_id)
 src/backend.rs:191|Delta {
 src/backend.rs:194|}
-src/backend.rs:2426|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
-src/backend.rs:2482|session_id: Option<String>
+src/backend.rs:2504|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
+src/backend.rs:2560|session_id: Option<String>
 src/backend.rs:320|/// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
 src/backend.rs:335|.ok_or_else(|| "未选择模型：请先在右栏或设置里为这个 Bot 选一个模型".to_string())?;
 src/backend.rs:345|context_window
 src/backend.rs:353|identity
-src/backend.rs:561|attachment_index: u64
-src/backend.rs:569|ui_key: String
+src/backend.rs:568|attachment_index: u64
+src/backend.rs:576|ui_key: String
 src/bot_icon.rs:18|pub const ICONS: [(&str, &str); 1] = [("app", "气泡机器人")];
 src/bot_tools.rs:104|"post_to_group"
 src/bot_tools.rs:69|"whoami"
@@ -199,44 +200,44 @@ src/main.rs:11769|.filter(|bot| !bot.is_private)
 src/main.rs:12563|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
 src/main.rs:12612|SharedString::from(format!("private-archive-row-{id}"))
 src/main.rs:13165|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:13501|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:14263|cx.notify();
-src/main.rs:14773|.child(settings_group(vec![
-src/main.rs:16039|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
+src/main.rs:13495|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:14257|cx.notify();
+src/main.rs:14767|.child(settings_group(vec![
+src/main.rs:16033|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
 src/main.rs:1639|strip = strip.child(stage_action_chip(
-src/main.rs:16636|cx.notify();
-src/main.rs:16646|.child(ui::stat_card(
+src/main.rs:16630|cx.notify();
+src/main.rs:16640|.child(ui::stat_card(
 src/main.rs:1665|strip = strip.child(stage_action_chip(
-src/main.rs:16684|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:16678|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1686|strip = strip.child(stage_action_chip(
 src/main.rs:1730|.id(SharedString::from(format!(
-src/main.rs:19087|Err(message) => {
-src/main.rs:19424|if this.screenshot_watching {
-src/main.rs:19838|fn approval_note(level: &str) -> &'static str {
-src/main.rs:19930|.filter(|bot| !bot.is_private)
-src/main.rs:20371|fn wechat_row_el(
-src/main.rs:20662|WecomRow::ToolGroup {
+src/main.rs:19081|Err(message) => {
+src/main.rs:19418|if this.screenshot_watching {
+src/main.rs:19832|fn approval_note(level: &str) -> &'static str {
+src/main.rs:19924|.filter(|bot| !bot.is_private)
+src/main.rs:20365|fn wechat_row_el(
+src/main.rs:20656|WecomRow::ToolGroup {
 src/main.rs:2102|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:21112|fn wechat_message_actions(
-src/main.rs:21144|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
-src/main.rs:21154|if let Some(code) = fenced_code(text) {
-src/main.rs:21176|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
-src/main.rs:21386|const SETTINGS_PAGES: [&str; 13] = [
-src/main.rs:21406|enum SettingsDetail {
+src/main.rs:21106|fn wechat_message_actions(
+src/main.rs:21138|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
+src/main.rs:21148|if let Some(code) = fenced_code(text) {
+src/main.rs:21170|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
+src/main.rs:21380|const SETTINGS_PAGES: [&str; 13] = [
+src/main.rs:21400|enum SettingsDetail {
 src/main.rs:2146|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:217|fn panel_target_width(
-src/main.rs:22156|Err(message) => this.toast(message, cx)
-src/main.rs:22892|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:22894|.selectable(true)
+src/main.rs:22150|Err(message) => this.toast(message, cx)
+src/main.rs:22886|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:22888|.selectable(true)
 src/main.rs:2312|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:234|}
 src/main.rs:2392|"task-reassign-{}"
 src/main.rs:2435|"task-reassign-{}-{}"
-src/main.rs:24574|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:24568|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2506|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:25216|.into_any_element()
+src/main.rs:25210|.into_any_element()
 src/main.rs:255|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:27507|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27511|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2861|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2879|fn finish_member(&mut self, member: &str) {
 src/main.rs:3327|/// 用量页时间范围（天）：1/7/30/90。
@@ -274,30 +275,30 @@ src/privacy.rs:201|pub fn precheck(
 src/privacy.rs:51|pub fn archived_private_bots() -> Vec<ArchivedPrivateBot> {
 src/privacy.rs:80|pub fn archive_private_bot(id: &str, name: &str, directory: &str) -> Result<(), 
 src/privacy.rs:98|pub fn release_archive(id: &str) -> Result<(), String> {
-src/rpi_engine.rs:1022|let mut input_tokens = 0i64;
-src/rpi_engine.rs:1098|pub async fn open(options: OpenOptions) -> Result<Self, String> {
-src/rpi_engine.rs:1300|/// 回合进行中插话：交给 lane 的 steering 队列，在当前工具批次之后
-src/rpi_engine.rs:1324|});
+src/rpi_engine.rs:1032|let mut input_tokens = 0i64;
+src/rpi_engine.rs:1108|pub async fn open(options: OpenOptions) -> Result<Self, String> {
+src/rpi_engine.rs:1320|/// 回合进行中插话：交给 lane 的 steering 队列，在当前工具批次之后
+src/rpi_engine.rs:1344|});
 src/rpi_engine.rs:144|let limits = crate::model_limits::read(&spec.provider_id, &spec.model_id);
 src/rpi_engine.rs:147|model.max_tokens = max_tokens.max(1) as u64;
-src/rpi_engine.rs:1591|out
-src/rpi_engine.rs:1630|if matches!(
-src/rpi_engine.rs:1644|continue;
-src/rpi_engine.rs:1786|/// 按天 / 按 Bot / 按模型一次性聚合最近 `days` 天的用量。
-src/rpi_engine.rs:1969|return None;
-src/rpi_engine.rs:2106|accumulate_usage(&text, summary);
-src/rpi_engine.rs:2178|name: "ask_user_question".to_string()
+src/rpi_engine.rs:1611|out
+src/rpi_engine.rs:1650|if matches!(
+src/rpi_engine.rs:1664|continue;
+src/rpi_engine.rs:1794|pub struct GroupedUsage {
+src/rpi_engine.rs:1985|#[allow(dead_code)]
+src/rpi_engine.rs:2126|accumulate_usage(&text, summary);
+src/rpi_engine.rs:2198|name: "ask_user_question".to_string()
 src/rpi_engine.rs:327|pub fn sessions_root() -> PathBuf {
 src/rpi_engine.rs:338|pub fn system_prompt_for(workspace: &Path) -> String {
 src/rpi_engine.rs:346|pub fn system_prompt_for_bot(workspace: &Path, bot_id: Option<&str>, context_win
 src/rpi_engine.rs:364|let own = crate::data::bot_memory_context(bot_id, budget);
 src/rpi_engine.rs:371|}
 src/rpi_engine.rs:373|fn tool_set(workspace: &Path) -> Vec<HarnessTool> {
-src/rpi_engine.rs:422|pub fn hook(self: &Arc<Self>) -> BeforeToolCall {
-src/rpi_engine.rs:435|async fn decide(
-src/rpi_engine.rs:451|let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref
-src/rpi_engine.rs:503|async fn ask_permission(
-src/rpi_engine.rs:531|options: {
+src/rpi_engine.rs:428|pub fn hook(self: &Arc<Self>) -> BeforeToolCall {
+src/rpi_engine.rs:441|async fn decide(
+src/rpi_engine.rs:461|let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref
+src/rpi_engine.rs:513|async fn ask_permission(
+src/rpi_engine.rs:541|options: {
 src/schedule_builder.rs:179|pub fn describe(when: &When) -> String {
 src/schedule_builder.rs:19|pub enum When {
 src/schedule_builder.rs:56|pub fn to_request(when: &When, now_ms: i64, offset_secs: i32) -> Result<Schedule
