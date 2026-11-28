@@ -1195,6 +1195,12 @@ impl RpiSession {
         harness_options.tools = tool_set(&workspace);
         harness_options.tools.extend(options.extra_tools);
         harness_options.tools.push(questions.tool());
+        // O05：IM 通道不提供 request_secret（密钥不经 IM 传输/输入）。
+        if options.key != "im" {
+            harness_options
+                .tools
+                .push(questions.secret_tool(crate::data::data_root()));
+        }
         harness_options.active_tool_names = harness_options
             .tools
             .iter()
@@ -2189,6 +2195,29 @@ impl QuestionGate {
         }))
     }
 
+    /// O02：`request_secret` 工具——向用户要一个密钥值，落 `secrets.json`，
+    /// 只把「名字」回给模型（明文不进对话历史、不进 prompt）。
+    pub fn secret_tool(self: &Arc<Self>, data_root: std::path::PathBuf) -> HarnessTool {
+        HarnessTool::new(Arc::new(RequestSecretTool {
+            gate: Arc::clone(self),
+            data_root,
+            tool: rpi_ai::types::Tool {
+                name: "request_secret".to_string(),
+                description: "向用户安全地要一个密钥（API Key、token、密码等）：值直接存进本机密钥库，                              聊天记录与模型上下文里都不会出现明文。之后用 ${secret:NAME} 引用。"
+                    .to_string(),
+                parameters: rpi_ai::Schema(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "密钥名（保存与引用用，如 OPENAI_API_KEY）"},
+                        "description": {"type": "string", "description": "这个密钥用在哪（给用户看的说明）"}
+                    },
+                    "required": ["name"]
+                })),
+                constrained_sampling: None,
+            },
+        }))
+    }
+
     pub fn answer(&self, request_id: &str, answer: Option<String>) -> bool {
         let sender = self
             .pending
@@ -2303,6 +2332,72 @@ impl AgentTool for AskUserQuestionTool {
             content: vec![rpi_agent::TextContentOrImage::Text(rpi_ai::TextContent {
                 kind: rpi_ai::types::TextContentType,
                 text: answer,
+                text_signature: None,
+            })],
+            details: serde_json::Value::Null,
+            usage: None,
+            added_tool_names: Vec::new(),
+            terminate: false,
+        })
+    }
+}
+
+struct RequestSecretTool {
+    gate: Arc<QuestionGate>,
+    data_root: std::path::PathBuf,
+    tool: rpi_ai::types::Tool,
+}
+
+#[async_trait::async_trait]
+impl AgentTool for RequestSecretTool {
+    fn schema(&self) -> &rpi_ai::types::Tool {
+        &self.tool
+    }
+
+    fn label(&self) -> &str {
+        &self.tool.name
+    }
+
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        params: serde_json::Value,
+        signal: tokio_util::sync::CancellationToken,
+        _on_update: Arc<dyn Fn(rpi_agent::ToolResultPartial) + Send + Sync>,
+    ) -> Result<AgentToolResult, rpi_agent::AgentError> {
+        let name = params
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| rpi_agent::AgentError::Tool("缺少 name".to_string()))?
+            .to_string();
+        let purpose = params
+            .get("description")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let question = if purpose.is_empty() {
+            format!("请输入 {name} 的值（保存到本机密钥库，不会出现在对话里）")
+        } else {
+            format!("请输入 {name} 的值（{purpose}；保存到本机密钥库，不会出现在对话里）")
+        };
+        let answer = self
+            .gate
+            .ask(question, Vec::new(), signal)
+            .await
+            .map_err(rpi_agent::AgentError::Tool)?;
+        let value = answer.trim().to_string();
+        if value.is_empty() {
+            return Err(rpi_agent::AgentError::Tool("已取消（没有输入）".to_string()));
+        }
+        crate::secrets::set(&self.data_root, &name, &value)
+            .map_err(rpi_agent::AgentError::Tool)?;
+        Ok(AgentToolResult {
+            content: vec![rpi_agent::TextContentOrImage::Text(rpi_ai::TextContent {
+                kind: rpi_ai::types::TextContentType,
+                text: format!("已保存密钥 {name}（值不入对话；需要用 ${{secret:{name}}} 引用）"),
                 text_signature: None,
             })],
             details: serde_json::Value::Null,

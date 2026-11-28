@@ -357,6 +357,8 @@ async fn open_rpi_session(
     if controls {
         // 后台任务工具（长任务）：Bot 可给自己派独立会话跑长时间工作。
         extra_tools.extend(crate::task_tools::tools(identity));
+        // 视图展示（F13）：表格/指标/说明 → markdown 渲染。
+        extra_tools.extend(crate::show_view::tools(identity));
     }
     // 官方插件开关（workspace `.mode/config.json` 的 enabledPlugins）也参与放行：
     // 没有可读的 config.json 时不限制；显式关闭才停注对应工具族。
@@ -1238,6 +1240,7 @@ async fn run_agent(
                         extra_tools.extend(crate::memory_tools::tools(run_bot_id.as_deref()));
                         extra_tools.extend(crate::bot_tools::tools(&identity));
                         extra_tools.extend(crate::task_tools::tools(&identity));
+                        extra_tools.extend(crate::show_view::tools(&identity));
                         let options = crate::rpi_engine::OpenOptions {
                             workspace: workspace.clone().into(),
                             resume_path,

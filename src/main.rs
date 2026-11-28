@@ -51,6 +51,7 @@ mod im_adapter;
 mod oauth;
 mod schedule_builder;
 mod search_index;
+mod show_view;
 mod task_store;
 mod task_tools;
 mod automations;
@@ -1079,6 +1080,8 @@ enum PaletteCmd {
     Compact,
     /// 把当前输入框内容提交为后台任务（长任务 P2）。
     StartTask,
+    /// 把某个 Bot 的最近对话作为引用插入输入框（C12）。
+    QuoteBot(usize),
     SelectBot(usize),
     SelectGroup(usize),
 }
@@ -7690,6 +7693,11 @@ impl PilotApp {
         ];
         for (index, bot) in self.roster.bots.iter().enumerate() {
             entries.push((
+                tri!("引用 {} 的最近对话", "Quote {}'s recent chat", bot.name),
+                String::new(),
+                PaletteCmd::QuoteBot(index),
+            ));
+            entries.push((
                 tri!("切换到 {}", "Switch to {}", bot.name),
                 bot.role.clone(),
                 PaletteCmd::SelectBot(index),
@@ -7910,6 +7918,58 @@ impl PilotApp {
                         Err(message) => self.toast(message, cx),
                     }
                 }
+                cx.notify();
+            }
+            PaletteCmd::QuoteBot(index) => {
+                let Some(bot) = self.roster.bots.get(index) else {
+                    cx.notify();
+                    return;
+                };
+                let bot_name = bot.name.clone();
+                let key = bot_key(&bot.id);
+                let Some(chat) = self.chats.get(&key) else {
+                    self.toast(
+                        tri!(
+                            "{} 还没有会话，先和它聊两句",
+                            "{} has no chat yet",
+                            bot_name
+                        )
+                        .to_string(),
+                        cx,
+                    );
+                    cx.notify();
+                    return;
+                };
+                let mut lines: Vec<String> = vec![format!(
+                    "> 来自「{bot_name}」的最近对话："
+                )];
+                for message in chat
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter(|message| !message.text.trim().is_empty())
+                    .take(6)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                {
+                    let speaker = if message.role == Role::User {
+                        i18n::t("我").to_string()
+                    } else {
+                        bot_name.clone()
+                    };
+                    let text = message.text.trim().replace('\n', "\n> ");
+                    lines.push(format!("> {speaker}：{}", text.chars().take(200).collect::<String>()));
+                }
+                let quote = lines.join("\n");
+                let existing = self.input.read(cx).content().trim().to_string();
+                let next = if existing.is_empty() {
+                    quote
+                } else {
+                    format!("{existing}\n\n{quote}")
+                };
+                self.input.update(cx, |input, cx| input.set_content(&next, cx));
+                self.toast(i18n::t("已引用其最近对话").to_string(), cx);
                 cx.notify();
             }
             PaletteCmd::EditAllowlist => {

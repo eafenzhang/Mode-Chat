@@ -89,6 +89,12 @@ enum Action {
     GoalRework,
     TaskList,
     Assign,
+    /// B02：主 Bot 在对话里新建 Bot。
+    CreateBot,
+    /// B02：主 Bot 修改 Bot 的名字/角色/指令。
+    UpdateBot,
+    /// B02：停止某个成员正在跑的回合。
+    StopMember,
 }
 
 struct TeamTool {
@@ -241,6 +247,54 @@ pub fn tools(
             ),
         ),
         (
+            Action::CreateBot,
+            tool_def(
+                "team_create_bot",
+                "新建一个 Bot（团队队友）。只在用户明确要求「加一个 Bot」时使用；名字必填。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Bot 名字（必填）"},
+                        "role": {"type": "string", "description": "角色/专长（可选）"},
+                        "instructions": {"type": "string", "description": "指令（可选，写进 AGENTS.md）"},
+                        "directory": {"type": "string", "description": "工作目录（可选，缺省用当前团队目录）"}
+                    },
+                    "required": ["name"]
+                }),
+            ),
+        ),
+        (
+            Action::UpdateBot,
+            tool_def(
+                "team_update_bot",
+                "修改一个已存在的 Bot：名字、角色或指令（只传要改的字段）。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "bot": {"type": "string", "description": "Bot 名字或 id"},
+                        "name": {"type": "string", "description": "新名字（可选）"},
+                        "role": {"type": "string", "description": "新角色（可选）"},
+                        "instructions": {"type": "string", "description": "新指令（可选）"}
+                    },
+                    "required": ["bot"]
+                }),
+            ),
+        ),
+        (
+            Action::StopMember,
+            tool_def(
+                "team_stop_member",
+                "停止某个群成员正在跑的回合（用户要求「让它别跑了」时用）。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "成员名字或 id"}
+                    },
+                    "required": ["target"]
+                }),
+            ),
+        ),
+        (
             Action::Assign,
             tool_def(
                 "team_assign",
@@ -272,6 +326,126 @@ pub fn tools(
             }))
         })
         .collect()
+}
+
+impl TeamTool {
+    /// B02：新建 Bot（走 data 层，与设置页同一份名册与校验）。
+    fn create_bot(&self, params: &Value) -> Result<String, String> {
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return Err("name 不能为空".to_string());
+        }
+        let role = params.get("role").and_then(Value::as_str).unwrap_or_default();
+        let instructions = params
+            .get("instructions")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let directory = params
+            .get("directory")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::backend::fallback_workspace().to_string_lossy().into_owned());
+        let bot = crate::data::create_bot(
+            &name,
+            role,
+            &directory,
+            None,
+            false,
+            false,
+        )?;
+        if !instructions.trim().is_empty() {
+            let _ = crate::data::update_bot(
+                &bot.id,
+                &bot.name,
+                &bot.role,
+                &bot.directory,
+                bot.identity_sync,
+                bot.is_private,
+                bot.is_chief,
+                instructions,
+            );
+        }
+        Ok(format!("已创建 Bot：{}（{}）", bot.name, bot.id))
+    }
+
+    /// B02：修改 Bot（只覆盖传入的字段）。
+    fn update_bot(&self, params: &Value) -> Result<String, String> {
+        let target = params
+            .get("bot")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if target.is_empty() {
+            return Err("bot 不能为空（名字或 id）".to_string());
+        }
+        let roster = crate::data::Roster::load();
+        let bot = roster
+            .bots
+            .iter()
+            .find(|bot| bot.id == target || bot.name == target)
+            .cloned()
+            .ok_or_else(|| format!("名册里找不到 Bot：{target}"))?;
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&bot.name)
+            .to_string();
+        let role = params
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or(&bot.role)
+            .to_string();
+        let instructions = params
+            .get("instructions")
+            .and_then(Value::as_str)
+            .unwrap_or(&bot.instructions)
+            .to_string();
+        crate::data::update_bot(
+            &bot.id,
+            &name,
+            &role,
+            &bot.directory,
+            bot.identity_sync,
+            bot.is_private,
+            bot.is_chief,
+            &instructions,
+        )?;
+        Ok(format!("已更新 Bot：{name}（{}）", bot.id))
+    }
+
+    /// B02：停止某成员回合（复用 StopMember 命令）。
+    fn stop_member(&self, params: &Value) -> Result<String, String> {
+        let target = params
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if target.is_empty() {
+            return Err("target 不能为空".to_string());
+        }
+        let member_id = self
+            .members
+            .iter()
+            .find(|member| member.id == target || member.name == target)
+            .map(|member| member.id.clone())
+            .ok_or_else(|| format!("群成员里找不到：{target}"))?;
+        let Some(handle) = crate::backend::bus() else {
+            return Err("后台引擎未就绪".to_string());
+        };
+        handle.stop_member(self.group_key.clone(), member_id.clone());
+        Ok(format!("已请求停止成员回合：{target}"))
+    }
 }
 
 #[async_trait]
@@ -318,6 +492,9 @@ impl TeamTool {
             Action::GoalRework => self.goal_rework(&params),
             Action::TaskList => self.task_list(),
             Action::Assign => self.assign(&params),
+            Action::CreateBot => self.create_bot(&params),
+            Action::UpdateBot => self.update_bot(&params),
+            Action::StopMember => self.stop_member(&params),
         }
     }
 
