@@ -13246,17 +13246,11 @@ impl PilotApp {
                         this.permission_menu = None;
                         match data::set_bot_approval_level(&bot_id, level) {
                             Ok(()) => {
-                                // 权限在会话创建时读取；重置会话后续用同一 resume id。
-                                let key = bot_key(&bot_id);
-                                this.backend.reset_session(&key);
-                                this.chats.remove(&key);
+                                // 审批档在会话内热更新：旧实现是重置会话再重建，
+                                // 回合进行中重开会撞 JSONL writer lease
+                                // （「Failed to acquire writer lease」）。
+                                this.backend.set_approval_level(bot_key(&bot_id), level);
                                 this.roster = Roster::load();
-                                if let Some(index) =
-                                    this.roster.bots.iter().position(|bot| bot.id == bot_id)
-                                {
-                                    this.selection = Some(Selection::Bot(index));
-                                    this.ensure_bot(index);
-                                }
                                 let label = i18n::t(label);
                                 this.toast(
                                     if i18n::is_en() {
@@ -25971,6 +25965,16 @@ impl PilotApp {
         cx: &mut Context<Self>,
     ) {
         let key = bot_key(&bot_id);
+        // 点的是当前会话：重开只会和正在跑的回合抢 writer lease（pi 会报
+        // 「writer lease is already held」），直接当无效操作，流式输出不受影响。
+        if let Some(chat) = self.chats.get(&key)
+            && chat.session_id.as_deref() == Some(session_id.as_str())
+        {
+            self.chat_detail = None;
+            self.scroll.scroll_to_bottom();
+            cx.notify();
+            return;
+        }
         if let Some(chat) = self.chats.get(&key)
             && let Some(current) = chat.session_id.clone()
             && current != session_id

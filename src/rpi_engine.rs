@@ -386,7 +386,8 @@ pub struct ApprovalGate {
     events: UnboundedSender<BackendEvent>,
     key: String,
     member: Option<String>,
-    level: bot_team::approval::ApprovalLevel,
+    /// 可写：设置页改审批档时不重建会话（重建会撞 JSONL writer lease）。
+    level: Mutex<bot_team::approval::ApprovalLevel>,
     /// 可写：「始终允许」要热更新本会话的内存白名单，下一轮立即生效。
     allowlist: Mutex<Vec<String>>,
     /// 白名单持久化目标（teammates.json 的 Bot id；没有就不落盘）。
@@ -412,11 +413,16 @@ impl ApprovalGate {
             events,
             key,
             member,
-            level,
+            level: Mutex::new(level),
             allowlist: Mutex::new(allowlist),
             bot_id,
             pending: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 热更新审批档：下一轮工具调用立即按新档位判断。
+    pub fn set_level(&self, level: bot_team::approval::ApprovalLevel) {
+        *self.level.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = level;
     }
 
     pub fn hook(self: &Arc<Self>) -> BeforeToolCall {
@@ -445,9 +451,13 @@ impl ApprovalGate {
         if std::env::var("BOT_PILOT_AUTO_APPROVE").ok().as_deref() == Some("1") {
             return None;
         }
+        let level = *self
+            .level
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // 隐私守卫（W3）：路径类工具访问别人的/已归档的目录时，不管档位一律弹卡。
         // 例外：「完全自主」的语义是所有操作都不再询问，这里必须让位。
-        if self.level != ApprovalLevel::Full {
+        if level != ApprovalLevel::Full {
             let cross_dir = crate::privacy::precheck(&tool_name, &args, self.bot_id.as_deref());
             if let Some(owner) = cross_dir {
                 return self
@@ -468,7 +478,7 @@ impl ApprovalGate {
             .lock()
             .expect("approval allowlist poisoned")
             .clone();
-        match decide(self.level, &allowlist, &tool_name) {
+        match decide(level, &allowlist, &tool_name) {
             ApprovalDecision::Allow => None,
             ApprovalDecision::Deny => Some(blocked("已拒绝（审批策略）")),
             ApprovalDecision::Ask => {
@@ -1225,7 +1235,17 @@ impl RpiSession {
         let member_for_events = options.member.clone();
         let harness = AgentHarness::create(harness_options)
             .await
-            .map_err(|error| format!("Agent 会话初始化失败：{error}"))?;
+            .map_err(|error| {
+                let text = error.to_string();
+                // 同一 JSONL 被两个会话同时打开时 pi 报 writer lease 冲突：
+                // 原始文案带一长串掩码过的路径，对用户没有信息量，换成一句
+                // 可操作的提示（重开同一会话的前置守卫见 backend）。
+                if text.contains("writer lease is already held") {
+                    "会话正被占用（另一个回合或窗口还没结束），请稍后再试".to_string()
+                } else {
+                    format!("Agent 会话初始化失败：{text}")
+                }
+            })?;
         // 压缩进度 → UI 状态行（W4）。`CompactionProgressEvent` 没有实现
         // `HarnessEventOf`（pi-rust rev 29d8686），所以走 watch 拿原始事件再按标签过滤。
         let mut compaction_watch = harness.events().watch(|| ());

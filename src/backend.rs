@@ -473,11 +473,18 @@ enum Command {
         session_id: Option<String>,
         /// 该 Bot 选择的本地智能体引擎（None/"mode" = 内嵌引擎）。
         engine: Option<String>,
+        /// writer lease 被旧会话占着时的内部重试计数（UI 侧恒为 0）。
+        attempt: u8,
     },
     Send {
         key: String,
         text: String,
         attachments: Vec<AttachmentUpload>,
+    },
+    /// 审批档热更新：不重建会话，避免与进行中的回合抢 JSONL writer lease。
+    SetApprovalLevel {
+        key: String,
+        level: String,
     },
     /// 回合进行中实时插话：把文本 steer 给正在跑的 lane。
     /// `members` 为空 = 私聊/旁路会话；否则是群聊里当前正在流式的成员名。
@@ -692,6 +699,15 @@ impl BackendHandle {
             model,
             session_id,
             engine,
+            attempt: 0,
+        });
+    }
+
+    /// 审批档热更新（立即生效，不重建会话）。
+    pub fn set_approval_level(&self, key: impl Into<String>, level: impl Into<String>) {
+        let _ = self.tx.send(Command::SetApprovalLevel {
+            key: key.into(),
+            level: level.into(),
         });
     }
 
@@ -1049,6 +1065,8 @@ struct SessionCtx {
 pub fn spawn() -> (BackendHandle, UnboundedReceiver<BackendEvent>) {
     let (command_tx, mut command_rx) = unbounded_channel::<Command>();
     let (event_tx, event_rx) = unbounded_channel::<BackendEvent>();
+    // 命令循环内部也要能投回命令（writer lease 占用时的 Ensure 重试）。
+    let retry_tx = command_tx.clone();
 
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -1063,14 +1081,14 @@ pub fn spawn() -> (BackendHandle, UnboundedReceiver<BackendEvent>) {
             }
         };
         runtime.block_on(async move {
-            if let Err(error) = run_agent(&mut command_rx, &event_tx).await {
+            if let Err(error) = run_agent(&mut command_rx, &event_tx, &retry_tx).await {
                 let _ = event_tx.send(BackendEvent::Status(error));
             }
         });
     });
 
     let handle = BackendHandle {
-        tx: command_tx.clone(),
+        tx: command_tx,
     };
     // 工具侧（message_bot / post_to_group）拿不到 handle，登记一份进程级总线。
     let _ = BUS.set(handle.clone());
@@ -1080,6 +1098,7 @@ pub fn spawn() -> (BackendHandle, UnboundedReceiver<BackendEvent>) {
 async fn run_agent(
     commands: &mut UnboundedReceiver<Command>,
     events: &UnboundedSender<BackendEvent>,
+    commands_tx: &UnboundedSender<Command>,
 ) -> Result<(), String> {
     let _ = events.send(BackendEvent::Status("连接 Agent…".to_string()));
 
@@ -1123,10 +1142,11 @@ async fn run_agent(
                 model,
                 session_id: resume_id,
                 engine,
+                attempt,
             } => {
                 if std::env::var("BOT_PILOT_DEBUG").is_ok() {
                     eprintln!(
-                        "[cmd] ensure key={key} workspace={workspace} resume={resume_id:?} engine={engine:?}"
+                        "[cmd] ensure key={key} workspace={workspace} resume={resume_id:?} engine={engine:?} attempt={attempt}"
                     );
                 }
                 if let Some(ctx) = sessions.get(&key) {
@@ -1296,6 +1316,31 @@ async fn run_agent(
                                 }
                             }
                             Err(message) => {
+                                // 旧会话的回合还没收尾时，JSONL writer lease 仍被它占着
+                                // （例如刚改审批档/引擎触发的 reset + ensure）。短暂重试，
+                                // 别把「正在收尾」直接报成初始化失败。
+                                if message.contains("会话正被占用") && attempt < 8 {
+                                    let tx = commands_tx.clone();
+                                    let key = key.clone();
+                                    let workspace = workspace.clone();
+                                    let identity = identity.clone();
+                                    let model = model.clone();
+                                    let session_id = resume_id.clone();
+                                    let engine = engine.clone();
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(Duration::from_millis(700)).await;
+                                        let _ = tx.send(Command::Ensure {
+                                            key,
+                                            workspace,
+                                            identity,
+                                            model,
+                                            session_id,
+                                            engine,
+                                            attempt: attempt + 1,
+                                        });
+                                    });
+                                    continue;
+                                }
                                 let _ = events.send(BackendEvent::Session {
                                     key: key.clone(),
                                     event: SessionEvent::Error {
@@ -1418,6 +1463,29 @@ async fn run_agent(
                         continue;
                     }
                     EngineChoice::Rpi => {
+                        // 同一条会话：切换等于重开。正在跑的回合仍持有 JSONL
+                        // writer lease，重开必撞「writer lease is already held」；
+                        // 保留现成会话，只把历史回灌给 UI。
+                        if let Some(ctx) = sessions.get(&key)
+                            && let SessionEngine::Rpi(current) = &ctx.engine
+                            && current.path == session_id
+                        {
+                            let history = crate::rpi_engine::history_entries(&current.path);
+                            if !history.is_empty() {
+                                let _ = events.send(BackendEvent::Session {
+                                    key: key.clone(),
+                                    event: SessionEvent::History(history),
+                                });
+                            }
+                            let _ = events.send(BackendEvent::Session {
+                                key: key.clone(),
+                                event: SessionEvent::Ready {
+                                    session_id: current.path.clone(),
+                                    slot: None,
+                                },
+                            });
+                            continue;
+                        }
                         sessions.remove(&key);
                         match open_rpi_session(
                             &key,
@@ -2099,6 +2167,16 @@ async fn run_agent(
             Command::ResetSession { key } => {
                 sessions.remove(&key);
                 active_internal.remove(&key);
+            }
+            Command::SetApprovalLevel { key, level } => {
+                let ctx_key =
+                    active_internal.get(&key).cloned().unwrap_or_else(|| key.clone());
+                let level = bot_team::approval::parse_level(&level).ok();
+                if let (Some(ctx), Some(level)) = (sessions.get(&ctx_key), level)
+                    && let SessionEngine::Rpi(session) = &ctx.engine
+                {
+                    session.gate.set_level(level);
+                }
             }
             Command::Stop { key } => {
                 // 停止该 UI key 下所有成员会话的进行中回合。
