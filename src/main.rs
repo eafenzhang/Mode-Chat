@@ -4960,7 +4960,10 @@ impl PilotApp {
                             Some(name) => chat.finish_member(name),
                             None => chat.finish(),
                         }
-                        if member.is_some() && !chat.streaming {
+                        // E07：群成员回合与私聊回合都触发记忆回顾（backend 延迟/串行/开关）。
+                        // 私聊 = 无成员且有 bot_id；此时 key 已被后续逻辑借用，用 bot_id 判定。
+                        let is_bot_chat = member.is_none() && bot_id.is_some();
+                        if (member.is_some() || is_bot_chat) && !chat.streaming {
                             review_due = true;
                         }
                         task_bar_due = true;
@@ -5738,9 +5741,14 @@ impl PilotApp {
         self.input.update(cx, |input, cx| input.clear(window, cx));
     }
 
-    /// 群回合结束后组一份回顾快照交给 backend（延迟/串行/开关都在 backend 里）。
+    /// 回合结束后组一份回顾快照交给 backend（延迟/串行/开关都在 backend 里）。
+    /// 群聊与私聊（E07）共用；私聊用 Bot 自己的模型与记忆根。
     fn schedule_group_memory_review(&mut self, key: &str, cx: &mut Context<Self>) {
         if !crate::memory_review::enabled() {
+            return;
+        }
+        if let Some(bot_id) = key.strip_prefix("bot:") {
+            self.schedule_bot_memory_review(bot_id, key, cx);
             return;
         }
         let Some(group_id) = key.strip_prefix("group:") else {
@@ -5834,10 +5842,78 @@ impl PilotApp {
             })
             .collect();
         self.backend.memory_review(crate::memory_review::ReviewSnapshot {
+            scope: "group",
             group_id: group_id.to_string(),
             group_name,
             workspace,
             identity: format!("mode-bot:group:{group_id}"),
+            model: model_json,
+            transcript,
+        });
+        let _ = cx;
+    }
+
+    /// 私聊记忆自动回顾（E07）：隐私 Bot 跳过；需要模型与至少一条助手文本。
+    fn schedule_bot_memory_review(&mut self, bot_id: &str, key: &str, cx: &mut Context<Self>) {
+        let Some(bot) = self.roster.bot_by_id(bot_id) else {
+            return;
+        };
+        if bot.is_private || bot.directory.trim().is_empty() {
+            return;
+        }
+        let Some(model) = bot.model.clone() else {
+            return;
+        };
+        let Some(chat) = self.chats.get(key) else {
+            return;
+        };
+        if !chat.messages.iter().any(|message| {
+            message.role == Role::Assistant
+                && message.kind == MsgKind::Text
+                && !message.text.trim().is_empty()
+        }) {
+            return;
+        }
+        let mut options = serde_json::Map::new();
+        if let Some(level) = &model.reasoning_level {
+            options.insert(
+                "reasoningLevel".to_string(),
+                serde_json::Value::String(level.clone()),
+            );
+        }
+        let model_json = serde_json::json!({
+            "providerId": model.provider_id,
+            "modelId": model.model_id,
+            "options": options,
+        });
+        let bot_name = bot.name.clone();
+        let lines: Vec<&Message> = chat
+            .messages
+            .iter()
+            .filter(|message| {
+                message.kind == MsgKind::Text && !message.text.trim().is_empty()
+            })
+            .collect();
+        let start = lines.len().saturating_sub(24);
+        let transcript: Vec<crate::memory_review::TranscriptLine> = lines[start..]
+            .iter()
+            .map(|message| {
+                let who = match message.role {
+                    Role::User => i18n::t("用户").to_string(),
+                    Role::Assistant => bot_name.clone(),
+                };
+                crate::memory_review::TranscriptLine {
+                    who,
+                    text: message.text.clone(),
+                }
+            })
+            .collect();
+        self.backend.memory_review(crate::memory_review::ReviewSnapshot {
+            scope: "bot",
+            group_id: bot_id.to_string(),
+            group_name: bot_name,
+            workspace: bot.directory.clone(),
+            identity: bot.identity(),
             model: model_json,
             transcript,
         });

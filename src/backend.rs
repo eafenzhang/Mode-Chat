@@ -2507,11 +2507,16 @@ async fn run_memory_review(
     if !crate::memory_review::enabled() {
         return Ok(());
     }
-    let Some(memory_root) = crate::data::group_memory_root(&snapshot.group_id) else {
-        return Err("群记忆存储不可用".to_string());
+    let memory_root = if snapshot.scope == "bot" {
+        crate::data::bot_memory_root(&snapshot.group_id)
+    } else {
+        crate::data::group_memory_root(&snapshot.group_id)
+    };
+    let Some(memory_root) = memory_root else {
+        return Err("记忆存储不可用".to_string());
     };
     std::fs::create_dir_all(&memory_root)
-        .map_err(|error| format!("创建群记忆目录失败：{error}"))?;
+        .map_err(|error| format!("创建记忆目录失败：{error}"))?;
     let state_path = review_state_path(&snapshot.group_id);
     let stored = state_path
         .as_deref()

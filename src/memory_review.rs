@@ -71,6 +71,9 @@ pub struct TranscriptLine {
 /// 一轮群聊的可回顾快照。
 #[derive(Debug, Clone)]
 pub struct ReviewSnapshot {
+    /// `group`（群聊）或 `bot`（私聊）；决定记忆根与身份前缀。
+    pub scope: &'static str,
+    /// 作用域 id：群 id 或 Bot id（两者都是 uuid，状态文件不冲突）。
     pub group_id: String,
     pub group_name: String,
     pub workspace: String,
@@ -84,7 +87,7 @@ pub fn build_prompt(snapshot: &ReviewSnapshot, memory_root: &Path) -> String {
     let memory_list = store::list_memory(memory_root);
     let mut out = String::new();
     out.push_str(
-        "你是 Mode Bot 的群记忆整理器。阅读本轮群聊，判断是否值得写入长期群记忆。\n\
+        "你是 Mode Bot 的记忆整理器。阅读本轮对话，判断是否值得写入长期记忆。\n\
 只输出一个 JSON 对象，不要 Markdown 代码块，不要解释：\n\
 {\"operations\":[{\"action\":\"add\",\"title\":\"...\",\"description\":\"...\",\"kind\":\"note\",\"body\":\"...\"},\
 {\"action\":\"edit\",\"file\":\"xxx.md\",\"title\":\"...\",\"description\":\"...\",\"kind\":\"note\",\"body\":\"...\"},\
@@ -93,7 +96,12 @@ pub fn build_prompt(snapshot: &ReviewSnapshot, memory_root: &Path) -> String {
 edit/remove 的 file 必须来自下方「现有记忆」列表。只记录长期有效的事实、偏好、决策与约定；\
 不要记录寒暄、一次性状态、密码、Token、密钥或身份证号。\n\n",
     );
-    out.push_str(&format!("[群名]\n{}\n\n[最近群聊]\n", snapshot.group_name));
+    let session_label = if snapshot.scope == "bot" { "会话" } else { "群名" };
+    let transcript_label = if snapshot.scope == "bot" { "最近对话" } else { "最近群聊" };
+    out.push_str(&format!(
+        "[{session_label}]\n{}\n\n[{transcript_label}]\n",
+        snapshot.group_name
+    ));
     let start = snapshot.transcript.len().saturating_sub(MAX_TRANSCRIPT_LINES);
     let mut lines: Vec<String> = snapshot.transcript[start..]
         .iter()
