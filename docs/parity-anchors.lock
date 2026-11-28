@@ -100,7 +100,6 @@ src/backend.rs:1686|.members
 src/backend.rs:1740|goal_prompt: crate::data::group_goal_prompt(&spec.info.group_id)
 src/backend.rs:191|Delta {
 src/backend.rs:194|}
-src/backend.rs:2256|attachment_ref
 src/backend.rs:2426|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
 src/backend.rs:2482|session_id: Option<String>
 src/backend.rs:320|/// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
@@ -184,86 +183,86 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10087|let cron_input = fields[4].clone();
-src/main.rs:10091|let bot_id = bot.id.clone();
-src/main.rs:10156|SharedString::from(format!("schedule-day-{index}"))
-src/main.rs:10507|SettingsDetail::AddModel {
-src/main.rs:10589|let id_input = fields[0].clone();
-src/main.rs:10907|SettingsDetail::AutomationHistory { title, runs } => {
+src/main.rs:10048|SettingsDetail::ConnectorSecret { connector_id } => {
+src/main.rs:10156|("0 9 * * *", "0 9 * * *".to_string())
+src/main.rs:10163|let cron_input = fields[4].clone();
+src/main.rs:10170|let once_hours = self
+src/main.rs:10583|SettingsDetail::AddModel {
+src/main.rs:10665|let id_input = fields[0].clone();
+src/main.rs:10983|SettingsDetail::AutomationHistory { title, runs } => {
 src/main.rs:1102|#[derive(Clone, PartialEq, Eq)]
-src/main.rs:11100|SettingsDetail::Allowlist { bot_id } => {
+src/main.rs:11176|SettingsDetail::Allowlist { bot_id } => {
 src/main.rs:1134|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11668|&self
-src/main.rs:11678|.collect();
-src/main.rs:11685|.iter()
-src/main.rs:12487|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
-src/main.rs:12536|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:13089|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:13425|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:14190|cx.notify();
-src/main.rs:14700|.child(settings_group(vec![
-src/main.rs:15911|cx.notify();
+src/main.rs:11668|// A06：换工作目录后清会话槽，下一次发消息在新目录开新会话
+src/main.rs:11678|&role
+src/main.rs:11685|None => data::create_bot(
+src/main.rs:12563|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
+src/main.rs:12612|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:13165|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:13501|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:14266|cx.notify();
+src/main.rs:14776|.child(settings_group(vec![
+src/main.rs:16042|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
 src/main.rs:1639|strip = strip.child(stage_action_chip(
-src/main.rs:16562|cx.notify();
-src/main.rs:16572|.child(ui::stat_card(
-src/main.rs:16610|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:16638|cx.notify();
+src/main.rs:16648|.child(ui::stat_card(
 src/main.rs:1665|strip = strip.child(stage_action_chip(
+src/main.rs:16686|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1686|strip = strip.child(stage_action_chip(
 src/main.rs:1730|.id(SharedString::from(format!(
-src/main.rs:19006|Err(message) => {
-src/main.rs:19343|if this.screenshot_watching {
-src/main.rs:19747|.font_family(theme::FONT_FAMILY)
-src/main.rs:19809|return;
-src/main.rs:20250|mix(author_id.len());
-src/main.rs:20515|.line_height(px(18.))
-src/main.rs:20991|if boundary_ok {
+src/main.rs:19082|Err(message) => {
+src/main.rs:19419|if this.screenshot_watching {
+src/main.rs:19809|.px(px(8.))
+src/main.rs:19833|fn approval_note(level: &str) -> &'static str {
+src/main.rs:20350|expanded
+src/main.rs:20545|streaming
 src/main.rs:2102|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:21023|///
-src/main.rs:21055|.pointer()
-src/main.rs:21073|if let Some(code) = fenced_code(text) {
-src/main.rs:21295|.line_height(px(16.))
-src/main.rs:21315|"用量"
-src/main.rs:21325|enum SettingsDetail {
+src/main.rs:21107|fn wechat_message_actions(
+src/main.rs:21139|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
+src/main.rs:21171|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
+src/main.rs:21189|let mut inside = false;
+src/main.rs:21315|div()
+src/main.rs:21371|.line_height(px(16.))
+src/main.rs:21401|enum SettingsDetail {
 src/main.rs:2146|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:217|fn panel_target_width(
-src/main.rs:22075|Err(message) => this.toast(message, cx)
-src/main.rs:22773|bot_team::approval::ApprovalLevel::Full => "full"
-src/main.rs:22801|.options
+src/main.rs:22151|Err(message) => this.toast(message, cx)
+src/main.rs:22887|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:22889|.selectable(true)
 src/main.rs:2312|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:234|}
 src/main.rs:2392|"task-reassign-{}"
 src/main.rs:2435|"task-reassign-{}-{}"
-src/main.rs:24493|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:24569|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2506|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:25135|.into_any_element()
+src/main.rs:25211|.into_any_element()
 src/main.rs:255|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:27426|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27502|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2861|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2879|fn finish_member(&mut self, member: &str) {
 src/main.rs:3327|/// 用量页时间范围（天）：1/7/30/90。
-src/main.rs:3715|expanded: bool
+src/main.rs:3718|ToolGroup {
 src/main.rs:4386|.member_ids
 src/main.rs:4388|.filter_map(|member_id| self.roster.bot_by_id(member_id))
 src/main.rs:4706|.member_ids
-src/main.rs:5627|.member_ids
-src/main.rs:5956|.questions
-src/main.rs:6175|.items_center()
-src/main.rs:6528|else {
-src/main.rs:6682|return;
-src/main.rs:6997|fn on_new_session_shortcut(
-src/main.rs:7315|fn on_submit_dialog(
+src/main.rs:5627|cx: &mut Context<Self>
+src/main.rs:6032|.questions
+src/main.rs:6251|.items_center()
+src/main.rs:6528|this.submit_elicitation(request_id.clone(), cx);
+src/main.rs:6758|return;
+src/main.rs:7073|fn on_new_session_shortcut(
+src/main.rs:7391|fn on_submit_dialog(
 src/main.rs:751|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7800|let Some((_, _, command)) = entries.get(index).cloned() else {
+src/main.rs:7800|.palette
 src/main.rs:801|enum MsgKind {
 src/main.rs:803|Reasoning
-src/main.rs:8954|if query.chars().any(char::is_whitespace) || query.contains('@') {
-src/main.rs:9689|SettingsDetail::BotMemory { bot_id } => {
-src/main.rs:9969|let _ = clear;
+src/main.rs:8954|cards = cards.child(
+src/main.rs:9765|SettingsDetail::BotMemory { bot_id } => {
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|.unwrap_or(0);
-src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
-src/memory_review.rs:318|pub fn apply_operations(
-src/memory_review.rs:83|pub fn build_prompt(snapshot: &ReviewSnapshot, memory_root: &Path) -> String {
+src/memory_review.rs:204|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
+src/memory_review.rs:326|pub fn apply_operations(
+src/memory_review.rs:86|pub fn build_prompt(snapshot: &ReviewSnapshot, memory_root: &Path) -> String {
 src/memory_tools.rs:194|"这段内容像凭据（密码/令牌/密钥/长数字），不写进记忆".to_string()
 src/memory_tools.rs:397|fn looks_sensitive(text: &str) -> bool {
 src/memory_tools.rs:58|pub fn tools(bot_id: Option<&str>) -> Vec<HarnessTool> {
