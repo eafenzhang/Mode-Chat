@@ -1077,6 +1077,8 @@ enum PaletteCmd {
     EditAllowlist,
     /// 立即压缩当前会话上下文（W4）。
     Compact,
+    /// 把当前输入框内容提交为后台任务（长任务 P2）。
+    StartTask,
     SelectBot(usize),
     SelectGroup(usize),
 }
@@ -7666,6 +7668,11 @@ impl PilotApp {
             (i18n::t("选择运行时").to_string(), String::new(), PaletteCmd::PickModel),
             (i18n::t("审批白名单").to_string(), String::new(), PaletteCmd::EditAllowlist),
             (i18n::t("立即压缩").to_string(), String::new(), PaletteCmd::Compact),
+            (
+                i18n::t("把当前输入作为后台任务").to_string(),
+                String::new(),
+                PaletteCmd::StartTask,
+            ),
             (i18n::t("打开设置").to_string(), "Ctrl+,".to_string(), PaletteCmd::OpenSettings),
         ];
         for (index, bot) in self.roster.bots.iter().enumerate() {
@@ -7846,6 +7853,49 @@ impl PilotApp {
                     self.toast(i18n::t("正在压缩上下文…"), cx);
                 } else {
                     self.toast(i18n::t("先选一个会话"), cx);
+                }
+                cx.notify();
+            }
+            PaletteCmd::StartTask => {
+                let text = self.input.read(cx).content().trim().to_string();
+                let Some(bot) = self.selected_bot() else {
+                    self.toast(i18n::t("先选一个 Bot"), cx);
+                    cx.notify();
+                    return;
+                };
+                if text.is_empty() {
+                    self.toast(i18n::t("输入框是空的"), cx);
+                    cx.notify();
+                    return;
+                }
+                let bot_id = bot.id.clone();
+                let ui_key = format!("bot:{bot_id}");
+                let title: String = text.chars().take(30).collect();
+                if let Some(handle) = backend::bus() {
+                    match handle.task_start(ui_key, bot_id, title, text) {
+                        Ok(reply) => {
+                            self.input.update(cx, |input, cx| input.set_content("", cx));
+                            cx.spawn(async move |this, cx| {
+                                let outcome = reply.await;
+                                let _ = this.update(cx, |this, cx| match outcome {
+                                    Ok(Ok(record)) => {
+                                        let title = record.title.clone();
+                                        this.toast(
+                                            tri!("后台任务已创建：{title}", "Task created: {title}")
+                                                .to_string(),
+                                            cx,
+                                        )
+                                    }
+                                    Ok(Err(message)) => this.toast(message, cx),
+                                    Err(_) => {
+                                        this.toast(i18n::t("任务创建未返回").to_string(), cx)
+                                    }
+                                });
+                            })
+                            .detach();
+                        }
+                        Err(message) => self.toast(message, cx),
+                    }
                 }
                 cx.notify();
             }
@@ -25590,6 +25640,7 @@ impl PilotApp {
             .children(self.turn_footer(cx))
             .children(self.group_task_bar(cx))
             .children(self.queue_panel(cx))
+            .children(self.task_capsule_row(cx))
             .child(self.wechat_composer(window, cx))
     }
 
@@ -26644,6 +26695,58 @@ impl PilotApp {
                         ),
                 )
                 .child(rows)
+                .into_any_element(),
+        )
+    }
+
+    /// 输入框上方的后台任务胶囊：有运行中的任务才占位，点击开右栏任务区。
+    fn task_capsule_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let mut running: Vec<crate::task_store::TaskRecord> = self
+            .tasks
+            .values()
+            .filter(|task| {
+                task.ui_key == key && task.status == crate::task_store::TaskStatus::Running
+            })
+            .cloned()
+            .collect();
+        if running.is_empty() {
+            return None;
+        }
+        running.sort_by_key(|task| std::cmp::Reverse(task.created_at));
+        let latest = running.first()?;
+        let count = running.len();
+        let mut label = tri!("{count} 个后台任务运行中", "{count} background task(s) running")
+            .to_string();
+        label.push_str(" · ");
+        label.push_str(&latest.title);
+        if !latest.last_line.is_empty() {
+            label.push('：');
+            label.push_str(&latest.last_line.chars().take(30).collect::<String>());
+        }
+        Some(
+            div()
+                .id("task-capsule")
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(ui_kit::S1))
+                .py(px(ui_kit::S1))
+                .pointer()
+                .hover(|style| style.bg(wechat_theme::list_hover()))
+                .on_click(cx.listener(|this, _event, window, cx| {
+                    this.set_right_panel(true, window, cx);
+                }))
+                .child(icons::icon(icons::Icon::Refresh, 12., wechat_theme::accent()))
+                .child(
+                    div()
+                        .font_family(wechat_theme::FONT_FAMILY)
+                        .text_size(px(ui_kit::T_LABEL))
+                        .line_height(px(ui_kit::T_LABEL_LH))
+                        .text_color(wechat_theme::accent())
+                        .child(SharedString::from(label)),
+                )
                 .into_any_element(),
         )
     }
