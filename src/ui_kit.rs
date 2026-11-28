@@ -704,6 +704,29 @@ pub fn value_box(value: impl Into<SharedString>, label_text: Option<SharedString
     )
 }
 
+/// 只读值行（卡片内用，外层不带边框）：上标签、下值。
+///
+/// 与 `value_box` 的区别是**不自带边框**，多行放进同一张 `card` 里用
+/// `card_row` 画分隔线——路径、诊断这类长文本纵向铺开，避免一行一张卡。
+pub fn value_row(label_text: impl Into<SharedString>, value: impl Into<SharedString>) -> Div {
+    div()
+        .w_full()
+        .px(px(S3))
+        .py(px(S2))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(label(label_text))
+        .child(
+            div()
+                .font_family(font())
+                .text_size(px(T_BODY))
+                .line_height(px(T_BODY_LH))
+                .text_color(ink_secondary())
+                .child(value.into()),
+        )
+}
+
 /// 开关：36×20。
 pub fn switch(id: impl Into<gpui::ElementId>, on: bool) -> Stateful<Div> {
     div()

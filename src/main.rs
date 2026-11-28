@@ -3464,7 +3464,7 @@ struct PilotApp {
     /// 问题卡「其他（自行输入）」：当前展开的 request_id 与输入框。
     question_free_active: Option<String>,
     question_free_input: Entity<SimpleInput>,
-    /// 群记忆自动回顾开关（`v2/memory-review.json`）。
+    /// 记忆自动回顾开关（`v2/memory-review.json`）。
     memory_review_enabled: bool,
     /// 浏览器/电脑控制的使用范围（prefs.json，设置页可改）。
     browser_enabled: bool,
@@ -13414,7 +13414,7 @@ impl PilotApp {
         let providers = data::provider_entries();
         let mut body = ui::page();
         body = body.child(ui::section_action(
-            tri!("Provider 与模型 · {}", "Providers & models · {}", providers.len()),
+            tri!("服务商与模型 · {}", "Providers & models · {}", providers.len()),
             ui::button("provider-add", i18n::t("+ 添加服务商")).on_click(
                 cx.listener(|this, _event, _window, cx| {
                     this.settings_detail = Some(SettingsDetail::AddProvider);
@@ -13477,7 +13477,7 @@ impl PilotApp {
 
             // ---- 卡片动作行 ----
             let order_id = provider.provider_id.clone();
-            let mut actions = div().flex().items_center().gap(px(ui::S1));
+            let mut actions = div().flex().items_center().gap(px(ui::S2));
             if let Some(base_url) = provider.base_url.clone() {
                 let pid = provider.provider_id.clone();
                 let pname = provider.provider_name.clone();
@@ -13899,8 +13899,8 @@ impl PilotApp {
         let mut body = ui::page();
         if let Some(bot) = &bot {
             body = body.child(ui::section(i18n::t("当前 Bot"))).child(ui::card(vec![
-                ui::stat_row(bot.name.clone(), "Bot").into_any_element(),
-                ui::stat_row(current_label.clone(), i18n::t("当前引擎")).into_any_element(),
+                ui::stat_row(i18n::t("Bot"), bot.name.clone()).into_any_element(),
+                ui::stat_row(i18n::t("当前引擎"), current_label.clone()).into_any_element(),
             ]));
         } else {
             // 未选中 Bot 时也保留「当前 Bot」分区标题，页面顶部不会贴边。
@@ -13910,7 +13910,7 @@ impl PilotApp {
         }
 
         body = body.child(ui::section_action(
-            tri!("已检测到的 Agent · {}", "Detected agents · {}", agents.len()),
+            tri!("已检测到的引擎 · {}", "Detected engines · {}", agents.len()),
             ui::button("agents-refresh", i18n::t("刷新")).on_click(cx.listener(
                 |this, _event, _window, cx| {
                     cx.notify();
@@ -13933,13 +13933,10 @@ impl PilotApp {
             let detail = if agent.wired {
                 tri!("进程内 · 随应用分发（无 Node）", "in-process · bundled (no Node)").to_string()
             } else {
-                format!(
-                    "{} · {}",
-                    agent.id,
-                    agent.path.clone().unwrap_or_else(|| tri!(
-                        "PATH 上没找到 {}", "{} was not found on PATH", agent.command
-                    ))
-                )
+                agent.path.clone().unwrap_or_else(|| {
+                    tri!("PATH 上没找到 {}", "{} was not found on PATH", agent.command)
+                        .to_string()
+                })
             };
 
             let tone = if is_current || agent.wired {
@@ -15799,7 +15796,7 @@ impl PilotApp {
             .child(settings_section(i18n::t("自动回顾")))
             .child(settings_group(vec![
                 settings_row(
-                    i18n::t("群记忆自动回顾").to_string(),
+                    i18n::t("记忆自动回顾").to_string(),
                     Some(
                         i18n::t("回合结束后自动整理。")
                             .to_string(),
@@ -15812,9 +15809,9 @@ impl PilotApp {
                             match crate::memory_review::set_enabled(this.memory_review_enabled) {
                                 Ok(()) => this.toast(
                                     if this.memory_review_enabled {
-                                        i18n::t("已开启群记忆自动回顾")
+                                        i18n::t("已开启记忆自动回顾")
                                     } else {
-                                        i18n::t("已关闭群记忆自动回顾")
+                                        i18n::t("已关闭记忆自动回顾")
                                     },
                                     cx,
                                 ),
@@ -15830,7 +15827,7 @@ impl PilotApp {
             .child(self.team_memory_section(cx))
             .child(settings_section(i18n::t("群聊文件记忆")));
         if self.roster.groups.is_empty() {
-            body = body.child(settings_empty(i18n::t("还没有群聊")));
+            body = body.child(settings_empty(i18n::t("还没有群聊记忆。")));
         }
         let mut memory_group_rows: Vec<gpui::AnyElement> = Vec::new();
         for group in &self.roster.groups {
@@ -16147,24 +16144,25 @@ impl PilotApp {
                     })),
                 );
                 // 统一走 ui_kit::icon_card：图标 + 标题 + 说明 + 右上动作，
-                // 下方一行状态与快捷链接。外层只负责固定宽度（网格按列宽均分）。
+                // 下方一行状态与快捷链接。外层只负责固定宽度（网格按列宽均分）；
+                // 同一行卡片用 flex_1 垫片把状态行压到底，说明长短不一时底行仍对齐。
+                let mut card = ui::icon_card(
+                    connector_icon(spec.id, spec.category),
+                    spec.name,
+                    Some(SharedString::from(spec.about)),
+                    Some(action.into_any_element()),
+                );
+                card = card.child(div().flex_1()).child(bottom);
                 cards.push(
                     div()
                         .w(px(card_width))
                         .flex_shrink_0()
-                        .child(
-                            ui::icon_card(
-                                connector_icon(spec.id, spec.category),
-                                spec.name,
-                                Some(SharedString::from(spec.about)),
-                                Some(action.into_any_element()),
-                            )
-                            .child(bottom),
-                        )
+                        .flex()
+                        .child(card.h_full())
                         .into_any_element(),
                 );
             }
-            body = body.child(div().flex().flex_wrap().gap(px(8.)).children(cards));
+            body = body.child(div().flex().flex_wrap().items_stretch().gap(px(8.)).children(cards));
         }
         // OAuth 授权（K04）：客户端凭据在「密钥」页维护
         // （oauth_client_id:<平台> + oauth_client_secret:<平台>），
@@ -16282,7 +16280,7 @@ impl PilotApp {
                 .into_any_element();
         }
         body = body.child(settings_section_action(
-            tri!("定时任务 · {}", "Schedules · {}", view.entries.len()),
+            tri!("全部定时任务 · {}", "All schedules · {}", view.entries.len()),
             settings_action_button("automation-new", i18n::t("新建任务")).on_click(
                 cx.listener(|this, _event, _window, cx| {
                     this.settings_detail = Some(SettingsDetail::NewSchedule);
@@ -16462,7 +16460,7 @@ impl PilotApp {
             }
         };
         body = body.child(settings_section_action(
-            tri!("密钥 · {}", "Secrets · {}", names.len()),
+            tri!("已保存的密钥 · {}", "Saved secrets · {}", names.len()),
             settings_action_button("secret-add", i18n::t("+ 添加密钥")).on_click(cx.listener(
                 |this, _event, _window, cx| {
                     this.settings_detail = Some(SettingsDetail::AddSecret);
@@ -16475,7 +16473,7 @@ impl PilotApp {
         ));
         if names.is_empty() {
             body = body.child(settings_empty(i18n::t(
-                "还没有密钥",
+                "还没有密钥。Bot 需要时，会在对话里弹出一张卡片。",
             )));
         }
         let mut secret_rows: Vec<gpui::AnyElement> = Vec::new();
@@ -16772,20 +16770,21 @@ impl PilotApp {
         body = body
             .child(ui::section(i18n::t("当前会话")))
             .child(ui::card(vec![
-                ui::stat_row(session, i18n::t("会话")).into_any_element(),
+                ui::stat_row(i18n::t("会话"), session).into_any_element(),
                 ui::stat_row(
+                    i18n::t("回合"),
                     usage
                         .map(|usage| usage.turns.to_string())
                         .unwrap_or_else(|| "—".to_string()),
-                    i18n::t("回合"),
                 )
                 .into_any_element(),
                 ui::stat_row(
-                    token(usage.map(|usage| usage.total_tokens)),
                     i18n::t("总 tokens"),
+                    token(usage.map(|usage| usage.total_tokens)),
                 )
                 .into_any_element(),
                 ui::stat_row(
+                    i18n::t("输入 / 输出"),
                     usage
                         .map(|usage| {
                             format!(
@@ -16795,23 +16794,23 @@ impl PilotApp {
                             )
                         })
                         .unwrap_or_else(|| "—".to_string()),
-                    i18n::t("输入 / 输出"),
                 )
                 .into_any_element(),
                 ui::stat_row(
+                    i18n::t("最近首 token"),
                     usage
                         .and_then(|usage| usage.last_ttft_ms)
                         .map(|ms| format!("{ms} ms"))
                         .unwrap_or_else(|| "—".to_string()),
-                    i18n::t("最近首 token"),
                 )
                 .into_any_element(),
-                ui::stat_row(todo_count.to_string(), i18n::t("待办条数")).into_any_element(),
+                ui::stat_row(i18n::t("待办条数"), todo_count.to_string()).into_any_element(),
             ]));
         body.into_any_element()
     }
 
     fn settings_page_about(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use crate::ui_kit as ui;
         let data_root = self.roster.data_root.display().to_string();
         let env_value = |key: &str, fallback: &str| {
             std::env::var(key)
@@ -16859,9 +16858,15 @@ impl PilotApp {
                     .into_any_element(),
             ]))
             .child(settings_section(i18n::t("数据")));
-        for (label, value) in data_rows {
-            body = body.child(value_box(value, Some(i18n::t(label))));
+        let data_count = data_rows.len();
+        let mut data_card: Vec<gpui::AnyElement> = Vec::new();
+        for (index, (row_label, value)) in data_rows.into_iter().enumerate() {
+            data_card.push(
+                ui::card_row(ui::value_row(i18n::t(row_label), value), index + 1 == data_count)
+                    .into_any_element(),
+            );
         }
+        body = body.child(ui::card(data_card));
         body = body.child(
             div()
                 .flex()
@@ -16888,7 +16893,7 @@ impl PilotApp {
         // 诊断与反馈入口（原「反馈」页并入）：版本/平台一键复制，发布页一个入口就够。
         body = body
             .child(settings_section(i18n::t("诊断")))
-            .child(value_box(truncate_chars(&diagnostics, 300), None))
+            .child(ui::value_box(truncate_chars(&diagnostics, 300), None))
             .child(
                 div()
                     .flex()
