@@ -11924,6 +11924,7 @@ impl PilotApp {
         let scope_open = current_scope.clone();
         let scope_close = current_scope.clone();
         let scope_shot = current_scope.clone();
+        let scope_cookies = current_scope.clone();
         body = body
             .child(settings_section(i18n::t("状态")))
             .child(settings_group(vec![
@@ -11953,6 +11954,37 @@ impl PilotApp {
                                 })
                                 .detach();
                             })),
+                    )
+                    .child(
+                        settings_button(
+                            SharedString::from("browser-import-cookies"),
+                            i18n::t("导入 Cookie"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let scope = scope_cookies.clone();
+                            let paths = file_dialog::pick_files();
+                            let Some(path) = paths.into_iter().next() else {
+                                return;
+                            };
+                            if !crate::browser_tools::cookie_import_supported(&path) {
+                                this.toast(
+                                    i18n::t("请选择 cookies.txt 或 JSON 文件").to_string(),
+                                    cx,
+                                );
+                                return;
+                            }
+                            let task = cx.background_executor().spawn(async move {
+                                tokio_block_on(crate::browser_tools::import_cookies(&scope, &path))
+                            });
+                            cx.spawn(async move |this, cx| {
+                                let result = task.await;
+                                let _ = this.update(cx, |this, cx| match result {
+                                    Ok(message) => this.toast(message, cx),
+                                    Err(message) => this.toast(message, cx),
+                                });
+                            })
+                            .detach();
+                        })),
                     )
                     .child(
                         settings_button(SharedString::from("browser-close"), i18n::t("关闭浏览器"))

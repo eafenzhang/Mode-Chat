@@ -1343,3 +1343,99 @@ mod tests {
         drop(browser);
     }
 }
+
+// ---------- Cookie 导入（G03）：Netscape cookies.txt / Puppeteer JSON → CDP ----------
+
+/// 解析 cookie 文件文本（自动识别 Netscape 或 JSON 数组）。
+fn parse_cookie_file(text: &str) -> Result<Vec<Value>, String> {
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+        let value: Value = serde_json::from_str(trimmed)
+            .map_err(|error| format!("cookie JSON 解析失败：{error}"))?;
+        let items = value
+            .as_array()
+            .cloned()
+            .or_else(|| value.get("cookies").and_then(Value::as_array).cloned())
+            .ok_or_else(|| "cookie JSON 里没有数组".to_string())?;
+        return Ok(items.into_iter().filter_map(json_cookie).collect());
+    }
+    let mut cookies = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Netscape：domain  flag  path  secure  expiry  name  value
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let expires: f64 = fields[4].parse().unwrap_or(0.0);
+        cookies.push(json!({
+            "name": fields[5],
+            "value": fields[6],
+            "domain": fields[0].trim_start_matches('.'),
+            "path": fields[2],
+            "expires": expires,
+            "secure": fields[3].eq_ignore_ascii_case("TRUE"),
+        }));
+    }
+    Ok(cookies)
+}
+
+fn json_cookie(item: Value) -> Option<Value> {
+    let name = item.get("name")?.as_str()?.to_string();
+    let value = item.get("value")?.as_str()?.to_string();
+    let domain = item.get("domain")?.as_str()?.trim_start_matches('.').to_string();
+    let mut cookie = json!({
+        "name": name,
+        "value": value,
+        "domain": domain,
+        "path": item.get("path").and_then(Value::as_str).unwrap_or("/"),
+        "secure": item.get("secure").and_then(Value::as_bool).unwrap_or(false),
+    });
+    if let Some(expires) = item
+        .get("expires")
+        .or_else(|| item.get("expirationDate"))
+        .and_then(Value::as_f64)
+        .filter(|value| *value > 0.0)
+    {
+        cookie["expires"] = json!(expires);
+    }
+    if let Some(http_only) = item.get("httpOnly").and_then(Value::as_bool) {
+        cookie["httpOnly"] = json!(http_only);
+    }
+    if let Some(same_site) = item.get("sameSite").and_then(Value::as_str) {
+        let normalized = match same_site.to_ascii_lowercase().as_str() {
+            "strict" => "Strict",
+            "lax" => "Lax",
+            "none" => "None",
+            _ => return Some(cookie),
+        };
+        cookie["sameSite"] = json!(normalized);
+    }
+    Some(cookie)
+}
+
+/// 导入 cookie 文件到该 Bot 的浏览器会话（自动拉起浏览器）；返回文案。
+pub async fn import_cookies(identity: &str, path: &str) -> Result<String, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("读取 cookie 文件失败：{error}"))?;
+    let cookies = parse_cookie_file(&text)?;
+    if cookies.is_empty() {
+        return Err("文件里没有可导入的 cookie（支持 Netscape cookies.txt 或 JSON 数组）".to_string());
+    }
+    let browser = get_session(identity).await?;
+    let _ = browser.send("Network.enable", json!({})).await;
+    let result = browser
+        .send("Network.setCookies", json!({ "cookies": cookies }))
+        .await?;
+    let _ = result;
+    Ok(format!("已导入 {} 条 cookie", cookies.len()))
+}
+
+/// 供设置页展示当前导入入口是否可用（同步探测，不拉起浏览器）。
+pub fn cookie_import_supported(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "txt" | "json")
+}

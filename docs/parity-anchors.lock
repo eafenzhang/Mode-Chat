@@ -201,49 +201,49 @@ src/main.rs:1131|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>)
 src/main.rs:11591|&self
 src/main.rs:11601|.collect();
 src/main.rs:11608|.iter()
-src/main.rs:12378|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
-src/main.rs:12427|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12961|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:13297|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:14062|cx.notify();
-src/main.rs:14572|.child(settings_group(vec![
-src/main.rs:15783|cx.notify();
+src/main.rs:12410|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
+src/main.rs:12459|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12993|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:13329|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:14094|cx.notify();
+src/main.rs:14604|.child(settings_group(vec![
+src/main.rs:15815|cx.notify();
 src/main.rs:1636|strip = strip.child(stage_action_chip(
-src/main.rs:16434|cx.notify();
-src/main.rs:16444|.child(ui::stat_card(
-src/main.rs:16482|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:16466|cx.notify();
+src/main.rs:16476|.child(ui::stat_card(
+src/main.rs:16514|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1662|strip = strip.child(stage_action_chip(
 src/main.rs:1683|strip = strip.child(stage_action_chip(
 src/main.rs:1727|.id(SharedString::from(format!(
-src/main.rs:18861|Err(message) => {
-src/main.rs:19198|if this.screenshot_watching {
-src/main.rs:19602|.font_family(theme::FONT_FAMILY)
-src/main.rs:19664|return;
-src/main.rs:20105|mix(author_id.len());
-src/main.rs:20370|.line_height(px(18.))
-src/main.rs:20571|"会话尚未建立"
-src/main.rs:20846|if boundary_ok {
-src/main.rs:20878|///
-src/main.rs:20910|.pointer()
-src/main.rs:20928|if let Some(code) = fenced_code(text) {
+src/main.rs:18893|Err(message) => {
+src/main.rs:19230|if this.screenshot_watching {
+src/main.rs:19634|.font_family(theme::FONT_FAMILY)
+src/main.rs:19696|return;
+src/main.rs:20137|mix(author_id.len());
+src/main.rs:20402|.line_height(px(18.))
+src/main.rs:20603|"会话尚未建立"
+src/main.rs:20878|if boundary_ok {
+src/main.rs:20910|///
+src/main.rs:20942|.pointer()
+src/main.rs:20960|if let Some(code) = fenced_code(text) {
 src/main.rs:2099|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:21150|.line_height(px(16.))
-src/main.rs:21170|"用量"
-src/main.rs:21180|enum SettingsDetail {
+src/main.rs:21182|.line_height(px(16.))
+src/main.rs:21202|"用量"
+src/main.rs:21212|enum SettingsDetail {
 src/main.rs:2143|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:216|fn panel_target_width(
-src/main.rs:21930|Err(message) => this.toast(message, cx)
-src/main.rs:22628|bot_team::approval::ApprovalLevel::Full => "full"
-src/main.rs:22656|.options
+src/main.rs:21962|Err(message) => this.toast(message, cx)
+src/main.rs:22660|bot_team::approval::ApprovalLevel::Full => "full"
+src/main.rs:22688|.options
 src/main.rs:2309|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:233|}
 src/main.rs:2389|"task-reassign-{}"
 src/main.rs:2432|"task-reassign-{}-{}"
-src/main.rs:24348|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-src/main.rs:24990|.into_any_element()
+src/main.rs:24380|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:25022|.into_any_element()
 src/main.rs:2503|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:254|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:27274|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27306|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2858|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2876|fn finish_member(&mut self, member: &str) {
 src/main.rs:3322|/// 用量页时间范围（天）：1/7/30/90。
@@ -262,7 +262,6 @@ src/main.rs:750|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
 src/main.rs:7787|let Some((_, _, command)) = entries.get(index).cloned() else {
 src/main.rs:800|enum MsgKind {
 src/main.rs:802|Reasoning
-src/main.rs:8640|.on_click(cx.listener(
 src/main.rs:8889|if query.chars().any(char::is_whitespace) || query.contains('@') {
 src/main.rs:9624|SettingsDetail::BotMemory { bot_id } => {
 src/main.rs:9904|let _ = clear;
