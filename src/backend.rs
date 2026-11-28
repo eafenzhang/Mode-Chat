@@ -1084,6 +1084,11 @@ async fn run_agent(
     if let Err(error) = crate::automation_scheduler::start(&crate::data::data_root()) {
         eprintln!("[automation] 调度器启动失败：{error}");
     }
+    // 后台任务恢复：上次退出时仍在跑的任务标 interrupted（不自动重跑）。
+    let interrupted = crate::task_store::mark_interrupted(&crate::data::data_root());
+    if interrupted > 0 {
+        eprintln!("[tasks] {interrupted} 个后台任务标记为已中断");
+    }
     // IM 运行时：与主程序共用 bot 配置/凭据/轮询锁；回合走内嵌引擎。
     crate::im_service::start(crate::data::data_root());
 

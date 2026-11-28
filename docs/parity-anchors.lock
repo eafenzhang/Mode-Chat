@@ -95,15 +95,15 @@ src/automations.rs:218|.map_err(|error| error.to_string());
 src/automations.rs:224|
 src/automations.rs:83|workspace_path: &str
 src/backend.rs:144|pub struct ElicitationCard {
-src/backend.rs:1571|let internal = member_session_key(&spec.group_key, &member.member_id);
-src/backend.rs:1684|let chosen: Vec<usize> = if !mentioned.is_empty() {
-src/backend.rs:1686|} else if parsed.everyone || spec.info.responder_policy.trim() == "all" {
-src/backend.rs:1740|memory: crate::data::group_memory_context(
+src/backend.rs:1578|continue;
+src/backend.rs:1684|.iter()
+src/backend.rs:1686|.filter(|(_, member)| parsed.ids.contains(&member.member_id))
+src/backend.rs:1740|member_is_admin: member.is_admin
 src/backend.rs:191|Delta {
 src/backend.rs:194|}
-src/backend.rs:2256|member: None
-src/backend.rs:2404|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
-src/backend.rs:2482|async fn run_memory_review(
+src/backend.rs:2256|active_internal.get(&key).cloned().unwrap_or_else(|| key.clone());
+src/backend.rs:2404|let text = rest[..end].trim();
+src/backend.rs:2482|&atomic_file::WriteOptions::default()
 src/backend.rs:320|/// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
 src/backend.rs:335|.ok_or_else(|| "未选择模型：请先在右栏或设置里为这个 Bot 选一个模型".to_string())?;
 src/backend.rs:345|context_window
@@ -190,86 +190,86 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10307|SettingsDetail::AddModel {
-src/main.rs:10389|let id_input = fields[0].clone();
-src/main.rs:10707|SettingsDetail::AutomationHistory { title, runs } => {
-src/main.rs:10900|SettingsDetail::Allowlist { bot_id } => {
+src/main.rs:10015|let cron_input = fields[4].clone();
+src/main.rs:10019|let bot_id = bot.id.clone();
+src/main.rs:10084|SharedString::from(format!("schedule-day-{index}"))
+src/main.rs:10435|SettingsDetail::AddModel {
+src/main.rs:10517|let id_input = fields[0].clone();
+src/main.rs:10835|SettingsDetail::AutomationHistory { title, runs } => {
 src/main.rs:1099|#[derive(Clone, PartialEq, Eq)]
+src/main.rs:11028|SettingsDetail::Allowlist { bot_id } => {
 src/main.rs:1131|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11436|&self
-src/main.rs:11446|.collect();
-src/main.rs:11453|.iter()
-src/main.rs:12101|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
-src/main.rs:12150|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12684|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:13020|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:13785|cx.notify();
-src/main.rs:14295|.child(settings_group(vec![
-src/main.rs:15506|cx.notify();
-src/main.rs:16157|cx.notify();
-src/main.rs:16167|.child(ui::stat_card(
-src/main.rs:16205|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:11564|&self
+src/main.rs:11574|.collect();
+src/main.rs:11581|.iter()
+src/main.rs:12229|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
+src/main.rs:12278|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12812|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:13148|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:13913|cx.notify();
+src/main.rs:14423|.child(settings_group(vec![
+src/main.rs:15634|cx.notify();
+src/main.rs:16285|cx.notify();
+src/main.rs:16295|.child(ui::stat_card(
+src/main.rs:16333|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1636|strip = strip.child(stage_action_chip(
 src/main.rs:1662|strip = strip.child(stage_action_chip(
 src/main.rs:1683|strip = strip.child(stage_action_chip(
 src/main.rs:1727|.id(SharedString::from(format!(
-src/main.rs:18584|Err(message) => {
-src/main.rs:18921|if this.screenshot_watching {
-src/main.rs:19325|.font_family(theme::FONT_FAMILY)
-src/main.rs:19387|return;
-src/main.rs:19828|mix(author_id.len());
-src/main.rs:20093|.line_height(px(18.))
-src/main.rs:20294|"会话尚未建立"
-src/main.rs:20569|if boundary_ok {
-src/main.rs:20601|///
-src/main.rs:20633|.pointer()
-src/main.rs:20651|if let Some(code) = fenced_code(text) {
-src/main.rs:20873|.line_height(px(16.))
-src/main.rs:20893|"用量"
-src/main.rs:20903|enum SettingsDetail {
+src/main.rs:18712|Err(message) => {
+src/main.rs:19049|if this.screenshot_watching {
+src/main.rs:19453|.font_family(theme::FONT_FAMILY)
+src/main.rs:19515|return;
+src/main.rs:19956|mix(author_id.len());
+src/main.rs:20221|.line_height(px(18.))
+src/main.rs:20422|"会话尚未建立"
+src/main.rs:20697|if boundary_ok {
+src/main.rs:20729|///
+src/main.rs:20761|.pointer()
+src/main.rs:20779|if let Some(code) = fenced_code(text) {
 src/main.rs:2099|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
+src/main.rs:21001|.line_height(px(16.))
+src/main.rs:21021|"用量"
+src/main.rs:21031|enum SettingsDetail {
 src/main.rs:2143|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:216|fn panel_target_width(
-src/main.rs:21653|Err(message) => this.toast(message, cx)
-src/main.rs:22351|bot_team::approval::ApprovalLevel::Full => "full"
-src/main.rs:22379|.options
+src/main.rs:21781|Err(message) => this.toast(message, cx)
+src/main.rs:22479|bot_team::approval::ApprovalLevel::Full => "full"
+src/main.rs:22507|.options
 src/main.rs:2309|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:233|}
 src/main.rs:2389|"task-reassign-{}"
-src/main.rs:24071|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:24199|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2432|"task-reassign-{}-{}"
-src/main.rs:24713|.into_any_element()
+src/main.rs:24841|.into_any_element()
 src/main.rs:2503|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:254|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:26913|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27055|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2858|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2876|fn finish_member(&mut self, member: &str) {
 src/main.rs:3315|/// 用量页时间范围（天）：1/7/30/90。
-src/main.rs:3699|expanded: bool
-src/main.rs:4368|.member_ids
-src/main.rs:4370|.filter_map(|member_id| self.roster.bot_by_id(member_id))
-src/main.rs:4688|.member_ids
-src/main.rs:5442|attachment_count
-src/main.rs:5454|fn queue_current(
-src/main.rs:5481|attachments
-src/main.rs:5609|.member_ids
-src/main.rs:5938|.questions
-src/main.rs:6157|.items_center()
-src/main.rs:6510|else {
-src/main.rs:6664|return;
-src/main.rs:6976|fn on_new_session_shortcut(
-src/main.rs:7294|fn on_submit_dialog(
+src/main.rs:3701|expanded: bool
+src/main.rs:4371|.member_ids
+src/main.rs:4373|.filter_map(|member_id| self.roster.bot_by_id(member_id))
+src/main.rs:4691|.member_ids
+src/main.rs:5445|attachment_count
+src/main.rs:5457|fn queue_current(
+src/main.rs:5484|attachments
+src/main.rs:5612|.member_ids
+src/main.rs:5941|.questions
+src/main.rs:6160|.items_center()
+src/main.rs:6513|else {
+src/main.rs:6667|return;
+src/main.rs:6982|fn on_new_session_shortcut(
+src/main.rs:7300|fn on_submit_dialog(
 src/main.rs:750|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7774|let Some((_, _, command)) = entries.get(index).cloned() else {
+src/main.rs:7780|let Some((_, _, command)) = entries.get(index).cloned() else {
 src/main.rs:800|enum MsgKind {
 src/main.rs:802|Reasoning
-src/main.rs:8627|.on_click(cx.listener(
-src/main.rs:8876|if query.chars().any(char::is_whitespace) || query.contains('@') {
-src/main.rs:9489|SettingsDetail::BotMemory { bot_id } => {
-src/main.rs:9769|let _ = clear;
-src/main.rs:9887|let cron_input = fields[4].clone();
-src/main.rs:9891|let bot_id = bot.id.clone();
-src/main.rs:9956|SharedString::from(format!("schedule-day-{index}"))
+src/main.rs:8633|.on_click(cx.listener(
+src/main.rs:8882|if query.chars().any(char::is_whitespace) || query.contains('@') {
+src/main.rs:9617|SettingsDetail::BotMemory { bot_id } => {
+src/main.rs:9897|let _ = clear;
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|.unwrap_or(0);
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {

@@ -3463,6 +3463,8 @@ struct PilotApp {
     runtime_status: HashMap<String, String>,
     /// 后台任务快照（BackendEvent::Task 维护；右栏任务区与完成通知都读它）。
     tasks: HashMap<String, crate::task_store::TaskRecord>,
+    /// 任务输出只读面板（task_id）。
+    task_view: Option<String>,
     /// 已向 IM 回显过用户消息的桌面 session；Done 时把回复也镜像过去。
     mirror_reply_sessions: HashSet<String>,
     /// 微信侧栏分组（本机 UI 偏好，存 prefs.json）。
@@ -3941,6 +3943,7 @@ impl PilotApp {
                 .into_iter()
                 .map(|task| (task.id.clone(), task))
                 .collect(),
+            task_view: None,
             mirror_reply_sessions: HashSet::new(),
             sidebar_sections: load_sidebar_sections(),
             tool_expanded: std::collections::HashSet::new(),
@@ -6895,6 +6898,9 @@ impl PilotApp {
             cx.notify();
             return;
         }
+        if self.task_view.is_some() {
+            self.task_view = None;
+        }
         if self.image_preview.is_some() {
             self.image_preview = None;
         } else if self.palette.is_some() {
@@ -9123,6 +9129,128 @@ impl PilotApp {
                                 .max_w(px(920.))
                                 .max_h(px(660.))
                                 .object_fit(gpui::ObjectFit::Contain),
+                        ),
+                )
+                .child(
+                    div()
+                        .font_family(wechat_theme::FONT_FAMILY)
+                        .text_size(px(11.))
+                        .text_color(wechat_theme::list_preview())
+                        .child(i18n::t("点击任意处或按 Esc 关闭")),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// 任务输出只读面板：读 `.tasks/<bot>/<id>.jsonl` 的文本流，滚动展示。
+    fn task_view_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let task_id = self.task_view.clone()?;
+        let record = self.tasks.get(&task_id).cloned()?;
+        let output = if record.session_path.is_empty() {
+            String::new()
+        } else {
+            crate::task_store::read_session_text(&record.session_path)
+        };
+        let body = if output.is_empty() {
+            i18n::t("还没有输出（任务会话尚未产生消息）").to_string()
+        } else {
+            output
+        };
+        Some(
+            div()
+                .id("task-view-scrim")
+                .absolute()
+                .inset_0()
+                .bg(rgba(0x000000e6))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .occlude()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.task_view = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .w(px(720.))
+                        .max_h(px(560.))
+                        .rounded(px(theme::RADIUS_FIELD))
+                        .border_1()
+                        .border_color(wechat_theme::composer_border())
+                        .bg(wechat_theme::chat_bg())
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .w_full()
+                                .px(px(ui_kit::S3))
+                                .py(px(ui_kit::S2))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .border_b_1()
+                                .border_color(wechat_theme::divider())
+                                .child(
+                                    div()
+                                        .font_family(wechat_theme::FONT_FAMILY)
+                                        .text_size(px(13.))
+                                        .text_color(wechat_theme::chat_title())
+                                        .child(SharedString::from(record.title.clone())),
+                                )
+                                .child(ui_kit::badge(
+                                    match record.status {
+                                        crate::task_store::TaskStatus::Running => {
+                                            i18n::t("运行中").to_string()
+                                        }
+                                        crate::task_store::TaskStatus::Queued => {
+                                            i18n::t("排队").to_string()
+                                        }
+                                        crate::task_store::TaskStatus::Done => {
+                                            i18n::t("完成").to_string()
+                                        }
+                                        crate::task_store::TaskStatus::Failed => {
+                                            i18n::t("失败").to_string()
+                                        }
+                                        crate::task_store::TaskStatus::Stopped => {
+                                            i18n::t("已停止").to_string()
+                                        }
+                                        crate::task_store::TaskStatus::Interrupted => {
+                                            i18n::t("已中断").to_string()
+                                        }
+                                    },
+                                    match record.status {
+                                        crate::task_store::TaskStatus::Running => {
+                                            ui_kit::Tone::Success
+                                        }
+                                        crate::task_store::TaskStatus::Done => {
+                                            ui_kit::Tone::Accent
+                                        }
+                                        crate::task_store::TaskStatus::Failed => {
+                                            ui_kit::Tone::Danger
+                                        }
+                                        _ => ui_kit::Tone::Neutral,
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .id("task-view-body")
+                                .w_full()
+                                .flex_1()
+                                .min_h(px(0.))
+                                .overflow_y_scrollbar()
+                                .p(px(ui_kit::S3))
+                                .child(
+                                    div()
+                                        .font_family(wechat_theme::FONT_FAMILY)
+                                        .text_size(px(12.))
+                                        .line_height(px(18.))
+                                        .text_color(wechat_theme::list_title())
+                                        .child(SharedString::from(body)),
+                                ),
                         ),
                 )
                 .child(
@@ -25097,6 +25225,9 @@ impl PilotApp {
                         crate::task_store::TaskStatus::Stopped => {
                             (Some(ui::Tone::Neutral), i18n::t("已停止").to_string())
                         }
+                        crate::task_store::TaskStatus::Interrupted => {
+                            (Some(ui::Tone::Neutral), i18n::t("已中断").to_string())
+                        }
                     };
                     let task_id = task.id.clone();
                     let mut row = ui::list_row(
@@ -25117,6 +25248,17 @@ impl PilotApp {
                     };
                     let _ = dot;
                     row = row.child(ui::badge(tone_text, tone));
+                    let view_id = task.id.clone();
+                    row = row.child(
+                        ui::button_ghost(
+                            SharedString::from(format!("task-view-{view_id}")),
+                            i18n::t("查看"),
+                        )
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.task_view = Some(view_id.clone());
+                            cx.notify();
+                        })),
+                    );
                     if running {
                         row = row.child(
                             ui::button(
@@ -27123,6 +27265,7 @@ impl Render for PilotApp {
             .child(self.wechat_shell(window, cx))
             // 设置二级页面的居中弹窗：整窗遮罩，压在会话与侧栏之上。
             .children(self.settings_modal(window, cx))
+            .children(self.task_view_overlay(cx))
             .children(self.image_preview_overlay(cx))
             .children(self.settings_dropdown_overlay(cx))
             .children(self.permission_menu_overlay(cx))

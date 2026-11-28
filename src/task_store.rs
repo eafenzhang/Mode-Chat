@@ -21,6 +21,8 @@ pub enum TaskStatus {
     Done,
     Failed,
     Stopped,
+    /// 应用退出时仍在跑：重启后标记，可查看输出/历史。
+    Interrupted,
 }
 
 impl TaskStatus {
@@ -31,11 +33,15 @@ impl TaskStatus {
             TaskStatus::Done => "done",
             TaskStatus::Failed => "failed",
             TaskStatus::Stopped => "stopped",
+            TaskStatus::Interrupted => "interrupted",
         }
     }
 
     pub fn is_finished(self) -> bool {
-        matches!(self, TaskStatus::Done | TaskStatus::Failed | TaskStatus::Stopped)
+        matches!(
+            self,
+            TaskStatus::Done | TaskStatus::Failed | TaskStatus::Stopped | TaskStatus::Interrupted
+        )
     }
 }
 
@@ -123,6 +129,85 @@ pub fn running_count(data_root: &Path, bot_id: &str) -> usize {
         .iter()
         .filter(|task| task.bot_id == bot_id && task.status == TaskStatus::Running)
         .count()
+}
+
+/// 启动恢复：把上次退出时仍在跑/排队的任务标成 interrupted（不自动重跑）。
+/// 返回改动的条数。
+pub fn mark_interrupted(data_root: &Path) -> usize {
+    let mut index = load_raw(data_root);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let mut changed = 0;
+    for task in &mut index.tasks {
+        if matches!(task.status, TaskStatus::Running | TaskStatus::Queued) {
+            task.status = TaskStatus::Interrupted;
+            task.finished_at = now;
+            if task.error.is_empty() {
+                task.error = "应用退出时中断".to_string();
+            }
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        let _ = save_raw(data_root, &index);
+    }
+    changed
+}
+
+/// 读任务会话 JSONL 的文本输出（user/assistant 的 text 内容，按行拼接）。
+pub fn read_session_text(session_path: &str) -> String {
+    let Ok(text) = std::fs::read_to_string(session_path) else {
+        return String::new();
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let kind = message
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if kind != "user" && kind != "assistant" {
+            continue;
+        }
+        let mut body = String::new();
+        if let Some(content) = message.get("content").and_then(serde_json::Value::as_str) {
+            body.push_str(content);
+        }
+        for content in message
+            .get("content")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if content.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                body.push_str(
+                    content
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                );
+            }
+        }
+        let body = body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        let label = if kind == "user" { "我" } else { "Bot" };
+        lines.push(format!("{label}：{body}"));
+    }
+    lines.join("
+
+")
 }
 
 /// 插入或整条替换；同时按 Bot 裁剪已结束任务到 [`KEEP_FINISHED_PER_BOT`]。
