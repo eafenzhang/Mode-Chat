@@ -255,6 +255,8 @@ pub enum BackendEvent {
         root_message_id: String,
     },
     /// 别的 Bot 往群里发言（`post_to_group`）：UI 把它当一条用户消息插进群会话并派发。
+    /// 后台任务状态/进度（节流广播；record 是整条快照）。
+    Task { record: crate::task_store::TaskRecord },
     GroupPost {
         group_id: String,
         text: String,
@@ -352,6 +354,10 @@ async fn open_rpi_session(
     ));
     // 记忆回顾是隐藏的 JSON 任务，不给控制类工具，也不给记忆写入工具。
     let controls = !key.starts_with("memory-review:");
+    if controls {
+        // 后台任务工具（长任务）：Bot 可给自己派独立会话跑长时间工作。
+        extra_tools.extend(crate::task_tools::tools(identity));
+    }
     // 官方插件开关（workspace `.mode/config.json` 的 enabledPlugins）也参与放行：
     // 没有可读的 config.json 时不限制；显式关闭才停注对应工具族。
     let (browser_plugin_on, computer_plugin_on) =
@@ -556,6 +562,18 @@ enum Command {
     ResetSession { key: String },
     /// 立即压缩上下文（命令面板「立即压缩」，W4）。
     Compact { key: String },
+    /// 开一个后台任务：独立 RpiSession（key 带任务 id），与主会话并行。
+    TaskStart {
+        ui_key: String,
+        bot_id: String,
+        title: String,
+        prompt: String,
+        reply: tokio::sync::oneshot::Sender<Result<crate::task_store::TaskRecord, String>>,
+    },
+    /// 给运行中的任务追加一条消息。
+    TaskSend { task_id: String, text: String },
+    /// 停止运行中的任务（lane abort）。
+    TaskStop { task_id: String },
     /// 跨 Bot 投递（`message_bot`）：开一个不进侧栏的会话把文本发给目标 Bot，
     /// 回合结束把整段回复经 `oneshot` 回给调用者。
     AskBot {
@@ -934,6 +952,41 @@ impl BackendHandle {
     pub fn compact(&self, key: impl Into<String>) {
         let _ = self.tx.send(Command::Compact { key: key.into() });
     }
+
+    /// 开一个后台任务；`reply` 在任务会话建好后给出记录（端到端错误在里面）。
+    pub fn task_start(
+        &self,
+        ui_key: String,
+        bot_id: String,
+        title: String,
+        prompt: String,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<crate::task_store::TaskRecord, String>>, String>
+    {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(Command::TaskStart {
+                ui_key,
+                bot_id,
+                title,
+                prompt,
+                reply,
+            })
+            .map_err(|_| "后台引擎已停止，无法创建任务".to_string())?;
+        Ok(rx)
+    }
+
+    pub fn task_send(&self, task_id: impl Into<String>, text: impl Into<String>) {
+        let _ = self.tx.send(Command::TaskSend {
+            task_id: task_id.into(),
+            text: text.into(),
+        });
+    }
+
+    pub fn task_stop(&self, task_id: impl Into<String>) {
+        let _ = self.tx.send(Command::TaskStop {
+            task_id: task_id.into(),
+        });
+    }
 }
 
 fn home_dir() -> PathBuf {
@@ -1050,6 +1103,8 @@ async fn run_agent(
     let mut auto_sent = false;
     // UI key → 当前活跃会话的 internal key（新会话/切换会话后 Send 路由到新会话）。
     let mut active_internal: HashMap<String, String> = HashMap::new();
+    // 后台任务：task_id → 运行中的会话句柄（记录本身在 task_store）。
+    let mut tasks: HashMap<String, Arc<crate::rpi_engine::RpiSession>> = HashMap::new();
     let _ = events.send(BackendEvent::Status("就绪".to_string()));
 
     while let Some(command) = commands.recv().await {
@@ -1177,6 +1232,7 @@ async fn run_agent(
                         }
                         extra_tools.extend(crate::memory_tools::tools(run_bot_id.as_deref()));
                         extra_tools.extend(crate::bot_tools::tools(&identity));
+                        extra_tools.extend(crate::task_tools::tools(&identity));
                         let options = crate::rpi_engine::OpenOptions {
                             workspace: workspace.clone().into(),
                             resume_path,
@@ -1726,6 +1782,176 @@ async fn run_agent(
                     from_bot_id,
                     from_bot_name,
                 });
+            }
+            Command::TaskStart {
+                ui_key,
+                bot_id,
+                title,
+                prompt,
+                reply,
+            } => {
+                let data_root = crate::data::data_root();
+                let roster = crate::data::Roster::load();
+                let Some(bot) = roster.bot_by_id(&bot_id).cloned() else {
+                    let _ = reply.send(Err(format!("找不到 Bot：{bot_id}")));
+                    continue;
+                };
+                if bot.is_private {
+                    let _ = reply.send(Err("隐私 Bot 不能创建后台任务".to_string()));
+                    continue;
+                }
+                if crate::task_store::running_count(&data_root, &bot_id)
+                    >= crate::task_store::MAX_RUNNING_PER_BOT
+                {
+                    let _ = reply.send(Err(format!(
+                        "同时运行的任务已达上限（{} 个），等一个结束再试",
+                        crate::task_store::MAX_RUNNING_PER_BOT
+                    )));
+                    continue;
+                }
+                let task_id = format!("t-{}-{}", crate::im_service::now_ms(), tasks.len() + 1);
+                let internal = format!("{ui_key}\u{2}{task_id}");
+                let (tx, mut rx) = unbounded_channel::<BackendEvent>();
+                let opened = open_rpi_session(
+                    &internal,
+                    &bot.directory,
+                    &bot.identity(),
+                    bot.model.clone(),
+                    None,
+                    None,
+                    &tx,
+                    Vec::new(),
+                )
+                .await;
+                let session = match opened {
+                    Ok((session, _spec)) => Arc::new(session),
+                    Err(message) => {
+                        let _ = reply.send(Err(format!("任务会话创建失败：{message}")));
+                        continue;
+                    }
+                };
+                let mut record = crate::task_store::TaskRecord {
+                    id: task_id.clone(),
+                    bot_id: bot_id.clone(),
+                    bot_name: bot.name.clone(),
+                    ui_key: ui_key.clone(),
+                    title: if title.trim().is_empty() {
+                        prompt.chars().take(30).collect()
+                    } else {
+                        title.clone()
+                    },
+                    prompt: prompt.clone(),
+                    status: crate::task_store::TaskStatus::Running,
+                    created_at: crate::im_service::now_ms() as u64,
+                    finished_at: 0,
+                    session_path: session.path.clone(),
+                    last_line: String::new(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    error: String::new(),
+                };
+                if let Err(error) = crate::task_store::upsert(&data_root, &record) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
+                let _ = reply.send(Ok(record.clone()));
+                let _ = events.send(BackendEvent::Task {
+                    record: record.clone(),
+                });
+                // 事件泵：流式更新 last_line/usage，节流落盘 + 广播；终态收口。
+                let pump_events = events.clone();
+                let pump_root = data_root.clone();
+                tokio::spawn(async move {
+                    let mut dirty = false;
+                    let mut last_flush = std::time::Instant::now();
+                    loop {
+                        let received =
+                            tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+                        match received {
+                            Ok(Some(BackendEvent::Session { event, .. })) => match event {
+                                SessionEvent::Delta { text, .. } => {
+                                    record.last_line.push_str(&text);
+                                    let chars = record.last_line.chars().count();
+                                    if chars > 140 {
+                                        let skip = chars - 140;
+                                        record.last_line =
+                                            record.last_line.chars().skip(skip).collect();
+                                    }
+                                    dirty = true;
+                                }
+                                SessionEvent::Tool(card) => {
+                                    record.last_line = format!("· {}", card.title);
+                                    dirty = true;
+                                }
+                                SessionEvent::TurnUsage {
+                                    input_tokens,
+                                    output_tokens,
+                                    ..
+                                } => {
+                                    record.input_tokens += input_tokens;
+                                    record.output_tokens += output_tokens;
+                                    dirty = true;
+                                }
+                                SessionEvent::Done { .. } => {
+                                    record.status = crate::task_store::TaskStatus::Done;
+                                    record.finished_at = crate::im_service::now_ms() as u64;
+                                    let _ = crate::task_store::upsert(&pump_root, &record);
+                                    let _ = pump_events.send(BackendEvent::Task {
+                                        record: record.clone(),
+                                    });
+                                    break;
+                                }
+                                SessionEvent::Error { message, .. } => {
+                                    record.status = crate::task_store::TaskStatus::Failed;
+                                    record.error = message;
+                                    record.finished_at = crate::im_service::now_ms() as u64;
+                                    let _ = crate::task_store::upsert(&pump_root, &record);
+                                    let _ = pump_events.send(BackendEvent::Task {
+                                        record: record.clone(),
+                                    });
+                                    break;
+                                }
+                                _ => {}
+                            },
+                            Ok(Some(_)) => {}
+                            Ok(None) => break,
+                            Err(_) => {} // 2s 无事件：继续等
+                        }
+                        if dirty && last_flush.elapsed() > Duration::from_secs(2) {
+                            let _ = crate::task_store::upsert(&pump_root, &record);
+                            let _ = pump_events.send(BackendEvent::Task {
+                                record: record.clone(),
+                            });
+                            dirty = false;
+                            last_flush = std::time::Instant::now();
+                        }
+                    }
+                });
+                tasks.insert(task_id, Arc::clone(&session));
+                tokio::spawn(async move {
+                    session.send(prompt, Vec::new()).await;
+                });
+            }
+            Command::TaskSend { task_id, text } => {
+                if let Some(session) = tasks.get(&task_id).cloned() {
+                    tokio::spawn(async move {
+                        session.send(text, Vec::new()).await;
+                    });
+                }
+            }
+            Command::TaskStop { task_id } => {
+                if let Some(session) = tasks.remove(&task_id) {
+                    let data_root = crate::data::data_root();
+                    if let Some(mut record) = crate::task_store::get(&data_root, &task_id) {
+                        record.status = crate::task_store::TaskStatus::Stopped;
+                        record.finished_at = crate::im_service::now_ms() as u64;
+                        let _ = crate::task_store::upsert(&data_root, &record);
+                        let _ = events.send(BackendEvent::Task { record });
+                    }
+                    tokio::spawn(async move {
+                        session.abort().await;
+                    });
+                }
             }
             Command::AskBot {
                 request_id: _,

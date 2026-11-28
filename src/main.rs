@@ -51,6 +51,8 @@ mod im_adapter;
 mod oauth;
 mod schedule_builder;
 mod search_index;
+mod task_store;
+mod task_tools;
 mod automations;
 mod automation_scheduler;
 mod automation_scope;
@@ -3457,6 +3459,8 @@ struct PilotApp {
     memory_group: Option<String>,
     /// 会话运行状态缓存（侧栏状态点与错误通知去重）。
     runtime_status: HashMap<String, String>,
+    /// 后台任务快照（BackendEvent::Task 维护；右栏任务区与完成通知都读它）。
+    tasks: HashMap<String, crate::task_store::TaskRecord>,
     /// 已向 IM 回显过用户消息的桌面 session；Done 时把回复也镜像过去。
     mirror_reply_sessions: HashSet<String>,
     /// 微信侧栏分组（本机 UI 偏好，存 prefs.json）。
@@ -3931,6 +3935,10 @@ impl PilotApp {
             ),
             memory_group: None,
             runtime_status: HashMap::new(),
+            tasks: crate::task_store::list_all(&data::data_root())
+                .into_iter()
+                .map(|task| (task.id.clone(), task))
+                .collect(),
             mirror_reply_sessions: HashSet::new(),
             sidebar_sections: load_sidebar_sections(),
             tool_expanded: std::collections::HashSet::new(),
@@ -4504,6 +4512,34 @@ impl PilotApp {
     fn apply_event(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
         match event {
             BackendEvent::Status(text) => self.backend_status = text,
+            BackendEvent::Task { record } => {
+                let finished = record.status.is_finished();
+                let was_running = self
+                    .tasks
+                    .get(&record.id)
+                    .map(|old| !old.status.is_finished())
+                    .unwrap_or(false);
+                let title = record.title.clone();
+                let failed = record.status == crate::task_store::TaskStatus::Failed;
+                let ui_key = record.ui_key.clone();
+                self.tasks.insert(record.id.clone(), record);
+                // 到终态且之前还在跑：toast + 该会话未读点。
+                if finished && was_running {
+                    let key = ui_key.clone();
+                    self.chats.entry(key).or_default().unread += 1;
+                    self.toast(
+                        if failed {
+                            tri!("后台任务失败：{title}", "Background task failed: {title}")
+                                .to_string()
+                        } else {
+                            tri!("后台任务完成：{title}", "Background task done: {title}")
+                                .to_string()
+                        },
+                        cx,
+                    );
+                }
+                cx.notify();
+            }
             BackendEvent::AttachmentImage {
                 attachment_ref,
                 path,
@@ -24982,7 +25018,83 @@ impl PilotApp {
             }
         }
 
-        // 5) 本轮改动：按文件聚合的新增/删除行（与回合尾同一份数据）
+        // 5) 后台任务：该 Bot 的任务列表（状态 / 标题 / 最近一行；运行中可停止）
+        {
+            let mut task_rows: Vec<crate::task_store::TaskRecord> = self
+                .tasks
+                .values()
+                .filter(|task| task.ui_key == key)
+                .cloned()
+                .collect();
+            task_rows.sort_by_key(|task| std::cmp::Reverse(task.created_at));
+            if !task_rows.is_empty() {
+                let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                for task in task_rows.into_iter().take(6) {
+                    let running = task.status == crate::task_store::TaskStatus::Running;
+                    let (dot, tone_text) = match task.status {
+                        crate::task_store::TaskStatus::Running => {
+                            (Some(ui::Tone::Success), i18n::t("运行中").to_string())
+                        }
+                        crate::task_store::TaskStatus::Queued => {
+                            (Some(ui::Tone::Neutral), i18n::t("排队").to_string())
+                        }
+                        crate::task_store::TaskStatus::Done => {
+                            (Some(ui::Tone::Accent), i18n::t("完成").to_string())
+                        }
+                        crate::task_store::TaskStatus::Failed => {
+                            (Some(ui::Tone::Danger), i18n::t("失败").to_string())
+                        }
+                        crate::task_store::TaskStatus::Stopped => {
+                            (Some(ui::Tone::Neutral), i18n::t("已停止").to_string())
+                        }
+                    };
+                    let task_id = task.id.clone();
+                    let mut row = ui::list_row(
+                        SharedString::from(task.title.clone()),
+                        Some(SharedString::from(
+                            if task.last_line.is_empty() {
+                                tone_text.clone()
+                            } else {
+                                format!("{tone_text} · {}", task.last_line.chars().take(46).collect::<String>())
+                            },
+                        )),
+                    );
+                    let tone = match task.status {
+                        crate::task_store::TaskStatus::Running => ui::Tone::Success,
+                        crate::task_store::TaskStatus::Done => ui::Tone::Accent,
+                        crate::task_store::TaskStatus::Failed => ui::Tone::Danger,
+                        _ => ui::Tone::Neutral,
+                    };
+                    let _ = dot;
+                    row = row.child(ui::badge(tone_text, tone));
+                    if running {
+                        row = row.child(
+                            ui::button(
+                                SharedString::from(format!("task-stop-{task_id}")),
+                                i18n::t("停止"),
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if let Some(handle) = backend::bus() {
+                                    handle.task_stop(task_id.clone());
+                                }
+                                this.toast(i18n::t("已请求停止").to_string(), cx);
+                            })),
+                        );
+                    }
+                    rows.push(row.into_any_element());
+                }
+                let count = rows.len();
+                let mut card = ui::card(vec![]);
+                for (index, row) in rows.into_iter().enumerate() {
+                    card = card.child(ui::card_row(row, index + 1 == count));
+                }
+                body = body
+                    .child(ui::section(tri!("后台任务 · {count}", "Background tasks · {count}")))
+                    .child(card);
+            }
+        }
+
+        // 5b) 本轮改动：按文件聚合的新增/删除行（与回合尾同一份数据）
         if let Some(chat) = chat {
             let edits = turn_edit_details(&chat.messages);
             if !edits.is_empty() {
