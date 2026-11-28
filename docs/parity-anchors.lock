@@ -188,64 +188,63 @@ src/main.rs:10156|("0 9 * * *", "0 9 * * *".to_string())
 src/main.rs:10163|let cron_input = fields[4].clone();
 src/main.rs:10170|let once_hours = self
 src/main.rs:10583|SettingsDetail::AddModel {
-src/main.rs:10665|let id_input = fields[0].clone();
+src/main.rs:10667|let key_input = fields[2].clone();
 src/main.rs:10983|SettingsDetail::AutomationHistory { title, runs } => {
 src/main.rs:1102|#[derive(Clone, PartialEq, Eq)]
 src/main.rs:11176|SettingsDetail::Allowlist { bot_id } => {
 src/main.rs:1134|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11668|// A06：换工作目录后清会话槽，下一次发消息在新目录开新会话
-src/main.rs:11678|&role
-src/main.rs:11685|None => data::create_bot(
+src/main.rs:11752|.filter(|bot| !bot.is_private)
+src/main.rs:11762|.filter(|bot| !bot.is_private)
+src/main.rs:11769|.filter(|bot| !bot.is_private)
 src/main.rs:12563|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
 src/main.rs:12612|SharedString::from(format!("private-archive-row-{id}"))
 src/main.rs:13165|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
 src/main.rs:13501|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:14266|cx.notify();
-src/main.rs:14776|.child(settings_group(vec![
-src/main.rs:16042|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
+src/main.rs:14263|cx.notify();
+src/main.rs:14773|.child(settings_group(vec![
+src/main.rs:16039|Some(SettingsDetail::ConnectorSecret { connector_id: spec_id });
 src/main.rs:1639|strip = strip.child(stage_action_chip(
-src/main.rs:16638|cx.notify();
-src/main.rs:16648|.child(ui::stat_card(
+src/main.rs:16636|cx.notify();
+src/main.rs:16646|.child(ui::stat_card(
 src/main.rs:1665|strip = strip.child(stage_action_chip(
-src/main.rs:16686|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:16684|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1686|strip = strip.child(stage_action_chip(
 src/main.rs:1730|.id(SharedString::from(format!(
-src/main.rs:19082|Err(message) => {
-src/main.rs:19419|if this.screenshot_watching {
-src/main.rs:19809|.px(px(8.))
-src/main.rs:19833|fn approval_note(level: &str) -> &'static str {
-src/main.rs:20350|expanded
-src/main.rs:20545|streaming
+src/main.rs:19087|Err(message) => {
+src/main.rs:19424|if this.screenshot_watching {
+src/main.rs:19838|fn approval_note(level: &str) -> &'static str {
+src/main.rs:19930|.filter(|bot| !bot.is_private)
+src/main.rs:20371|fn wechat_row_el(
+src/main.rs:20662|WecomRow::ToolGroup {
 src/main.rs:2102|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:21107|fn wechat_message_actions(
-src/main.rs:21139|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
-src/main.rs:21171|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
-src/main.rs:21189|let mut inside = false;
-src/main.rs:21315|div()
-src/main.rs:21371|.line_height(px(16.))
-src/main.rs:21401|enum SettingsDetail {
+src/main.rs:21112|fn wechat_message_actions(
+src/main.rs:21144|action_button(format!("wecom-copy-{index}"), icons::Icon::Copy).on_click(move |_
+src/main.rs:21154|if let Some(code) = fenced_code(text) {
+src/main.rs:21176|action_button(format!("wechat-quote-{index}"), icons::Icon::MessageSquare).on_cl
+src/main.rs:21386|const SETTINGS_PAGES: [&str; 13] = [
+src/main.rs:21406|enum SettingsDetail {
 src/main.rs:2146|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:217|fn panel_target_width(
-src/main.rs:22151|Err(message) => this.toast(message, cx)
-src/main.rs:22887|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
-src/main.rs:22889|.selectable(true)
+src/main.rs:22156|Err(message) => this.toast(message, cx)
+src/main.rs:22892|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:22894|.selectable(true)
 src/main.rs:2312|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:234|}
 src/main.rs:2392|"task-reassign-{}"
 src/main.rs:2435|"task-reassign-{}-{}"
-src/main.rs:24569|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:24574|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2506|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
-src/main.rs:25211|.into_any_element()
+src/main.rs:25216|.into_any_element()
 src/main.rs:255|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:27502|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27507|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2861|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2879|fn finish_member(&mut self, member: &str) {
 src/main.rs:3327|/// 用量页时间范围（天）：1/7/30/90。
-src/main.rs:3718|ToolGroup {
-src/main.rs:4386|.member_ids
+src/main.rs:3712|Tool {
 src/main.rs:4388|.filter_map(|member_id| self.roster.bot_by_id(member_id))
-src/main.rs:4706|.member_ids
-src/main.rs:5627|cx: &mut Context<Self>
+src/main.rs:4389|.filter(|bot| !bot.is_private)
+src/main.rs:4709|.filter(|bot| !bot.is_private)
+src/main.rs:5633|.filter(|bot| !bot.is_private)
 src/main.rs:6032|.questions
 src/main.rs:6251|.items_center()
 src/main.rs:6528|this.submit_elicitation(request_id.clone(), cx);
@@ -256,7 +255,7 @@ src/main.rs:751|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
 src/main.rs:7800|.palette
 src/main.rs:801|enum MsgKind {
 src/main.rs:803|Reasoning
-src/main.rs:8954|cards = cards.child(
+src/main.rs:9038|.filter(|bot| !bot.is_private)
 src/main.rs:9765|SettingsDetail::BotMemory { bot_id } => {
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|.unwrap_or(0);

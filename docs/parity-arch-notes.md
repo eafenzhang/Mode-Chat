@@ -88,7 +88,7 @@
 
 ### 2.4 Bot 私有记忆面板 — 半成品（缺页面）
 - DS：`ds-bot/src/client/memory-panel.js:325`（`MemoryDialog`，文件 449 行）
-- MC：只有团队记忆页 `src/main.rs:15791`（`settings_page_team_memory`）和群记忆区 `src/main.rs:17203`（`group_memory_section`）
+- MC：只有团队记忆页 `src/main.rs:15788`（`settings_page_team_memory`）和群记忆区 `src/main.rs:17208`（`group_memory_section`）
 - 分类：**补实现**（纯 UI）。
 
 ### 2.5 记忆回顾 — 已有
@@ -257,7 +257,7 @@
 
 ## 12. 用量
 
-- MC 已有：本会话 `src/rpi_engine.rs:2036`（`session_usage`）、总量 `:2048`（`usage_totals`）、按天 `:1747`（`usage_daily`），页面 `src/main.rs:16570`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
+- MC 已有：本会话 `src/rpi_engine.rs:2036`（`session_usage`）、总量 `:2048`（`usage_totals`）、按天 `:1747`（`usage_daily`），页面 `src/main.rs:16568`（四张卡 + 7 天堆叠柱），数据源是扫 JSONL
 - 缺：**按 Bot / 按模型分组**（DS：`ds-bot/src/host/usage.js:182` SQL `GROUP BY session, provider, model, kind, slot`，客户端 `usage-page.js` 732 行）；费用估算两边都没有价格表，不算差距
 - 分类：**补实现**。`UsageSummary`（`src/session_db.rs`）加 provider/model 维度聚合 + 页面加分组切换。半天。
 
@@ -277,7 +277,7 @@
 
    本机实测两种拼写**同时存在**：`USERPROFILE` 是长名 `C:\Users\Administrator`，`TEMP` 是 8.3 短名 `C:\Users\ADMINI~1\...`。验收时隔离根建在 `TEMP` 下，于是 `titles` 的 key 带 `ADMINI~1`；生产默认走 `USERPROFILE`，key 带长名。
 
-   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:25475` 的 `filter(|id| live != id)` 判不等。
+   两种拼写指向同一个文件（`Test-Path` 都为真、文件长度一致），但**字符串不相等**（`-ceq` 为 `False`）。所以坏的不是「文件找不到」——`std::fs` 由系统解析别名，会话照常能读；坏的是所有**按字符串比对**的查找：`title()` 命中不到、`src/main.rs:25480` 的 `filter(|id| live != id)` 判不等。
 
    表现是**改名静默失效**：弹窗能开、能保存、写盘成功、重启后名字没了，而 `set_title` 不报错。触发条件不是「将来上游换写法」，而是**同一台机器上两种来源混用**：在短名隔离根里改过名，再用默认根启动，名字就不见了。
 
@@ -315,7 +315,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 语音朗读 | 0 命中（`tts`/`speech`/`voice` 在 `src` 全为 0） | `ds-bot/src/client/voice.js:81`（`VoiceMode`）、`ds-bot/src/client/speech.js`(152)、`ds-bot/src/client/read-page.js:22`（`readPage`） | 缺失 | 框架性（接系统 TTS） |
 | 手机端 / 远程配对 | 0 命中（`pairing`/`PairCode`/`mobile` 全为 0） | `link/src/pairing.ts:55`（`pairingUri`）、`ds-bot/src/host/phone.js:18`、`ds-bot/src/host/mobile.js:160`、`mobile/`（React Native 整套） | 缺失 | 框架性（独立子系统，v0.6） |
 | 学习卡（技能自学习） | 0 命中（`learning` 全为 0） | `ds-bot/src/client/learning-card.js:164`（`LearningTurnTail`）、`ds-bot/src/host/learning.js:296`（install） | 缺失 | 框架性 |
-| 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:15460`（`settings_page_feedback`，内容是一段静态格式化串 `:15386`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
+| 诊断 / 反馈页 | 只有"复制诊断"文本：`src/main.rs:15457`（`settings_page_feedback`，内容是一段静态格式化串 `:15386`）、`src/i18n.rs:587` | `ds-bot/src/client/diagnostics.js:42`（`clientFacts`）、`ds-bot/src/client/feedback.js:46`（`FeedbackPage`）、`:126`（`ErrorToast`） | 半成品 | 补实现 |
 | 主题 / 强调色 | 已有：`src/theme.rs`(595)、`src/wechat_theme.rs`(236)、`src/main.rs:12881`（`fn accent_row`） | `client/themes.js`(124) | 已有 | — |
 | 托盘 / 自启 / 自动更新 | 已有：`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs`(215) | 已有 | — |
 | 头像 / Bot 图标 | 已有：`src/avatar.rs`(262)、`bot_icon.rs`(120)、`agent_icons.rs`(70)、`brand_icons.rs`(307) | `client/avatar-library.js`(149)、`agent-logos.js`(52) | 已有 | — |
@@ -334,7 +334,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 3 | Bot | 每 Bot 模型选择 | 已有 | `src/main.rs:10732`（models 页）、`src/rpi_engine.rs:55` | `ds-bot/src/host/models.js:101` |
 | 4 | Bot | 工作目录切换 | 已有 | `src/data.rs:563` | `ds-bot/src/host/tools.js:363` |
 | 5 | Bot | 权限/审批三档 + 白名单 | 已有 | `src/rpi_engine.rs:267`（approval_policy）、`:422`（hook） | `ds-bot/src/host/approvals.js`(110) |
-| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:15758`、`:9773` | `ds-bot/src/client/memory-panel.js:325` |
+| 6 | Bot | 记忆面板（查看/编辑/撤销） | 半成品（仅团队/群） | `src/main.rs:15755`、`:9773` | `ds-bot/src/client/memory-panel.js:325` |
 | 7 | Bot | 记忆写入工具 remember/forget/recall | 缺失 | 0 命中 | `ds-bot/src/host/memory.js:1075/1114/1151` |
 | 8 | Bot | 插话（steer） | 已有 | `src/backend.rs:717`（interject）、`src/rpi_engine.rs:1300` | `ds-bot/src/host/steer.js`(255) |
 | 9 | Bot | 旁路会话 /side | 已有 | `src/main.rs:8248`（open_side） | `ds-bot/src/host/side.js`(377) |
@@ -342,7 +342,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 11 | Main bot | Chief 身份与降级规则 | 已有 | `src/data.rs:90`、`:590` | `ds-bot/src/host/roster.js`(900) |
 | 12 | Main bot | 管理其它 Bot/群（工具化） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:325/363/496/526/590` |
 | 13 | 群聊 | 建群/改群/删群 | 已有 | `src/data.rs:1865`（create_group）、`src/main.rs:3830` | `ds-bot/src/host/groups.js`(1885) |
-| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:20658`（route_group_members） | `ds-bot/src/host/groups.js` |
+| 14 | 群聊 | 群成员路由（@/全员/管理员） | 已有 | `src/main.rs:20663`（route_group_members） | `ds-bot/src/host/groups.js` |
 | 15 | 群聊 | 群任务台账 + 派活 | 已有 | `src/team_tools.rs:300`、`src/backend.rs:1512` | `ds-bot/src/host/tools.js` |
 | 16 | 群聊 | 群目标（阶段） | 半成品 | `crates/bot-team/src/goal.rs:53/64` | `ds-bot/src/host/goals.js:670` |
 | 17 | 群聊 | 目标验收标准 pass/rework | 缺失 | 0 命中 | `ds-bot/src/host/goals.js:760/767` |
@@ -375,7 +375,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 44 | 能力 | Skill 注入到引擎 | 缺失 | 0 命中（未设 resources） | `ds-bot/src/host/capabilities.js:125` |
 | 45 | 能力 | show_view（图表/表格/表单） | 缺失 | 0 命中 | `ds-bot/src/host/tools.js:726` |
 | 46 | Office | docx/pptx/xlsx 读写与渲染检查 | 缺失 | 只有 MIME：`crates/bots-service/src/media.rs:126` | `ds-bot/src/office/docx.js`(612) 等 9 个 |
-| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:2036/2048/1747`、`src/main.rs:16570` | `ds-bot/src/host/usage.js`(630) |
+| 47 | 用量 | 会话/总量/按天 | 已有 | `src/rpi_engine.rs:2036/2048/1747`、`src/main.rs:16568` | `ds-bot/src/host/usage.js`(630) |
 | 48 | 用量 | 按 Bot / 模型分组 | 缺失 | 未见聚合维度 | `ds-bot/src/host/usage.js:182` |
 | 49 | 记忆 | Markdown 记忆 + 索引 + 历史 + 撤销 | 已有 | `crates/bots-service/src/memory_store.rs:659/1224/1258` | `ds-bot/src/host/memory.js` |
 | 50 | 记忆 | 团队/群双作用域 | 已有 | `src/data.rs:380/396` | `ds-bot/src/host/memory.js:854` |
@@ -389,7 +389,7 @@ v0.5.0 只承诺这 8 项（技术侧确认可行、影响最大）：
 | 58 | 通用 | 多语言（>2） | 缺失 | `src/i18n.rs:12`（只 zh/en） | `ds-bot/src/client/i18n.js:1695` |
 | 59 | 通用 | 语音朗读 | 缺失 | 0 命中 | `ds-bot/src/client/voice.js:81`、`ds-bot/src/client/read-page.js:22` |
 | 60 | 通用 | 手机端 / 远程配对 | 缺失 | 0 命中 | `link/src/pairing.ts:55`、`ds-bot/src/host/mobile.js:160` |
-| 61 | 通用 | 诊断 / 反馈 | 半成品 | `src/main.rs:15460` | `ds-bot/src/client/diagnostics.js:42`、`ds-bot/src/client/feedback.js:46` |
+| 61 | 通用 | 诊断 / 反馈 | 半成品 | `src/main.rs:15457` | `ds-bot/src/client/diagnostics.js:42`、`ds-bot/src/client/feedback.js:46` |
 | 62 | 通用 | 主题 / 托盘 / 自启 / 自动更新 | 已有 | `src/theme.rs`、`src/tray.rs:265`、`src/autostart.rs:34`、`src/update.rs:69` | `app/src/tray.mjs`、`app/src/updates.mjs` |
 | 63 | 通用 | 密钥库（只看已存名字） | 已有 | `src/secrets.rs:33/44` | `ds-bot/src/host/secrets.js`(553) |
 
@@ -465,7 +465,7 @@ SELF-CHECK OK
 
 回填规则只看位置：同一行里、在 `:N` 之前**最近**的那个完整锚点。所以一行里出现多个文件时，裸行号会被归给紧邻的那一个，哪怕它语义上属于更早提到的文件。
 
-真实的漏检（`docs/prd-0.6.md` 的 O-3 那一行）：句子先写"`wechat_working_row`，`src/main.rs:26467` 起"，中间插了一个 `tool_render.rs` 的 `:26` 引用，后面的裸 `:26395` / `:26401` 就被归给 `tool_render.rs`：
+真实的漏检（`docs/prd-0.6.md` 的 O-3 那一行）：句子先写"`wechat_working_row`，`src/main.rs:26472` 起"，中间插了一个 `tool_render.rs` 的 `:26` 引用，后面的裸 `:26395` / `:26401` 就被归给 `tool_render.rs`：
 
 ```
 src/tool_render.rs :25011 (裸行号) -> OUT OF RANGE (max 434)
@@ -568,7 +568,7 @@ write       src/main.rs:9135         set_title(&session_id, &title)      ← 写
 
 这才是真正的边界：**`263-3` 成立是因为行上的 label 和改名按钮的 id 来自同一次 `history_of` 迭代**，不是因为「路径 key 的形态碰巧一致」。前者是结构保证，后者是运气。
 
-**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:25775` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
+**由此得到一个必须写下来的限制**：改名入口只挂在「最近会话」那几行上（`src/main.rs:25780` 的 `chat-info-rename-{rename_row}` 是唯一入口），而当前会话被「最近会话」那段的 `filter(|id| live != id)` 排除在外。**结论：当前正在用的会话没法改名，必须先切走，它才会出现在最近会话里。**
 
 这不是缺陷报告，是设计边界——但它影响验收：`263-2` / `263-3` 拍的是「切走之后再改名」，不是「给当前会话改名」。任何按「打开一个会话就地改名」写的用例都会失败，而失败原因不在改名功能。
 
@@ -591,8 +591,8 @@ src/main.rs:24970  this.chat_detail = None;                 点「改名」跳�
 
 **这条穷举能证明的事，比一张截图强：**
 
-1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:25267`-`:25194` 的 `matches!` 带 `if` 守卫）。
-2. **整个程序里只有 `src/main.rs:17890` 能把它设成 `Some`**，而那里只在点「⋯ → 运行状态」时执行。
+1. **绿边出现的充要条件是 `chat_detail == Some(RunStatus { key })` 且 `key` 等于当前会话键**（`src/main.rs:25272`-`:25194` 的 `matches!` 带 `if` 守卫）。
+2. **整个程序里只有 `src/main.rs:17895` 能把它设成 `Some`**，而那里只在点「⋯ → 运行状态」时执行。
 3. **三个清空点之外没有第四个写入者**，也没有从 `pilot-state.json` / `ui-prefs` 反序列化回来的路径——`chat_detail` 只挂在 `PilotApp` 上（`:3279`），`save_ui_prefs` 存的是 `muted / topmost / pinned_settings / right_panel_open` 四项，不含它（`src/main.rs:762`-`:768`）。
 
 所以「关右栏再展开，绿边不回来」这件事**不需要靠截图证明**：从 `11255` 清掉之后，能再把它设回去的代码只有 `16815`，而重新展开走的 `11251`-`:11256` 那条路径里没有它。
