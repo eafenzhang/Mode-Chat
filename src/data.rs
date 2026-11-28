@@ -386,6 +386,17 @@ pub fn local_agents() -> Vec<LocalAgentInfo> {
         .collect()
 }
 
+/// 把一条团队记忆移动到某个 Bot 的记忆根（E12）。
+pub fn move_team_memory_to_bot(file: &str, bot_id: &str) -> Result<String, String> {
+    let Some(from_root) = team_memory_root() else {
+        return Err("团队记忆根不可用".to_string());
+    };
+    let Some(to_root) = bot_memory_root(bot_id) else {
+        return Err("目标 Bot 的记忆根不可用".to_string());
+    };
+    bots_service::memory_store::move_memory(&from_root, file, &to_root)
+}
+
 /// 团队记忆上下文（与 Bot 每回合注入的是同一份；4000 字符）。
 pub fn team_memory() -> String {
     let Some(root) = team_memory_root() else {

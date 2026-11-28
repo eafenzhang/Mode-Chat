@@ -3173,6 +3173,8 @@ enum SettingsSelectKind {
     FontSize,
     Motion,
     MessageLayout,
+    /// E12：把一条团队记忆移到某个 Bot（目标取自 roster；file 存字段 `memory_move_file`）。
+    MemoryToBot,
 }
 
 /// 打开中的设置下拉框：种类 + 点击位置（窗口坐标）。
@@ -3455,6 +3457,8 @@ struct PilotApp {
     theme_pref: String,
     /// 打开中的设置下拉框（语言/字号/动效/消息布局）。
     settings_dropdown: Option<SettingsDropdownState>,
+    /// E12：待移动的团队记忆文件（「移到 Bot」下拉打开期间）。
+    memory_move_file: Option<String>,
     /// 输入框权限菜单（点击位置；None = 关闭）。
     permission_menu: Option<gpui::Point<gpui::Pixels>>,
     /// 问题卡「其他（自行输入）」：当前展开的 request_id 与输入框。
@@ -3937,6 +3941,7 @@ impl PilotApp {
             message_layout,
             theme_pref,
             settings_dropdown: None,
+            memory_move_file: None,
             permission_menu: None,
             memory_review_enabled: crate::memory_review::enabled(),
             browser_enabled: crate::tool_scope::enabled(crate::tool_scope::Family::Browser),
@@ -11584,6 +11589,12 @@ impl PilotApp {
             .as_deref()
             .and_then(|id| self.roster.bot_by_id(id))
             .is_some_and(|bot| bot.is_chief != chief_on);
+        // A06：换工作目录后清会话槽，下一次发消息在新目录开新会话
+        //（旧会话文件留在旧目录，不迁移）。
+        let directory_changed = editing_id
+            .as_deref()
+            .and_then(|id| self.roster.bot_by_id(id))
+            .is_some_and(|bot| bot.directory.trim() != directory.trim());
         let result = match &editing_id {
             Some(id) => data::update_bot(
                 id,
@@ -11617,7 +11628,7 @@ impl PilotApp {
         if let Err(message) = bot_icon::set(&bot.id, &icon, &color) {
             self.toast(message, cx);
         }
-        if privacy_changed || chief_changed {
+        if privacy_changed || chief_changed || directory_changed {
             let key = bot_key(&bot.id);
             self.backend.reset_session(key.clone());
             self.chats.remove(&key);
@@ -11632,6 +11643,12 @@ impl PilotApp {
                 self.backend.reset_session(group.clone());
                 self.chats.remove(&group);
             }
+        }
+        if directory_changed {
+            self.toast(
+                i18n::t("工作目录已变更：下一条消息将在新目录开始新会话").to_string(),
+                cx,
+            );
         }
         self.roster = Roster::load();
         let index = self
@@ -12794,6 +12811,14 @@ impl PilotApp {
                 ],
                 self.message_layout.clone(),
             ),
+            SettingsSelectKind::MemoryToBot => (
+                self.roster
+                    .bots
+                    .iter()
+                    .map(|bot| (bot.id.clone(), bot.name.clone()))
+                    .collect(),
+                String::new(),
+            ),
         }
     }
 
@@ -12833,6 +12858,17 @@ impl PilotApp {
                 save_ui_value("message_layout", serde_json::json!(value));
                 self.wechat_scroller
                     .update(cx, |state, cx| state.remeasure(cx));
+            }
+            SettingsSelectKind::MemoryToBot => {
+                if let Some(file) = self.memory_move_file.take() {
+                    match crate::data::move_team_memory_to_bot(&file, value) {
+                        Ok(name) => self.toast(
+                            tri!("已移到该 Bot：{name}", "Moved to bot: {name}").to_string(),
+                            cx,
+                        ),
+                        Err(message) => self.toast(message, cx),
+                    }
+                }
             }
         }
         self.settings_dropdown = None;
@@ -17039,8 +17075,25 @@ Deleting also updates the memory index; use Undo to restore it (history is kept)
             } else {
                 format!("{} · {badges}", entry.description)
             };
+            let file_for_move = entry.file.clone();
             entry_rows.push(
                 settings_row(entry.title.clone(), Some(detail))
+                    .child(
+                        settings_button(
+                            SharedString::from(format!("memory-move-{}", entry.file)),
+                            i18n::t("移到 Bot"),
+                        )
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                            this.memory_move_file = Some(file_for_move.clone());
+                            if let gpui::ClickEvent::Mouse(mouse) = event {
+                                this.settings_dropdown = Some(SettingsDropdownState {
+                                    kind: SettingsSelectKind::MemoryToBot,
+                                    position: mouse.up.position,
+                                });
+                            }
+                            cx.notify();
+                        })),
+                    )
                     .child(
                         settings_button(
                             SharedString::from(format!("memory-edit-{}", entry.file)),
@@ -25175,8 +25228,15 @@ impl PilotApp {
         } else {
             ui::stat_row(i18n::t("模型"), model).into_any_element()
         };
+        // I05：引擎能力差异提示（ACP 引擎没有附件/提问卡/压缩通道）。
+        let engine_caps = if engine.eq_ignore_ascii_case("mode") || engine.is_empty() {
+            i18n::t("完整（附件/提问卡/压缩/插话）").to_string()
+        } else {
+            i18n::t("受限：无附件发送 / 提问卡 / 手动压缩").to_string()
+        };
         let mut rows = vec![
             ui::stat_row(i18n::t("引擎"), engine_label).into_any_element(),
+            ui::stat_row(i18n::t("引擎能力"), engine_caps).into_any_element(),
             model_row,
             ui::stat_row(i18n::t("会话 ID"), session).into_any_element(),
             ui::stat_row(i18n::t("消息数"), messages.to_string()).into_any_element(),
