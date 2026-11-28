@@ -14504,7 +14504,9 @@ impl PilotApp {
                                 let checked = cx
                                     .background_executor()
                                     .spawn(async move {
-                                        crate::im_adapter::check_update().await
+                                        // reqwest 需要 tokio reactor：与浏览器按钮
+                                        // 同一模式，不能在 gpui executor 上裸 await。
+                                        tokio_block_on(crate::im_adapter::check_update())
                                     })
                                     .await;
                                 let _ = this.update(cx, |this, cx| match checked {
@@ -14519,8 +14521,12 @@ impl PilotApp {
                                             cx,
                                         );
                                         cx.spawn(async move |this, cx| {
-                                            let result =
-                                                crate::im_adapter::update().await;
+                                            let result = cx
+                                                .background_executor()
+                                                .spawn(async move {
+                                                    tokio_block_on(crate::im_adapter::update())
+                                                })
+                                                .await;
                                             let _ = this.update(cx, |this, cx| match result {
                                                 Ok(new_version) => {
                                                     this.toast(
@@ -15634,14 +15640,18 @@ impl PilotApp {
                         let callback = cx
                             .background_executor()
                             .spawn(async move {
-                                crate::oauth::wait_callback(std::time::Duration::from_secs(180))
-                                    .await
+                                tokio_block_on(crate::oauth::wait_callback(
+                                    std::time::Duration::from_secs(180),
+                                ))
                             })
                             .await;
                         let outcome = match callback {
-                            Ok((code, state)) => {
-                                crate::oauth::finish(&pending, &code, &state).await
-                            }
+                            Ok((code, state)) => cx
+                                .background_executor()
+                                .spawn(async move {
+                                    tokio_block_on(crate::oauth::finish(&pending, &code, &state))
+                                })
+                                .await,
                             Err(message) => Err(message),
                         };
                         let _ = this.update(cx, |this, cx| match outcome {
@@ -24486,7 +24496,7 @@ impl PilotApp {
                 _ => i18n::t("新建企业微信机器人"),
             }));
             body = Some(self.im_create_page(cx));
-        } else if self.settings_open && tab == 7 && self.im_selected.is_some() {
+        } else if self.settings_open && tab == 6 && self.im_selected.is_some() {
             kind = Some(SettingsModalKind::ImDetail);
             modal_title = Some(SharedString::from(i18n::t("机器人详情")));
             body = Some(self.im_bot_detail(cx));

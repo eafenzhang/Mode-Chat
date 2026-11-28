@@ -106,7 +106,7 @@
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1591-1630`、`src/main.rs:7256`（`on_find_shortcut`）/`search_sessions` 调用）/`fn find_dialog_overlay`（`src/main.rs`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1591` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:252`（`const TRANSCRIPT_WINDOW = 120`）、`transcript_limit.saturating_add`，累计翻页） | 无 |
-| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:22293`（`kit_markdown_el`，`.selectable(true)` `:22265`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:25421`）。**Q-04 的动作条**：`wechat_message_actions`（`:20483`）在 `wechat_row_el`（`:19742`）内两个调用点；动作条默认显示在正文下面（icon 样式），流式回答结束才出现；含「复制」`:20515`（按钮 id `wecom-copy-{index}`）、「引用」`:20547`（id `wechat-quote-{index}`）与「复制代码」（仅当 `:20562` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | 引用条已接入 composer；动作条 2026-11-27 改为正文下方 icon 样式 〔降级 v0.6〕 |
+| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:22293`（`kit_markdown_el`，`.selectable(true)` `:22265`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:25421`）。**Q-04 的动作条**：`wechat_message_actions`（`:20483`）在 `wechat_row_el`（`:19742`）内两个调用点；动作条默认显示在正文下面（icon 样式），流式回答结束才出现；含「复制」`:20515`（按钮 id `wecom-copy-{index}`）、「引用」`:20547`（id `wechat-quote-{index}`）与「复制代码」（仅当 `:20565` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | 引用条已接入 composer；动作条 2026-11-27 改为正文下方 icon 样式 〔降级 v0.6〕 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:800`（`MsgKind::Reasoning`，枚举在 `:798`）、`:3693`（`WecomRow::ToolGroup` 折叠组变体；渲染分支 `WecomRow::ToolGroup` 两处（`src/main.rs`/`:20007`）） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
 | F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2172`（`ask_user_question` 工具名）、UI `src/main.rs:5900`（`question_cards`）/（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
@@ -186,7 +186,7 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1022`（`AgentEnd` 聚合 `input_tokens`/`output_tokens`/`cache_read`/`reasoning_tokens`）、`src/main.rs:16011-16119`（四张 `ui::stat_card`：回合 / 总 tokens / 输入 / 输出） | 无 |
+| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1022`（`AgentEnd` 聚合 `input_tokens`/`output_tokens`/`cache_read`/`reasoning_tokens`）、`src/main.rs:16081-16119`（四张 `ui::stat_card`：回合 / 总 tokens / 输入 / 输出） | 无 |
 | M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `usage-range-{days}` chip）、`usage_grouped(days)` 的 `by_day`） | 无 |
 | M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `usage-group-{mode}` chip）、`src/rpi_engine.rs:1786`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1969`（老会话按 header `cwd` 反查名册兜底） | 无 |
 | M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16071` 四档（1/7/30/90 天）、`src/main.rs:3311`（`usage_range`） | 四档够用；无日历选日、无 12 个月（明确降级，v0.6 再加） 〔降级 v0.6〕 |
@@ -216,7 +216,7 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| P01 | 服务商模板 + 密钥 + baseUrl | `ds-bot/src/client/providers-page.js` | ✅ | `src/data.rs:1563`（`provider_templates`）/`add_provider_from_template`）/`set_provider_api_key`）/`set_provider_base_url`）、`src/main.rs:10303`（`添加服务商`面板）/（`provider-add`）、`:20747-20779`（`enum SettingsDetail` 全套详情面板） | 无 |
+| P01 | 服务商模板 + 密钥 + baseUrl | `ds-bot/src/client/providers-page.js` | ✅ | `src/data.rs:1563`（`provider_templates`）/`add_provider_from_template`）/`set_provider_api_key`）/`set_provider_base_url`）、`src/main.rs:10303`（`添加服务商`面板）/（`provider-add`）、`:20817-20849`（`enum SettingsDetail` 全套详情面板） | 无 |
 | P02 | 服务商“测试连接” | `ds-bot/src/client/providers-page.js` | ✅ | `src/main.rs:12934` 区块（`测试连接`，commit `d7ca085`） | 无 |
 | P03 | 添加 / 删除模型 | `ds-bot/src/client/model-menu.js` | ✅ | `src/data.rs:1359`（`add_model`）/`:1363`（`remove_model`）、`src/main.rs`（`AddModel` 分支）/`src/main.rs:10221`（`SettingsDetail::AddModel` 面板体） | 无 |
 | P04 | 按模型配置上下文窗口（check line 由窗口算） | `ds-bot/README.md`（contextWindow） | ✅ | `src/model_limits.rs:20/22`（`FALLBACK_CONTEXT_WINDOW`/`FALLBACK_MAX_TOKENS`）、`:190`（read）、`:211`（resolve，用户值 > 模板 > 兜底）、`:236`（write）、`src/rpi_engine.rs:144-147`（引用常量，不再写死）、UI `src/main.rs` | 无 |

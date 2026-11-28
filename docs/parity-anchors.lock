@@ -206,42 +206,42 @@ src/main.rs:12598|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) 
 src/main.rs:12934|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
 src/main.rs:13699|cx.notify();
 src/main.rs:14209|.child(settings_group(vec![
-src/main.rs:15420|if filtered.is_empty() {
-src/main.rs:16011|body = body.child(ui::section_action(
-src/main.rs:16071|.child(ui::stat_card(
-src/main.rs:16119|} else {
+src/main.rs:15420|cx.notify();
+src/main.rs:16071|cx.notify();
+src/main.rs:16081|.child(ui::stat_card(
+src/main.rs:16119|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1632|strip = strip.child(stage_action_chip(
 src/main.rs:1658|strip = strip.child(stage_action_chip(
 src/main.rs:1679|strip = strip.child(stage_action_chip(
 src/main.rs:1723|.id(SharedString::from(format!(
-src/main.rs:18498|fn delete_group_and_reselect(&mut self, group_id: &str, cx: &mut Context<Self>) 
-src/main.rs:18835|fn toggle_voice_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-src/main.rs:19239|fn approval_note(level: &str) -> &'static str {
-src/main.rs:19301|let _ = (title, body);
-src/main.rs:19742|messages
-src/main.rs:20007|format!("for {}", elapsed_label(ms))
-src/main.rs:20208|fn compose_with_quote(text: &str, quote: Option<(String, String)>) -> String {
-src/main.rs:20483|font_weight: Some(gpui::FontWeight::MEDIUM)
-src/main.rs:20515|text: &str
-src/main.rs:20547|let _ = weak_copy.update(cx, |this, cx| {
-src/main.rs:20562|cx.write_to_clipboard(ClipboardItem::new_string(code));
-src/main.rs:20747|let mut prev_space = true; // 首部空白也压掉
-src/main.rs:20787|const SETTINGS_PAGES: [&str; 13] = [
-src/main.rs:20807|enum SettingsDetail {
+src/main.rs:18498|Err(message) => {
+src/main.rs:18835|if this.screenshot_watching {
+src/main.rs:19239|.font_family(theme::FONT_FAMILY)
+src/main.rs:19301|return;
+src/main.rs:19742|mix(author_id.len());
+src/main.rs:20007|.line_height(px(18.))
+src/main.rs:20208|"会话尚未建立"
+src/main.rs:20483|if boundary_ok {
+src/main.rs:20515|///
+src/main.rs:20547|.pointer()
+src/main.rs:20565|if let Some(code) = fenced_code(text) {
+src/main.rs:20787|.line_height(px(16.))
+src/main.rs:20807|"用量"
+src/main.rs:20817|enum SettingsDetail {
 src/main.rs:2095|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
 src/main.rs:2139|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:214|fn panel_target_width(
-src/main.rs:21567|for bot in bots {
-src/main.rs:22265|Some((prompt.request_id.clone(), option, note))
-src/main.rs:22293|fn kit_markdown_el(id: String, text: &str, wechat: bool, font_size: f32) -> gpui
+src/main.rs:21567|Err(message) => this.toast(message, cx)
+src/main.rs:22265|bot_team::approval::ApprovalLevel::Full => "full"
+src/main.rs:22293|.options
 src/main.rs:2305|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:231|}
 src/main.rs:2385|"task-reassign-{}"
 src/main.rs:2428|"task-reassign-{}-{}"
-src/main.rs:24627|fn chat_info_panel(&mut self, _window: &Window, cx: &mut Context<Self>) -> impl 
+src/main.rs:24627|.into_any_element()
 src/main.rs:2499|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:252|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:26698|.items_center()
+src/main.rs:26698|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2854|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2872|fn finish_member(&mut self, member: &str) {
 src/main.rs:3311|/// 用量页时间范围（天）：1/7/30/90。
