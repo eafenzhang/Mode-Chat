@@ -2907,6 +2907,8 @@ struct BotFormState {
     editing_id: Option<String>,
     name: Entity<SimpleInput>,
     role: Entity<SimpleInput>,
+    /// Bot 指令（写进 AGENTS.md 受管块的「## 指令」）。
+    instructions: Entity<SimpleInput>,
     directory: Entity<SimpleInput>,
     identity_on: bool,
     /// 隐私 Bot：会话单独落盘、不参与全局搜索、不能加入群聊。
@@ -2927,6 +2929,11 @@ impl Render for BotFormState {
             .gap(px(10.))
             .child(dialog_field("bot-name", i18n::t("名字"), &self.name))
             .child(dialog_field("bot-role", i18n::t("角色"), &self.role))
+            .child(dialog_field(
+                "bot-instructions",
+                i18n::t("指令（写进 AGENTS.md 的「## 指令」）"),
+                &self.instructions,
+            ))
             .child(dialog_field("bot-dir", i18n::t("工作目录"), &self.directory));
         // 新建与编辑都显示图标/颜色（编辑时从 bot-appearance.json 预填）。
         {
@@ -11397,6 +11404,7 @@ impl PilotApp {
             editing_id,
             name_text,
             role_text,
+            instructions_text,
             directory_text,
             identity_on,
             private_on,
@@ -11416,6 +11424,7 @@ impl PilotApp {
                     None,
                     String::new(),
                     String::new(),
+                    String::new(),
                     directory,
                     false,
                     false,
@@ -11433,6 +11442,7 @@ impl PilotApp {
                     Some(id.clone()),
                     bot.name.clone(),
                     bot.role.clone(),
+                    bot.instructions.clone(),
                     directory,
                     bot.identity_sync,
                     bot.is_private,
@@ -11442,9 +11452,12 @@ impl PilotApp {
         };
         let name = cx.new(|cx| SimpleInput::new(i18n::t("名字（必填）"), theme::ink_tertiary, cx));
         let role = cx.new(|cx| SimpleInput::new(i18n::t("角色（可选）"), theme::ink_tertiary, cx));
+        let instructions =
+            cx.new(|cx| SimpleInput::new(i18n::t("指令（可选）"), theme::ink_tertiary, cx));
         let directory = cx.new(|cx| SimpleInput::new("", theme::ink_tertiary, cx));
         name.update(cx, |input, cx| input.set_content(name_text, cx));
         role.update(cx, |input, cx| input.set_content(role_text, cx));
+        instructions.update(cx, |input, cx| input.set_content(instructions_text, cx));
         directory.update(cx, |input, cx| input.set_content(directory_text, cx));
         let (appearance_icon, appearance_color) = editing_id
             .as_deref()
@@ -11460,6 +11473,7 @@ impl PilotApp {
             editing_id,
             name,
             role,
+            instructions,
             directory,
             identity_on,
             private_on,
@@ -11472,11 +11486,23 @@ impl PilotApp {
 
     /// 保存 Bot 表单（新建或更新），返回是否成功。
     fn save_bot_form(&mut self, form: &Entity<BotFormState>, cx: &mut Context<Self>) -> bool {
-        let (name, role, directory, identity_on, private_on, chief_on, editing_id, icon, color) = {
+        let (
+            name,
+            role,
+            instructions_text,
+            directory,
+            identity_on,
+            private_on,
+            chief_on,
+            editing_id,
+            icon,
+            color,
+        ) = {
             let form = form.read(cx);
             (
                 form.name.read(cx).content().trim().to_string(),
                 form.role.read(cx).content().trim().to_string(),
+                form.instructions.read(cx).content().trim().to_string(),
                 form.directory.read(cx).content().trim().to_string(),
                 form.identity_on,
                 form.private_on,
@@ -11507,6 +11533,7 @@ impl PilotApp {
                 identity_on,
                 private_on,
                 chief_on,
+                &instructions_text,
             ),
             None => data::create_bot(
                 &name,
@@ -25783,6 +25810,7 @@ impl PilotApp {
             .children(self.group_task_bar(cx))
             .children(self.queue_panel(cx))
             .children(self.task_capsule_row(cx))
+            .children(self.queue_hint_row(cx))
             .child(self.wechat_composer(window, cx))
     }
 
@@ -26893,6 +26921,75 @@ impl PilotApp {
         )
     }
 
+    /// 输入框上方的排队提示：回目中排队的消息数 + 一键清空（无排队不占位）。
+    fn queue_hint_row(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let key = self.active_key()?;
+        let count = self.chats.get(&key).map(|chat| chat.queued.len()).unwrap_or(0);
+        if count == 0 {
+            return None;
+        }
+        Some(
+            div()
+                .id("queue-hint")
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(ui_kit::S2))
+                .py(px(ui_kit::S1))
+                .child(
+                    div()
+                        .font_family(wechat_theme::FONT_FAMILY)
+                        .text_size(px(ui_kit::T_LABEL))
+                        .line_height(px(ui_kit::T_LABEL_LH))
+                        .text_color(wechat_theme::time_label())
+                        .child(SharedString::from(
+                            tri!(
+                                "{count} 条消息排队中 · 回合结束后自动发送",
+                                "{count} message(s) queued · sent after this turn"
+                            )
+                            .to_string(),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("queue-hint-clear")
+                        .px(px(ui_kit::S2))
+                        .py(px(1.))
+                        .rounded(px(theme::RADIUS_TAG))
+                        .pointer()
+                        .hover(|style| style.bg(wechat_theme::list_hover()))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let key = this.active_key();
+                            let mut cleared = 0usize;
+                            if let Some(chat) = key.and_then(|key| this.chats.get_mut(&key)) {
+                                cleared = chat.queued.len();
+                                chat.queued.clear();
+                            }
+                            if cleared > 0 {
+                                this.toast(
+                                    tri!(
+                                        "已清空 {cleared} 条排队消息",
+                                        "Cleared {cleared} queued message(s)"
+                                    )
+                                    .to_string(),
+                                    cx,
+                                );
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .font_family(wechat_theme::FONT_FAMILY)
+                                .text_size(px(ui_kit::T_LABEL))
+                                .text_color(wechat_theme::list_preview())
+                                .child(i18n::t("清空")),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn wechat_composer(
         &mut self,
         _window: &Window,
@@ -27961,6 +28058,7 @@ mod auto_permission_tests {
             model: None,
             last_session_id: None,
             identity_sync: true,
+            instructions: String::new(),
             approval_level: level.to_string(),
             approval_allowlist: Vec::new(),
         }

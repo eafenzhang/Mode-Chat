@@ -25,31 +25,31 @@
 | A02 | 编辑 Bot | `ds-bot/src/host/tools.js:363`（update_bot） | ✅ | `src/main.rs`（`save_bot_form`）、`update_bot`） | 只会改 7 个字段，改不了模型/指令 |
 | A03 | 删除 Bot（二次确认） | `ds-bot/src/host/tools.js:298`（stop_bot/删除走 UI） | ✅ | `src/data.rs:701`（`delete_bot`）、`fn open_delete_bot_dialog`（`src/main.rs`） | 无 |
 | A04 | Bot 形象：20 字符 + 12 色 + 自选照片/头像库 | `ds-bot/src/client/characters.js`、`avatar-library.js` | 🟡 | `for (key, _label) in bot_icon::ICONS`）、`for (hex, label) in bot_icon::COLORS`）、`src/bot_icon.rs:18`（`ICONS`）/`COLORS`） | 只有 1 组图标 + 8 色（`bot_icon.rs` 的 `ICONS`/`COLORS`；原记的「9 图标 + 5 色」已过时），无照片上传、无头像库 〔降级 v0.6〕 |
-| A05 | Bot 指令（instructions）可编辑 | `ds-bot/src/host/roster.js`（instructions 字段） | 🟡 | 字段存在：`crates/bot-team/src/teammate.rs:36`；但 `src/data.rs:160` 新建固定写空串，UI 无编辑入口 | 能力有、入口无——用户无法写指令 〔降级 v0.6〕 |
+| A05 | Bot 指令（instructions）可编辑 | `README.zh.md`（instructions） | ✅ | `crates/bot-team/src/teammate.rs:36`（记录字段）→ `src/data.rs`（Bot.instructions 解析/写回 `update_bot`）；Bot 编辑对话框「指令」字段 → `sync_identity_fields` 写入 AGENTS.md「## 指令」 | 无 |
 | A06 | 换工作目录后会话在新目录继续 | `ds-bot/README.md`（Working folders） | 🟡 | `update_bot`）只改名册；`src/main.rs`（`restore_draft`）仅在新会话时读目录 | 改目录不重建会话，旧会话仍跑旧目录 〔降级 v0.6〕 |
-| A07 | Bot 详情页（模型/审批/会话/待办/目录） | `ds-bot/src/client/details-drawer.js` | ✅ | `src/main.rs:24841`（`chat_info_panel`，微信壳详情栏；classic 的 `bot_details` 已随 D-CUT 删除） | 无记忆行（见 A08） |
-| A08 | 详情页「记忆」行 + 管理入口 | `ds-bot/src/client/memory-panel.js`、`details-drawer.js` | ✅ | `.id("chat-info-memory-row")`，微信壳详情栏）、枚举分支与面板体 `src/main.rs:9617`（`SettingsDetail::BotMemory`）；classic 的 `bot-details-memory-row` 已随 D-CUT 删除 | 无 |
+| A07 | Bot 详情页（模型/审批/会话/待办/目录） | `ds-bot/src/client/details-drawer.js` | ✅ | `src/main.rs:24868`（`chat_info_panel`，微信壳详情栏；classic 的 `bot_details` 已随 D-CUT 删除） | 无记忆行（见 A08） |
+| A08 | 详情页「记忆」行 + 管理入口 | `ds-bot/src/client/memory-panel.js`、`details-drawer.js` | ✅ | `.id("chat-info-memory-row")`，微信壳详情栏）、枚举分支与面板体 `src/main.rs:9624`（`SettingsDetail::BotMemory`）；classic 的 `bot-details-memory-row` 已随 D-CUT 删除 | 无 |
 | A09 | 侧栏分组（section）归组/折叠/染色 | `ds-bot/src/client/folder-menu.js`、`host/folders.js` | ✅ | `fn sidebar_sections_section`，分组 CRUD）、`:13114`（`section-up-*`）、`:13166`（`section-delete-*`）、`src/main.rs:750`（`sidebar_section_dot` 染色辅助） | 无 |
-| A10 | 置顶 / 隐藏 / 恢复显示 | `ds-bot/src/client/sidebar.js`（pushpin） | ✅ | `src/data.rs:40`（`pinned`）、`:79`（`hidden_bots`）、`set_bot_flags`）、`src/main.rs`（「隐藏」菜单项）、`src/main.rs:13913`（「已隐藏」区） | 无 |
+| A10 | 置顶 / 隐藏 / 恢复显示 | `ds-bot/src/client/sidebar.js`（pushpin） | ✅ | `src/data.rs:40`（`pinned`）、`:79`（`hidden_bots`）、`set_bot_flags`）、`src/main.rs`（「隐藏」菜单项）、`src/main.rs:13940`（「已隐藏」区） | 无 |
 | A11 | Bot 实时状态（正在做什么） | `ds-bot/src/client/member-status.js`、`host/feed.js` | 🟡 | `src/backend.rs:191`（`SessionEvent::Delta` 带 `member`，成员状态事件）、`src/main.rs:2858`（`push_member_delta`） | 只有“正在输出”，没有“正在做什么/在哪一步” 〔降级 v0.6〕 |
-| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | ✅ | `src/data.rs:37`（`is_main`）→ `fn main_bot_card`（`src/main.rs:24199`：会话列表顶部固定突出卡，accent 软底 + 主 Bot 徽标 + 状态点 + 最近预览，点击直达；普通列表不重复占行，未设主 Bot 时不占位） | 无 |
+| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | ✅ | `src/data.rs:37`（`is_main`）→ `fn main_bot_card`（`src/main.rs:24226`：会话列表顶部固定突出卡，accent 软底 + 主 Bot 徽标 + 状态点 + 最近预览，点击直达；普通列表不重复占行，未设主 Bot 时不占位） | 无 |
 | A13 | Bot 详情页用量/待办 | `ds-bot/src/client/usage-page.js` | ✅ | `ui::section(i18n::t("待办"))`，微信壳详情栏；classic 的 `bot_details` 已随 v0.6 D-CUT 删除）、`im-group-activation-{label}`，用量） | 无 |
 
 ## B. Main bot 与权限（5 项）
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| B01 | Main bot 全局唯一 | `README.zh.md:68` | ✅ | `src/data.rs:96`（`demote_other_chiefs`）、`:175`（晋升 Main bot 时调用）/`:682`（`demote_other_chiefs`，降级时调用） | 无 |
+| B01 | Main bot 全局唯一 | `README.zh.md:68` | ✅ | `src/data.rs:98`（`demote_other_chiefs`）、`:175`（晋升 Main bot 时调用）/`:682`（`demote_other_chiefs`，降级时调用） | 无 |
 | B02 | Main bot 通过对话管理其他 Bot | `ds-bot/src/host/tools.js:325/363`（create_bot/update_bot） | ❌ | `src/*.rs` 中 grep `"create_bot"`/`"update_bot"` = 0 命中 | 只能手工点界面，Bot 无法自己建/改 Bot 〔降级 v0.6〕 |
-| B03 | 权限预设（只读 / 工作区 / 完全访问） | `ds-bot/README.md`（Permission presets） | 🟡 | `src/data.rs:46`（approval_level）、`src/main.rs:12812`（`permission_menu_overlay`，ask/auto/full 三档）、`:19453`（`approval_note`）；classic 的 `bot_details` 已删 | 三档是“工具审批”语义，不是文件系统权限预设 〔降级 v0.6〕 |
-| B04 | 审批白名单可视化维护 | `ds-bot/src/client/approval-notices.js` | ✅ | `src/main.rs:12812`（`permission_menu_overlay`，三档审批）、`src/main.rs:11028`（`SettingsDetail::Allowlist` 分支） | 无 |
+| B03 | 权限预设（只读 / 工作区 / 完全访问） | `ds-bot/README.md`（Permission presets） | 🟡 | `src/data.rs:46`（approval_level）、`src/main.rs:12839`（`permission_menu_overlay`，ask/auto/full 三档）、`:19480`（`approval_note`）；classic 的 `bot_details` 已删 | 三档是“工具审批”语义，不是文件系统权限预设 〔降级 v0.6〕 |
+| B04 | 审批白名单可视化维护 | `ds-bot/src/client/approval-notices.js` | ✅ | `src/main.rs:12839`（`permission_menu_overlay`，三档审批）、`src/main.rs:11035`（`SettingsDetail::Allowlist` 分支） | 无 |
 | B05 | Bot 互相可见 / 互发消息 | `ds-bot/src/host/tools.js:80`（list_bots）、`:167`（message_bot） | ✅ | `src/bot_tools.rs:78`（`list_bots` 工具；同一个 `tools` 里还有 whoami `:69`、message_bot `:87`、post_to_group `:104`）、`src/backend.rs:561`（`Command::AskBot`，60s 内没答完回「已投递」、目标在跑即拒、隐私直拒） | 无 |
 
 ## C. 群聊协作（15 项）
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| C01 | 群聊增删改（成员/目录/策略） | `README.zh.md:74` | ✅ | `src/data.rs:1824`（`create_group`）/`:1843`（`update_group`）/`:1876`（`delete_group`）、`data::GroupDraft` 构造）、`src/main.rs:18712`（`delete_group` 调用） | 无 |
+| C01 | 群聊增删改（成员/目录/策略） | `README.zh.md:74` | ✅ | `src/data.rs:1854`（`create_group`）/`:1873`（`update_group`）/`:1906`（`delete_group`）、`data::GroupDraft` 构造）、`src/main.rs:18739`（`delete_group` 调用） | 无 |
 | C02 | 群聊共享工作目录生效于所有成员 | `ds-bot/README.md`（group folder） | ✅ | `src/data.rs:62`（`directory`）；建成员会话时群目录优先：`let workspace = match &group.directory`） | 无（改群目录后已建会话需重进，属可接受） |
 | C03 | 管理员先答 / 全员轮流（responder_policy） | `ds-bot/README.md`（admin-first / all-members） | ✅ | `src/backend.rs:1686`（`responder_policy` 路由）/`:1684`（`chosen` 选取） | 无 |
 | C04 | @ 点名（含 @所有人、边界规则） | `ds-bot/src/shared/mentions.js` | ✅ | `src/backend.rs:1684`（bot_team::mentions::parse_mentions）、`crates/bot-team/src/mentions.rs:110` | 无 |
@@ -59,8 +59,8 @@
 | C08 | 阶段“证据”校验后才推进 | `ds-bot/src/host/goals.js:19`（STAGE_ACCEPTANCE_MAX）、`:760/767`（pass/rework） | ✅ | `crates/bot-team/src/goal.rs:136/142/147`（SetAcceptance/PassStage/ReworkStage）、`:208`（migrate_goal）、`src/team_tools.rs:193/208/223`（三个工具）、UI `src/main.rs:1636`（`goal-stage-pass-*`）、`:1662`（`goal-stage-rework-*`）、`:1683`（`goal-stage-acceptance-*`）、`goal-acceptance-save`）、`:1727`（`goal-stage-error-*` 行内错误） | 无 |
 | C09 | 派活台账（子任务 + 负责人 + 期望结果） | `ds-bot/src/host/tools.js:167`、`groups.js` | ✅ | `src/group_tasks.rs:210/253`、`team_assign` 工具名） | 无 |
 | C10 | 任务 Stop / Retry / Reassign / Cancel | `ds-bot/src/host/groups.js`（task actions） | ✅ | `src/main.rs:2309`（`task-stop-*`）、`:2389`/`:2432`（`task-reassign-*`）、`:2099`（`cancel_subtree`）、`:2143`（`retry_or_reassign`）、`src/group_tasks.rs:347/371/392/446` | 无 |
-| C11 | 群公告 notice（共享指令） | `ds-bot/src/client/group-settings.js`（notice） | ❌ | `src/data.rs:58-72`（Group 无 notice 字段） | 只能靠 instructions/memory 顶替（未入 v0.5 范围，见 §5 风险表） 〔降级 v0.6〕 |
-| C12 | “+ → 引用某个 Bot 的对话”作为上下文 | `ds-bot/src/client/composer.js`（Reference a chat） | ❌ | 只有消息级引用 `src/main.rs:20422`（`compose_with_quote`） | 不能把另一段对话整体带入（未入 v0.5 范围） 〔降级 v0.6〕 |
+| C11 | 群公告 notice（共享指令） | `ds-bot/src/client/group-settings.js`（notice） | ❌ | `src/data.rs:63-77`（Group 无 notice 字段） | 只能靠 instructions/memory 顶替（未入 v0.5 范围，见 §5 风险表） 〔降级 v0.6〕 |
+| C12 | “+ → 引用某个 Bot 的对话”作为上下文 | `ds-bot/src/client/composer.js`（Reference a chat） | ❌ | 只有消息级引用 `src/main.rs:20449`（`compose_with_quote`） | 不能把另一段对话整体带入（未入 v0.5 范围） 〔降级 v0.6〕 |
 | C13 | 从群外往群里发消息（post_to_group / group_relay） | `ds-bot/src/host/tools.js:607`、`ds-bot/src/host/groups.js:1439` | ✅ | `src/bot_tools.rs:104`（post_to_group 工具）、`src/backend.rs:569`（`Command::PostGroup`）、`BackendEvent::GroupPost` 走既有 `send_group_in_turn` | `group_relay`（IM 群里的转发）未做，仅 Bot 主动发言 |
 | C14 | 群成员状态行（谁在跑、跑什么） | `ds-bot/src/client/member-status.js` | 🟡 | `src/backend.rs:191-194`、`src/main.rs:2876`（`finish_member`） | 只有成员标签，无状态聚合行 〔降级 v0.6〕 |
 | C15 | 群记忆注入到每个成员回合 | `ds-bot/README.md`（group memory snapshot） | ✅ | `src/data.rs:404`、`src/backend.rs:1740`（`group_memory`） | 无 |
@@ -70,9 +70,9 @@
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
 | D01 | 会话独立落盘、不进全局搜索 | `ds-bot/src/host/privacy.js:29-32` | ✅ | `private_bot_id`）、`src/backend.rs:335-353`、`src/rpi_engine.rs:1644`（`private_workspaces`：搜索跳过 `.private`） | 无 |
-| D02 | 不能进群 | `README.zh.md:82` | ✅ | `.filter(|bot| !bot.is_private)` 八处（`src/main.rs:4371/4691/5612/8882/11564/11574/11581/19515`，最后一处在 `fn visible_group_members` 里）、群表单渲染 `:2503` | 无 |
-| D03 | 不能当 Main bot / Chief | `README.zh.md:82` | ✅ | `src/data.rs:88`（check_chief_private）、`:96` | 无 |
-| D04 | 删除后内容继续受保护（kept-private 登记） | `ds-bot/src/client/kept-private.js`、`ds-bot/src/host/privacy.js:31-32` | ✅ | `src/privacy.rs:80`（archive_private_bot）、`:51`（archived_private_bots）、`:98`（release_archive）、`archive_private_bot`，删隐私 Bot 前登记）、UI `src/main.rs:12229`（`archived_private_bots` 读归档列表）、`src/main.rs:12278`（`private-archive-row-*` 行）、`release_archive` 解除保护） | 无 |
+| D02 | 不能进群 | `README.zh.md:82` | ✅ | `.filter(|bot| !bot.is_private)` 八处（`src/main.rs:4378/4698/5619/8889/11591/11601/11608/19542`，最后一处在 `fn visible_group_members` 里）、群表单渲染 `:2503` | 无 |
+| D03 | 不能当 Main bot / Chief | `README.zh.md:82` | ✅ | `src/data.rs:90`（check_chief_private）、`:98` | 无 |
+| D04 | 删除后内容继续受保护（kept-private 登记） | `ds-bot/src/client/kept-private.js`、`ds-bot/src/host/privacy.js:31-32` | ✅ | `src/privacy.rs:80`（archive_private_bot）、`:51`（archived_private_bots）、`:98`（release_archive）、`archive_private_bot`，删隐私 Bot 前登记）、UI `src/main.rs:12256`（`archived_private_bots` 读归档列表）、`src/main.rs:12305`（`private-archive-row-*` 行）、`release_archive` 解除保护） | 无 |
 | D05 | 出站共享需审批（写外部文件、给其他 Bot 发消息） | `ds-bot/src/host/privacy.js:172`（guardTeam）、`:242`（guardFiles） | ✅ | `src/privacy.rs:201`（`privacy::precheck`：路径归属最长前缀判定）、`src/rpi_engine.rs:451`（`cross_dir`：非 full 档先跑 precheck；full=完全自主时跳过） | 只覆盖 `read/write/edit/bash/powershell/mcp__*`；`computer_*`/`browser_*` 不在路径范围（见 §5 风险表 R-07） |
 
 ## E. 记忆（13 项）
@@ -87,9 +87,9 @@
 | E06 | 群记忆自动回顾（idle 后一次模型调用） | `ds-bot/src/host/memory-review.js:1-6` | ✅ | `src/memory_review.rs:83/196/318`、`src/backend.rs:2482`（run_memory_review） | 无 |
 | E07 | 私聊记忆自动回顾 | 同上 | ❌ | `src/backend.rs:2482-2256` 只处理 `group_id` | **明确降级到 v0.6**：私聊不自动回顾（手动 `remember` 已可用，见 E05） 〔降级 v0.6〕 |
 | E08 | 记忆面板：团队 / 群 | `ds-bot/src/client/memory-panel.js` | ✅ | `src/main.rs`（`settings_page_team_memory`，团队）、`fn group_memory_section`（`src/main.rs`，群） | 无 |
-| E09 | 记忆面板：单个 Bot | 同上 | ✅ | `src/main.rs:9617`（`SettingsDetail::BotMemory` 列表/新增/撤销/编辑）、`src/main.rs`（`MemoryScope::Bot`） | 无 |
+| E09 | 记忆面板：单个 Bot | 同上 | ✅ | `src/main.rs:9624`（`SettingsDetail::BotMemory` 列表/新增/撤销/编辑）、`src/main.rs`（`MemoryScope::Bot`） | 无 |
 | E10 | 记忆整理（tidy / 合并重复 / archive） | `ds-bot/src/host/memory-tidy.js` | ✅ | `crates/bots-service/src/memory_store.rs:659`（tidy_memory）、`:640`（maybe_daily_tidy 每日一次，写入路径自动触发 `:1133/1161`） | 自动整理已在跑；缺「手动整理 + 撤销整批」的 UI 入口 |
-| E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:530`（`undo_team_memory`）/`undo_bot_memory`） | 无 |
+| E11 | 变更历史 + 撤销 | `ds-bot/src/host/memory.js`（journal.jsonl） | ✅ | `crates/bots-service/src/memory_store.rs:1224/1258`、`src/data.rs:532`（`undo_team_memory`）/`undo_bot_memory`） | 无 |
 | E12 | 条目移动到其他作用域 / 摘要 | `ds-bot/src/host/memory-copy.js` | 🟡 | `crates/bots-service/src/memory_store.rs:805`（move_memory，仅测试调用 `:1631`） | 能力有，UI 无入口 〔降级 v0.6〕 |
 | E13 | 记忆安全（拒绝密钥/密码） | `ds-bot/README.md`（Safety） | ✅ | `src/memory_tools.rs:397`（`looks_sensitive`：密码/令牌/密钥/长数字，`:194` 返回中文拒绝语）、`src/memory_review.rs:196`（`parse_operations` 字段校验） | 无 |
 
@@ -97,22 +97,22 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| F01 | 历史会话切换（resume） | `ds-bot/src/host/parts.js` | ✅ | `src/main.rs:21781`（历史会话列表，`HISTORY_ROWS`）、`panel-history-{target}` 行）、`history_entries`） | 无 |
-| F02 | 新会话 | 同上 | ✅ | **三条入口**：Ctrl+N `src/main.rs:6982`（`on_new_session_shortcut`）、标题栏「+」`.id("wechat-new-session")` （点击回调调共用函数 `new_session_for_selected`）、命令面板「新会话」`PaletteCmd::NewSession` （派发 `:7780`）。共用实现是 `new_session_for_selected`（）：Ctrl+N 与标题栏「+」都走它；命令面板那条（`:7780`）是**行为等价但独立**的实现（自带 streaming 守卫、`push_history`、`sessions.save()`，未调共用函数），去重记 v0.6 | 无 |
+| F01 | 历史会话切换（resume） | `ds-bot/src/host/parts.js` | ✅ | `src/main.rs:21808`（历史会话列表，`HISTORY_ROWS`）、`panel-history-{target}` 行）、`history_entries`） | 无 |
+| F02 | 新会话 | 同上 | ✅ | **三条入口**：Ctrl+N `src/main.rs:6989`（`on_new_session_shortcut`）、标题栏「+」`.id("wechat-new-session")` （点击回调调共用函数 `new_session_for_selected`）、命令面板「新会话」`PaletteCmd::NewSession` （派发 `:7787`）。共用实现是 `new_session_for_selected`（）：Ctrl+N 与标题栏「+」都走它；命令面板那条（`:7787`）是**行为等价但独立**的实现（自带 streaming 守卫、`push_history`、`sessions.save()`，未调共用函数），去重记 v0.6 | 无 |
 | F03 | 回合中插话（steer，不打断） | `ds-bot/src/host/steer.js` | ✅ | `src/composer_input.rs:16`（SendSecondary）、`src/rpi_engine.rs:1299-1322` | 无 |
-| F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | 🟡 | `src/main.rs:5457`（`queue_current`）/`:5484`（`flush_queue`）、`queued: Vec<QueuedSend>`）、`:5445`（`MAX_QUEUED = 5`）；上限 5 条 | 逻辑有，但无排队条 UI（DS 有独立 dock），用户看不到排了几条 〔降级 v0.6〕 |
+| F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | ✅ | `src/main.rs`（`queue_current`/`flush_queue`、`queued: Vec<QueuedSend>`、`MAX_QUEUED = 5`）；输入框上方「N 条消息排队中 · 回合结束后自动发送 + 清空」提示条；右栏「排队中的消息」明细 | 无 |
 | F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `strip_prefix("/side")` 命令入口）、`fn open_side`）、`fn apply_side_event`，旁路事件不进主 chat） | 无 |
 | F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`harness.events().watch` 监听）、`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs`（`chat.compacting` 写入）、`:24818`（`chat.compacting` 读点）、`:19212`（`WecomRow::Compacting` 行分支）、行定义 `fn compaction_status_row`，`id="chat-compaction-status"` 在 `:21617`）、`:1030`（`PaletteCmd::Compact` 定义）→ `:7600`（派发）、入口：命令面板（`PaletteCmd::Compact`） | IM 侧 `/compact` 已接（BotCommand::Compact → compact_session）；checkpoint/handoff 语义未做（上游 pi-rust 无公开 API） | 〔降级 v0.6：checkpoint/handoff 语义〕 |
-| F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1591-1630`、`src/main.rs:7300`（`on_find_shortcut`）/`search_sessions` 调用）/`fn find_dialog_overlay`（`src/main.rs`） | 无 |
+| F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1591-1630`、`src/main.rs:7307`（`on_find_shortcut`）/`search_sessions` 调用）/`fn find_dialog_overlay`（`src/main.rs`） | 无 |
 | F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | ✅ | `src/search_index.rs`（独立 FTS5 索引库 `v2/search-index.sqlite`，trigram 分词 CJK 友好，`refresh` @ `:52`，mtime 增量重建）；Ctrl+F 先查索引、不可用回退 `src/rpi_engine.rs:1591` 线性扫；隐私目录/workspace 排除 | 旧 db.sqlite 走原 LIKE（新会话全在 JSONL） |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:254`（`const TRANSCRIPT_WINDOW = 120`）、`transcript_limit.saturating_add`，累计翻页） | 无 |
-| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:22507`（`kit_markdown_el`，`.selectable(true)` `:22479`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:25725`）。**Q-04 的动作条**：`wechat_message_actions`（`:20697`）在 `wechat_row_el`（`:19956`）内两个调用点；动作条默认显示在正文下面（icon 样式），流式回答结束才出现；含「复制」`:20729`（按钮 id `wecom-copy-{index}`）、「引用」`:20761`（id `wechat-quote-{index}`）与「复制代码」（仅当 `:20779` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | 引用条已接入 composer；动作条 2026-11-27 改为正文下方 icon 样式 〔降级 v0.6〕 |
-| F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:802`（`MsgKind::Reasoning`，枚举在 `:800`）、`:3701`（`WecomRow::ToolGroup` 折叠组变体；渲染分支 `WecomRow::ToolGroup` 两处（`src/main.rs`/`:20221`）） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
-| F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2172`（`ask_user_question` 工具名）、UI `src/main.rs:5941`（`question_cards`）/（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
+| F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:22534`（`kit_markdown_el`，`.selectable(true)` `:22506`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:25752`）。**Q-04 的动作条**：`wechat_message_actions`（`:20724`）在 `wechat_row_el`（`:19983`）内两个调用点；动作条默认显示在正文下面（icon 样式），流式回答结束才出现；含「复制」`:20756`（按钮 id `wecom-copy-{index}`）、「引用」`:20788`（id `wechat-quote-{index}`）与「复制代码」（仅当 `:20806` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | 引用条已接入 composer；动作条 2026-11-27 改为正文下方 icon 样式 〔降级 v0.6〕 |
+| F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:802`（`MsgKind::Reasoning`，枚举在 `:800`）、`:3708`（`WecomRow::ToolGroup` 折叠组变体；渲染分支 `WecomRow::ToolGroup` 两处（`src/main.rs`/`:20248`）） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
+| F12 | 阻塞式提问卡（ask_user） | `ds-bot/src/host/tools.js:670` | ✅ | `src/rpi_engine.rs:2172`（`ask_user_question` 工具名）、UI `src/main.rs:5948`（`question_cards`）/（`question_card_el`） | 工具名不叫 ask_user，语义等价 |
 | F13 | `show_view` 卡片（指标/表格/图表/表单/HTML） | `ds-bot/src/host/tools.js:726` | ❌ | grep `"show_view"` = 0 命中 | Bot 无法在回复里画图表/表单 〔降级 v0.6〕 |
-| F14 | ACP 表单提问（elicitation） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/main.rs:6160`（`elicitation_cards`）/（`elicitation_card_el`）/`:6513`（`submit_elicitation`）、`src/backend.rs:144`（`ElicitationCard`） | 无 |
+| F14 | ACP 表单提问（elicitation） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/main.rs:6167`（`elicitation_cards`）/（`elicitation_card_el`）/`:6520`（`submit_elicitation`）、`src/backend.rs:144`（`ElicitationCard`） | 无 |
 | F15 | 图片附件（发送 + 历史回源） | `ds-bot/src/host/images.js` | ✅ | `src/rpi_engine.rs:2106`（images_from_attachments）、`src/main.rs`（`stage_attachment_paths`） | 无 |
-| F16 | 语音转写 | `ds-bot/src/client/voice.js`、`speech.js` | ❌ | `src/main.rs:19049`（`toggle_voice_typing`，只调系统 Win+H）、 自认“未接入” | 无 ASR 〔降级 v0.6〕 |
+| F16 | 语音转写 | `ds-bot/src/client/voice.js`、`speech.js` | ❌ | `src/main.rs:19076`（`toggle_voice_typing`，只调系统 Win+H）、 自认“未接入” | 无 ASR 〔降级 v0.6〕 |
 
 ## G. 浏览器（6 项）
 
@@ -121,7 +121,7 @@
 | G01 | 浏览器工具集（打开/读页/点击/输入/等待/上传…） | `ds-bot/src/host/browser/*.js` | ✅ | `src/browser_tools.rs:445`（`tools`，20 个工具 `:450`-`:651`） | 无 |
 | G02 | 每个 Bot 独立 profile（登录态互不干扰、重启保留） | `ds-bot/src/host/browser/session.js`（`bot:<id>` 分区） | ✅ | `src/browser_tools.rs:46`（`session_key`）、`profile_dir` 用 `{data_root}/runtime/browser-profiles/<botId>`，去时间戳）、`:33`（`MAX_SESSIONS=4` LRU）、启动前清 `SingletonLock` | 无 |
 | G03 | Cookie 导入（文件 / 本机浏览器） | `ds-bot/src/client/browser-pane.js`（import） | ❌ | `src/browser_tools.rs` 无 cookie 相关代码 | 未入 v0.5 范围（profile 复用已能保留登录态，见 G02） 〔降级 v0.6〕 |
-| G04 | 内嵌浏览器面板（在右栏看页面） | `ds-bot/src/client/browser-pane.js` | ❌ | `src/main.rs:8633` 只有“用系统浏览器打开 URL + 最近 + 已装浏览器列表” | 未入 v0.5 范围 〔降级 v0.6〕 |
+| G04 | 内嵌浏览器面板（在右栏看页面） | `ds-bot/src/client/browser-pane.js` | ❌ | `src/main.rs:8640` 只有“用系统浏览器打开 URL + 最近 + 已装浏览器列表” | 未入 v0.5 范围 〔降级 v0.6〕 |
 | G05 | 敏感动作需批准（发布/上传/下载/删除） | `ds-bot/src/host/browser/refs.js`、`handoff-card.js` | 🟡 | 全部浏览器工具走统一审批闸门 `src/rpi_engine.rs:422`（`hook`）/`:503`（`ask_permission`） | 无“发布/付款”专项分级，无接管卡片（v0.6） 〔降级 v0.6〕 |
 | G06 | 浏览器插件（refs/script/task） | `ds-bot/src/host/browser-plugins.js` | ❌ | 无 | 未入 v0.5 范围 〔降级 v0.6〕 |
 
@@ -142,8 +142,8 @@
 | --- | --- | --- | --- | --- | --- |
 | I01 | 内嵌引擎（自带工具/模型） | `README.zh.md:88` | ✅ | `src/rpi_engine.rs:1098`（`RpiSession::open`，引擎入口；`:373` 是内置工具集） | 无 |
 | I02 | 外置 ACP 引擎（spawn/续聊/表单） | `ds-bot/src/host/local-agents/acp.js` | ✅ | `src/acp.rs:122/167/384`（session/load） | 无 |
-| I03 | 引擎选择 UI + 探测 | `ds-bot/src/client/local-agents-page.js` | ✅ | `fn settings_page_local_agents`）、`src/data.rs:374`（`local_agents`） | 无 |
-| I04 | Claude Code / Codex CLI / Cursor / Gemini / OpenCode 接入 | `ds-bot/src/host/local-agents/engines.js:5`（KINDS=acp/codex/claude）、`:16-27`（10 个引擎） | ❌ | `src/data.rs:345-352` 明确“只支持这四个，不再探测”；`src/acp.rs:122` 只有 ACP 一种驱动，无 driver 抽象 | 需新增 codex/claude 两种驱动协议 〔降级 v0.6〕 |
+| I03 | 引擎选择 UI + 探测 | `ds-bot/src/client/local-agents-page.js` | ✅ | `fn settings_page_local_agents`）、`src/data.rs:376`（`local_agents`） | 无 |
+| I04 | Claude Code / Codex CLI / Cursor / Gemini / OpenCode 接入 | `ds-bot/src/host/local-agents/engines.js:5`（KINDS=acp/codex/claude）、`:16-27`（10 个引擎） | ❌ | `src/data.rs:349-356` 明确“只支持这四个，不再探测”；`src/acp.rs:122` 只有 ACP 一种驱动，无 driver 抽象 | 需新增 codex/claude 两种驱动协议 〔降级 v0.6〕 |
 | I05 | 引擎能力差异提示（哪些能力 ACP 不支持） | `ds-bot/src/client/agent-cards.js` | 🟡 | `src/i18n.rs:257`（“当前引擎不支持附件发送”）、`:319`（“回合进行中”） | 零散提示，无统一能力表 〔降级 v0.6〕 |
 
 ## J. IM 通道（9 项）
@@ -165,7 +165,7 @@
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
 | K01 | 连接器目录 | `ds-bot/src/host/connectors/catalog.js:20-`（37 个，多数 remote+OAuth） | 🟡 | `crates/connectors-service/src/lib.rs:174`（16 个 stdio 内置）、`:75`（`REMOTE_CATALOG` 8 个 HTTP 远程：huggingface/exa/deepwiki/context7/mslearn/cloudflare-docs/amap/github-copilot）、`:360`（`remote_spec`） | 总数 24（16+8），仍少于 DS 的 37；OAuth 型（GitHub/Gmail/Notion/Drive）不在内，见 K04 〔降级 v0.6（本轮已扩到 24）〕 |
-| K02 | 填连接器密钥 | `ds-bot/src/client/connectors-page.js` | ✅ | `src/main.rs:9897`（`SettingsDetail::ConnectorSecret`）、`:15634`（`ConnectorSecret` 打开点）、`src/connectors.rs:38` | 无 |
+| K02 | 填连接器密钥 | `ds-bot/src/client/connectors-page.js` | ✅ | `src/main.rs:9904`（`SettingsDetail::ConnectorSecret`）、`:15661`（`ConnectorSecret` 打开点）、`src/connectors.rs:38` | 无 |
 | K03 | MCP stdio 工具接入（`mcp__<id>__*`） | `ds-bot/src/host/connectors/gateway.js` | ✅ | `src/mcp_host.rs:43/482`、`src/backend.rs:320`（`open_rpi_session`）/`:345`（`mcp_host::for_workspace`） | 无 |
 | K04 | OAuth 登录（GitHub / Gmail / Notion / Google Drive） | `ds-bot/src/host/connectors/oauth.js` | ✅ | `src/oauth.rs`（PKCE S256 + state + 本地回调 `127.0.0.1:17890`，GitHub/Google/Notion token 交换，`begin` @ `:110`）；连接器页「OAuth 授权」区块；token 落 secrets.json `oauth:<平台>`，连接器按 Bearer 直接可用 | 各平台 OAuth 应用需用户自建（回调填本机地址） |
 | K05 | 邮箱连接器（Gmail/QQ/163） | `ds-bot/src/host/connectors/mail/` | ❌ | 无 | 无 〔降级 v0.6〕 |
@@ -186,21 +186,21 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1022`（`AgentEnd` 聚合 `input_tokens`/`output_tokens`/`cache_read`/`reasoning_tokens`）、`src/main.rs:16295-16333`（四张 `ui::stat_card`：回合 / 总 tokens / 输入 / 输出） | 无 |
+| M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1022`（`AgentEnd` 聚合 `input_tokens`/`output_tokens`/`cache_read`/`reasoning_tokens`）、`src/main.rs:16322-16360`（四张 `ui::stat_card`：回合 / 总 tokens / 输入 / 输出） | 无 |
 | M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `usage-range-{days}` chip）、`usage_grouped(days)` 的 `by_day`） | 无 |
 | M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `usage-group-{mode}` chip）、`src/rpi_engine.rs:1786`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1969`（老会话按 header `cwd` 反查名册兜底） | 无 |
-| M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16285` 六档（1/7/30/90/180/365 天）、`src/main.rs:3315`（`usage_range`） | 12 个月有档位；无日历选日（明确降级） 〔降级 v0.6〕 |
+| M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16312` 六档（1/7/30/90/180/365 天）、`src/main.rs:3322`（`usage_range`） | 12 个月有档位；无日历选日（明确降级） 〔降级 v0.6〕 |
 
 ## N. 定时任务（6 项）
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| N01 | 列表 / 启停 / 立即运行 / 删除 | `ds-bot/src/client/schedules.js`、`host/schedules.js` | ✅ | `src/main.rs:14423`（`.bg(ui_accent())` 新建 IM 提交按钮的着色，与  等五处 `!bot.is_private` 同属成员/表单路径）、`src/automations.rs:83-101` | 无 |
-| N02 | 运行历史 | `ds-bot/src/host/schedules.js:122` | ✅ | `src/main.rs:10835`（`SettingsDetail::AutomationHistory` 面板）、`src/main.rs`（`AutomationHistory` 枚举分支） | 无 |
+| N01 | 列表 / 启停 / 立即运行 / 删除 | `ds-bot/src/client/schedules.js`、`host/schedules.js` | ✅ | `src/main.rs:14450`（`.bg(ui_accent())` 新建 IM 提交按钮的着色，与  等五处 `!bot.is_private` 同属成员/表单路径）、`src/automations.rs:83-101` | 无 |
+| N02 | 运行历史 | `ds-bot/src/host/schedules.js:122` | ✅ | `src/main.rs:10842`（`SettingsDetail::AutomationHistory` 面板）、`src/main.rs`（`AutomationHistory` 枚举分支） | 无 |
 | N03 | cron / 一次性 / 相对时间规则 | `ds-bot/src/host/schedules.js:34-38` | ✅ | `src/automations.rs:218-224`；cron 解析 `crates/automation-schedule/src/cron.rs:1-49`；规则构造 `src/schedule_builder.rs:56`（`to_request`） | 无 |
 | N04 | 宿主内置调度器真正执行 | `ds-bot/src/host/schedules.js` | ✅ | `src/automation_scheduler.rs:3/20/40`（20s 轮询） | 无 |
 | N05 | 对话内让 Bot 建任务 | `ds-bot/src/host/schedules.js`（tool） | ✅ | `src/automation_tools.rs:71-124`（`automation_create` `:71` / `set_enabled` `:97` / `run_now` `:124`） | 无 |
-| N06 | 创建时的人类友好选择器（一次 / 每天 / 每周 / 每隔） | `ds-bot/src/host/schedules.js:60-86`（selectorOf） | ✅ | `src/schedule_builder.rs:19`（`When` 四型）、`:179`（`describe` 实时预览）、UI `src/main.rs:10015`（`schedule-when-*`）、`:10019`（`once_hours` 小时后）、`:10084`（`schedule-day-*` 7 天 chip） | 无（日期用「几小时后」下拉代替日历，`to_request` 仍算绝对时间） |
+| N06 | 创建时的人类友好选择器（一次 / 每天 / 每周 / 每隔） | `ds-bot/src/host/schedules.js:60-86`（selectorOf） | ✅ | `src/schedule_builder.rs:19`（`When` 四型）、`:179`（`describe` 实时预览）、UI `src/main.rs:10022`（`schedule-when-*`）、`:10026`（`once_hours` 小时后）、`:10091`（`schedule-day-*` 7 天 chip） | 无（日期用「几小时后」下拉代替日历，`to_request` 仍算绝对时间） |
 
 ## O. 密钥与审批（5 项）
 
@@ -208,17 +208,17 @@
 | --- | --- | --- | --- | --- | --- |
 | O01 | 密钥库（只写不读、`${secret:NAME}` 引用） | `ds-bot/src/host/secrets.js` | ✅ | `src/secrets.rs:28-57`、`fn settings_page_secrets`） | 无 |
 | O02 | 对话内 `request_secret` 安全卡片 | `ds-bot/src/host/secrets.js:423` | ❌ | grep `"request_secret"` = 0 命中 | Bot 要密钥只能让用户去设置页手填 〔降级 v0.6〕 |
-| O03 | 工具审批卡（允许一次 / 始终允许 / 拒绝） | `ds-bot/src/host/approvals.js` | ✅ | `src/rpi_engine.rs:435`（`decide`）/`:503`（`ask_permission`）、`src/main.rs:6667`（`approval_cards`）/（`approval_card_el`） | 无 |
-| O04 | 三档审批策略（ask/auto/full） | `ds-bot/src/client/permission-picker.js` | ✅ | `src/main.rs:12812`（`permission_menu_overlay`）、`src/data.rs:46`（`approval_level`） | 无 |
+| O03 | 工具审批卡（允许一次 / 始终允许 / 拒绝） | `ds-bot/src/host/approvals.js` | ✅ | `src/rpi_engine.rs:435`（`decide`）/`:503`（`ask_permission`）、`src/main.rs:6674`（`approval_cards`）/（`approval_card_el`） | 无 |
+| O04 | 三档审批策略（ask/auto/full） | `ds-bot/src/client/permission-picker.js` | ✅ | `src/main.rs:12839`（`permission_menu_overlay`）、`src/data.rs:46`（`approval_level`） | 无 |
 | O05 | IM 中禁止填写密钥卡 | `README.zh.md:106` | ❌ | 无（因为 O02 也没做） | 无 〔降级 v0.6〕 |
 
 ## P. 模型与服务商（5 项）
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| P01 | 服务商模板 + 密钥 + baseUrl | `ds-bot/src/client/providers-page.js` | ✅ | `src/data.rs:1563`（`provider_templates`）/`add_provider_from_template`）/`set_provider_api_key`）/`set_provider_base_url`）、`src/main.rs:10517`（`添加服务商`面板）/（`provider-add`）、`:21031-21063`（`enum SettingsDetail` 全套详情面板） | 无 |
-| P02 | 服务商“测试连接” | `ds-bot/src/client/providers-page.js` | ✅ | `src/main.rs:13148` 区块（`测试连接`，commit `d7ca085`） | 无 |
-| P03 | 添加 / 删除模型 | `ds-bot/src/client/model-menu.js` | ✅ | `src/data.rs:1359`（`add_model`）/`:1363`（`remove_model`）、`src/main.rs`（`AddModel` 分支）/`src/main.rs:10435`（`SettingsDetail::AddModel` 面板体） | 无 |
+| P01 | 服务商模板 + 密钥 + baseUrl | `ds-bot/src/client/providers-page.js` | ✅ | `src/data.rs:1563`（`provider_templates`）/`add_provider_from_template`）/`set_provider_api_key`）/`set_provider_base_url`）、`src/main.rs:10524`（`添加服务商`面板）/（`provider-add`）、`:21058-21090`（`enum SettingsDetail` 全套详情面板） | 无 |
+| P02 | 服务商“测试连接” | `ds-bot/src/client/providers-page.js` | ✅ | `src/main.rs:13175` 区块（`测试连接`，commit `d7ca085`） | 无 |
+| P03 | 添加 / 删除模型 | `ds-bot/src/client/model-menu.js` | ✅ | `src/data.rs:1386`（`add_model`）/`:1393`（`remove_model`）、`src/main.rs`（`AddModel` 分支）/`src/main.rs:10442`（`SettingsDetail::AddModel` 面板体） | 无 |
 | P04 | 按模型配置上下文窗口（check line 由窗口算） | `ds-bot/README.md`（contextWindow） | ✅ | `src/model_limits.rs:20/22`（`FALLBACK_CONTEXT_WINDOW`/`FALLBACK_MAX_TOKENS`）、`:190`（read）、`:211`（resolve，用户值 > 模板 > 兜底）、`:236`（write）、`src/rpi_engine.rs:144-147`（引用常量，不再写死）、UI `src/main.rs` | 无 |
 | P05 | 每 Bot 模型 + 思考强度 | `README.zh.md:58` | ✅ | `src/data.rs:17/41`、`thinking_level_for`） | 无 |
 
@@ -226,7 +226,7 @@
 
 | ID | 能力 | DS Bot 依据 | ModeChat | 证据（ModeChat） | 差距 |
 | --- | --- | --- | --- | --- | --- |
-| Q01 | 设置页结构（通用/模型/Bot/群/连接器/能力/浏览器/定时/用量/密钥/关于…） | `ds-bot/README.md`（Settings pages） | ✅ | `src/main.rs:21001`（`SETTINGS_PAGES`，17 页，`:21021-21053`） | 无 |
+| Q01 | 设置页结构（通用/模型/Bot/群/连接器/能力/浏览器/定时/用量/密钥/关于…） | `ds-bot/README.md`（Settings pages） | ✅ | `src/main.rs:21028`（`SETTINGS_PAGES`，17 页，`:21048-21080`） | 无 |
 | Q02 | 设计令牌落地（4px 间距、四级字号、圆角令牌） | `docs/ui-design-spec.md`（本项目自有规范） | ✅ | `src/ui_kit.rs:26`（`S1` 起，令牌 `:26-46`）、`:129`（`Clickable::pointer`）；`scripts/ui-lint.ps1 -Enforce` 实测 **0 违规**（`cursor_pointer` 0 / 裸 `rounded(px())` 0 / 非令牌字号 0 / `rgb(` 0） | 无 |
 | Q03 | 弹窗 → 右侧详情栏 | `ds-bot/src/client/details-drawer.js` | ✅ | `enum SettingsDetail`）、`docs/ui-design-spec.md:§8` | 剩余 6 个破坏性确认框，符合规范 |
 | Q04 | 深浅双主题 + 皮肤 | `ds-bot/src/client/themes.js` | ✅ | `src/theme.rs:133/143`、`src/wechat_theme.rs` | 无 |
@@ -250,8 +250,8 @@
 
 | 状态 | v0.4.0 | v0.6.0 | 占比（v0.6.0） |
 | --- | --- | --- | --- |
-| ✅ 已有 | 73 | **91** | 66.9% |
-| 🟡 半成品 | 22 | **22** | 16.2% |
+| ✅ 已有 | 73 | **93** | 68.4% |
+| 🟡 半成品 | 22 | **20** | 14.7% |
 | ❌ 缺失 | 41 | **23** | 16.9% |
 | 合计 | 136 | 136 | 100% |
 
@@ -259,12 +259,12 @@
 
 | 域 | 项数 | ✅/🟡/❌ | 结论 |
 | --- | --- | --- | --- |
-| A Bot 身份 | 13 | 9/4/0 | 记忆行与管理入口已补（A08）；A12 主卡位已补（会话列表顶部突出卡）；缺指令编辑、形象上传、换目录重建会话（降级 v0.6） |
+| A Bot 身份 | 13 | 10/3/0 | 记忆行与管理入口已补（A08）；A12 主卡位已补（会话列表顶部突出卡）；缺指令编辑、形象上传、换目录重建会话（降级 v0.6） |
 | B Main bot | 5 | 3/1/1 | Bot 互相可见/互发消息已补（B05）；缺 Bot 自治建改 Bot（降级 v0.6） |
 | C 群聊 | 15 | 11/2/2 | 阶段证据/通过/打回（C08）、群外发言（C13）已补；缺 notice、引用整段对话（降级 v0.6） |
 | D 隐私 bot | 5 | 5/0/0 | 隔离闭环：会话/搜索/群 + 文件路径守卫（D05）+ 删除后归档（D04）全通 |
 | E 记忆 | 13 | 11/1/1 | Bot 记忆进提示（E03）、三工具（E05）、面板（E09）、拒写凭据（E13）全通；私聊自动回顾降级 v0.6 |
-| F 会话与输入 | 16 | 10/4/2 | F02 新会话入口三条（v0.5.1 Q-05：Ctrl+N `:6813`、标题栏「+」`:24445`、命令面板 `:7539`）、F06 压缩状态行（Q-01/Q-02，`fn compaction_status_row` `:21579`、行分支 `:19510`）、F10 消息复制（Q-04，`wechat_message_actions` `:19949`、复制 `:19987`）均在微信壳接通；注意 `:7539` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；FTS5 已补（search_index.rs）；另缺 show_view、语音（降级 v0.6） |
+| F 会话与输入 | 16 | 11/3/2 | F02 新会话入口三条（v0.5.1 Q-05：Ctrl+N `:6813`、标题栏「+」`:24445`、命令面板 `:7539`）、F06 压缩状态行（Q-01/Q-02，`fn compaction_status_row` `:21579`、行分支 `:19510`）、F10 消息复制（Q-04，`wechat_message_actions` `:19949`、复制 `:19987`）均在微信壳接通；注意 `:7539` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；FTS5 已补（search_index.rs）；另缺 show_view、语音（降级 v0.6） |
 | G 浏览器 | 6 | 2/1/3 | 每 Bot 独立 profile 已补（G02）；缺内嵌面板、Cookie 导入、插件（降级 v0.6） |
 | H 电脑操控 | 6 | 2/0/4 | 工具齐，分级/租约/接管/永久禁止全未做（降级 v0.6） |
 | I 本地 Agent | 5 | 3/1/1 | ACP 齐，codex/claude 原生驱动缺（降级 v0.6） |

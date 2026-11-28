@@ -42,6 +42,8 @@ pub struct Bot {
     #[allow(dead_code)] pub last_session_id: Option<String>,
     /// AGENTS.md 受管块 + persona.json 是否开启（编辑对话框切换）。
     pub identity_sync: bool,
+    /// Bot 指令（写进 AGENTS.md 受管块的「## 指令」，编辑对话框维护）。
+    pub instructions: String,
     /// 审批策略（bot-team 矩阵的输入；非法/缺省落回 ask）。
     pub approval_level: String,
     pub approval_allowlist: Vec<String>,
@@ -643,6 +645,7 @@ pub fn group_goal_prompt(group_id: &str) -> String {
 
 /// 编辑 Bot：按 id 改名字/角色/工作目录/身份同步（原子写；校验与新建同口径）。
 /// 身份同步在名册写盘**之前**执行（与主程序顺序一致：sync 失败则记录不变）。
+#[allow(clippy::too_many_arguments)]
 pub fn update_bot(
     id: &str,
     name: &str,
@@ -651,6 +654,7 @@ pub fn update_bot(
     identity_sync: bool,
     is_private: bool,
     is_chief: bool,
+    instructions: &str,
 ) -> Result<Bot, String> {
     let name = name.trim();
     let directory = directory.trim();
@@ -679,9 +683,17 @@ pub fn update_bot(
     record.identity_sync = identity_sync;
     record.is_private = is_private;
     record.is_chief = is_chief;
+    record.instructions = instructions.trim().to_string();
     demote_other_chiefs(&mut file, id);
     // 身份同步先行：AGENTS.md 受管块 + persona.json（名字压过 system 的「You are Mode」）。
-    sync_identity_fields(id, directory, name, role, identity_sync, None)?;
+    sync_identity_fields(
+        id,
+        directory,
+        name,
+        role,
+        identity_sync,
+        Some(instructions.trim()),
+    )?;
     let file = bot_team::teammate::validate_teammates_file(file)?;
     let value = serde_json::to_value(&file)
         .map_err(|error| format!("teammates.json 序列化失败（{error}）"))?;
@@ -2283,6 +2295,8 @@ struct TeammateJson {
     #[serde(default)]
     is_chief: bool,
     #[serde(default)]
+    instructions: String,
+    #[serde(default)]
     is_private: bool,
     #[serde(default)]
     is_main: bool,
@@ -2358,6 +2372,7 @@ impl TeammateJson {
             is_main: self.is_main,
             pinned: self.pinned,
             identity_sync: self.identity_sync,
+            instructions: self.instructions.trim().to_string(),
             model,
             last_session_id: self
                 .last_session_id

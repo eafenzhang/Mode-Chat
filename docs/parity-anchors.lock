@@ -127,38 +127,37 @@ src/computer_tools.rs:98|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/connectors.rs:38|pub fn missing_secrets(spec: &ConnectorSpec, configured: &[String]) -> Vec<&'sta
 src/cua_tree.rs:272|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/cua_tree.rs:320|
-src/data.rs:1359|.or_insert_with(|| serde_json::json!({}))
-src/data.rs:1363|} else if !enabled {
-src/data.rs:1563|pub fn provider_templates() -> Vec<ProviderTemplate> {
-src/data.rs:160|instructions: String::new()
+src/data.rs:1386|pub fn add_model(provider_id: &str, model_id: &str) -> Result<(), String> {
+src/data.rs:1393|pub fn remove_model(provider_id: &str, model_id: &str) -> Result<(), String> {
+src/data.rs:1563|path.is_file().then_some(path)
 src/data.rs:17|pub struct ModelSpec {
-src/data.rs:175|demote_other_chiefs(&mut file, &new_id);
-src/data.rs:1824|.map(|id| id.trim().to_string())
-src/data.rs:1843|if draft.name.trim().is_empty() {
-src/data.rs:1876|let approval_override = record.approval_override.clone();
-src/data.rs:2336|Some(ModelSpec {
-src/data.rs:2676|assert_eq!(entries.len(), 1, "编辑不能新增条目");
-src/data.rs:289|fn cli_storage_dir() -> Option<String> {
-src/data.rs:345|const LOCAL_AGENT_CANDIDATES: &[(&str, &str, &str, bool)] = &[
-src/data.rs:352|];
+src/data.rs:175|let new_id = record.id.clone();
+src/data.rs:1854|pub fn create_group(draft: GroupDraft) -> Result<Group, String> {
+src/data.rs:1873|pub fn update_group(id: &str, draft: GroupDraft) -> Result<Group, String> {
+src/data.rs:1906|pub fn delete_group(id: &str) -> Result<(), String> {
+src/data.rs:2352|model_id: selection.model_id
+src/data.rs:2676|// SAFETY: 本用例独占 MODE_STORAGE_DIR（其它用例不读它）。
+src/data.rs:289|/// 做隔离，如果这里仍回落到 `~/.mode-bot`，`remember` 写下的记忆会静默落进用户的
+src/data.rs:349|// 产品只支持这四个本地引擎（全部走 ACP 适配层）；不再探测 Claude/Codex/Gemini 等。
+src/data.rs:356|fn find_command(command: &str) -> Option<String> {
 src/data.rs:37|pub is_main: bool
-src/data.rs:374|pub fn local_agents() -> Vec<LocalAgentInfo> {
-src/data.rs:392|bots_service::memory_store::memory_context(&root, 4_000)
+src/data.rs:376|pub fn local_agents() -> Vec<LocalAgentInfo> {
+src/data.rs:392|return String::new();
 src/data.rs:40|pub pinned: bool
-src/data.rs:404|pub fn group_memory_context(group_id: &str, manual: &str) -> String {
-src/data.rs:409|let file_memory = bots_service::memory_store::memory_context(&root, 4_000);
+src/data.rs:404|/// 群聊记忆：groups.json 里手写的 `memory` + 自动回顾写入的文件记忆。
+src/data.rs:409|return memory;
 src/data.rs:41|pub model: Option<ModelSpec>
-src/data.rs:46|pub approval_level: String
-src/data.rs:530|pub fn undo_team_memory() -> Result<String, String> {
-src/data.rs:58|pub struct Group {
+src/data.rs:46|pub instructions: String
+src/data.rs:532|pub fn undo_team_memory() -> Result<String, String> {
 src/data.rs:6|//! - 否则 `{home}/.mode-bot/.mode`（产品默认）。
-src/data.rs:62|pub directory: Option<String>
-src/data.rs:682|demote_other_chiefs(&mut file, id);
-src/data.rs:701|pub fn delete_bot(id: &str) -> Result<(), String> {
-src/data.rs:72|}
-src/data.rs:79|pub hidden_bots: Vec<Bot>
-src/data.rs:88|fn check_chief_private(is_private: bool, is_chief: bool) -> Result<(), String> {
-src/data.rs:96|fn demote_other_chiefs(file: &mut bot_team::teammate::TeammatesFile, keep_id: &s
+src/data.rs:62|pub name: String
+src/data.rs:63|/// 群聊共享目录；空/缺省回落成员目录。
+src/data.rs:682|record.directory = directory.to_string();
+src/data.rs:701|.map_err(|error| format!("teammates.json 写入失败（{error}）"))?;
+src/data.rs:77|pub struct Roster {
+src/data.rs:79|pub groups: Vec<Group>
+src/data.rs:90|fn check_chief_private(is_private: bool, is_chief: bool) -> Result<(), String> {
+src/data.rs:98|fn demote_other_chiefs(file: &mut bot_team::teammate::TeammatesFile, keep_id: &s
 src/group_goal.rs:105|fn write(path: &Path, goal: &GroupGoal) -> Result<(), String> {
 src/group_goal.rs:117|pub fn apply(
 src/group_goal.rs:55|pub fn read(data_root: &Path, group_id: &str) -> Option<GroupGoal> {
@@ -190,86 +189,83 @@ src/im_service.rs:155|pub enum ImQrProvider {
 src/im_service.rs:17|use bots_service::wecom_registration::{
 src/im_service.rs:183|pub struct BindCodeStore {
 src/instance.rs:16|pub struct SingleInstance {
-src/main.rs:10015|let cron_input = fields[4].clone();
-src/main.rs:10019|let bot_id = bot.id.clone();
-src/main.rs:10084|SharedString::from(format!("schedule-day-{index}"))
-src/main.rs:10435|SettingsDetail::AddModel {
-src/main.rs:10517|let id_input = fields[0].clone();
-src/main.rs:10835|SettingsDetail::AutomationHistory { title, runs } => {
+src/main.rs:10022|let cron_input = fields[4].clone();
+src/main.rs:10026|let bot_id = bot.id.clone();
+src/main.rs:10091|SharedString::from(format!("schedule-day-{index}"))
+src/main.rs:10442|SettingsDetail::AddModel {
+src/main.rs:10524|let id_input = fields[0].clone();
+src/main.rs:10842|SettingsDetail::AutomationHistory { title, runs } => {
 src/main.rs:1099|#[derive(Clone, PartialEq, Eq)]
-src/main.rs:11028|SettingsDetail::Allowlist { bot_id } => {
+src/main.rs:11035|SettingsDetail::Allowlist { bot_id } => {
 src/main.rs:1131|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>) {
-src/main.rs:11564|&self
-src/main.rs:11574|.collect();
-src/main.rs:11581|.iter()
-src/main.rs:12229|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
-src/main.rs:12278|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12812|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:13148|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:13913|cx.notify();
-src/main.rs:14423|.child(settings_group(vec![
-src/main.rs:15634|cx.notify();
-src/main.rs:16285|cx.notify();
-src/main.rs:16295|.child(ui::stat_card(
-src/main.rs:16333|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:11591|&self
+src/main.rs:11601|.collect();
+src/main.rs:11608|.iter()
+src/main.rs:12256|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
+src/main.rs:12305|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12839|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:13175|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:13940|cx.notify();
+src/main.rs:14450|.child(settings_group(vec![
+src/main.rs:15661|cx.notify();
+src/main.rs:16312|cx.notify();
+src/main.rs:16322|.child(ui::stat_card(
 src/main.rs:1636|strip = strip.child(stage_action_chip(
+src/main.rs:16360|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1662|strip = strip.child(stage_action_chip(
 src/main.rs:1683|strip = strip.child(stage_action_chip(
 src/main.rs:1727|.id(SharedString::from(format!(
-src/main.rs:18712|Err(message) => {
-src/main.rs:19049|if this.screenshot_watching {
-src/main.rs:19453|.font_family(theme::FONT_FAMILY)
-src/main.rs:19515|return;
-src/main.rs:19956|mix(author_id.len());
-src/main.rs:20221|.line_height(px(18.))
-src/main.rs:20422|"会话尚未建立"
-src/main.rs:20697|if boundary_ok {
-src/main.rs:20729|///
-src/main.rs:20761|.pointer()
-src/main.rs:20779|if let Some(code) = fenced_code(text) {
+src/main.rs:18739|Err(message) => {
+src/main.rs:19076|if this.screenshot_watching {
+src/main.rs:19480|.font_family(theme::FONT_FAMILY)
+src/main.rs:19542|return;
+src/main.rs:19983|mix(author_id.len());
+src/main.rs:20248|.line_height(px(18.))
+src/main.rs:20449|"会话尚未建立"
+src/main.rs:20724|if boundary_ok {
+src/main.rs:20756|///
+src/main.rs:20788|.pointer()
+src/main.rs:20806|if let Some(code) = fenced_code(text) {
 src/main.rs:2099|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:21001|.line_height(px(16.))
-src/main.rs:21021|"用量"
-src/main.rs:21031|enum SettingsDetail {
+src/main.rs:21028|.line_height(px(16.))
+src/main.rs:21048|"用量"
+src/main.rs:21058|enum SettingsDetail {
 src/main.rs:2143|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:216|fn panel_target_width(
-src/main.rs:21781|Err(message) => this.toast(message, cx)
-src/main.rs:22479|bot_team::approval::ApprovalLevel::Full => "full"
-src/main.rs:22507|.options
+src/main.rs:21808|Err(message) => this.toast(message, cx)
+src/main.rs:22506|bot_team::approval::ApprovalLevel::Full => "full"
+src/main.rs:22534|.options
 src/main.rs:2309|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:233|}
 src/main.rs:2389|"task-reassign-{}"
-src/main.rs:24199|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:24226|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2432|"task-reassign-{}-{}"
-src/main.rs:24841|.into_any_element()
+src/main.rs:24868|.into_any_element()
 src/main.rs:2503|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:254|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:27055|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27152|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2858|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2876|fn finish_member(&mut self, member: &str) {
-src/main.rs:3315|/// 用量页时间范围（天）：1/7/30/90。
-src/main.rs:3701|expanded: bool
-src/main.rs:4371|.member_ids
-src/main.rs:4373|.filter_map(|member_id| self.roster.bot_by_id(member_id))
-src/main.rs:4691|.member_ids
-src/main.rs:5445|attachment_count
-src/main.rs:5457|fn queue_current(
-src/main.rs:5484|attachments
-src/main.rs:5612|.member_ids
-src/main.rs:5941|.questions
-src/main.rs:6160|.items_center()
-src/main.rs:6513|else {
-src/main.rs:6667|return;
-src/main.rs:6982|fn on_new_session_shortcut(
-src/main.rs:7300|fn on_submit_dialog(
+src/main.rs:3322|/// 用量页时间范围（天）：1/7/30/90。
+src/main.rs:3708|expanded: bool
+src/main.rs:4378|.member_ids
+src/main.rs:4380|.filter_map(|member_id| self.roster.bot_by_id(member_id))
+src/main.rs:4698|.member_ids
+src/main.rs:5619|.member_ids
+src/main.rs:5948|.questions
+src/main.rs:6167|.items_center()
+src/main.rs:6520|else {
+src/main.rs:6674|return;
+src/main.rs:6989|fn on_new_session_shortcut(
+src/main.rs:7307|fn on_submit_dialog(
 src/main.rs:750|fn sidebar_section_dot(color: Option<&str>) -> Rgba {
-src/main.rs:7780|let Some((_, _, command)) = entries.get(index).cloned() else {
+src/main.rs:7787|let Some((_, _, command)) = entries.get(index).cloned() else {
 src/main.rs:800|enum MsgKind {
 src/main.rs:802|Reasoning
-src/main.rs:8633|.on_click(cx.listener(
-src/main.rs:8882|if query.chars().any(char::is_whitespace) || query.contains('@') {
-src/main.rs:9617|SettingsDetail::BotMemory { bot_id } => {
-src/main.rs:9897|let _ = clear;
+src/main.rs:8640|.on_click(cx.listener(
+src/main.rs:8889|if query.chars().any(char::is_whitespace) || query.contains('@') {
+src/main.rs:9624|SettingsDetail::BotMemory { bot_id } => {
+src/main.rs:9904|let _ = clear;
 src/mcp_host.rs:43|pub struct McpHost {
 src/mcp_host.rs:482|.unwrap_or(0);
 src/memory_review.rs:196|pub fn parse_operations(text: &str) -> Result<Vec<ReviewOperation>, String> {
