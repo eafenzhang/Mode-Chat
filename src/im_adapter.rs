@@ -314,12 +314,16 @@ pub async fn spawn_adapter(
     if !script.exists() {
         return Err(format!("适配器入口不存在：{}", script.display()));
     }
-    let mut child = Command::new(node)
+    // GUI 包没有控制台：不加 CREATE_NO_WINDOW 会弹一个空的 node.exe 黑窗。
+    let mut command = Command::new(node);
+    command
         .arg(&script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    crate::process_console::no_console_async(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("启动适配器进程失败：{error}"))?;
     let stdin: AdapterShared = Arc::new(tokio::sync::Mutex::new(
