@@ -54,7 +54,7 @@
 | C03 | 管理员先答 / 全员轮流（responder_policy） | `ds-bot/README.md`（admin-first / all-members） | ✅ | `src/backend.rs:1686`（`responder_policy` 路由）/`:1684`（`chosen` 选取） | 无 |
 | C04 | @ 点名（含 @所有人、边界规则） | `ds-bot/src/shared/mentions.js` | ✅ | `src/backend.rs:1684`（bot_team::mentions::parse_mentions）、`crates/bot-team/src/mentions.rs:110` | 无 |
 | C05 | 成员无事可说时静默（`[PASS]`） | `ds-bot/src/host/groups.js`（[PASS]） | 🟡 | `crates/bot-team/src/mentions.rs:110`（is_pass_reply）、`crates/bot-team/src/orchestration.rs:85` | 判定函数存在，群回合是否吞掉回复未接（需实测确认） 〔降级 v0.5 保持现状〕 |
-| C06 | 每成员每群一个独立隐藏会话 | `ds-bot/README.md`（hidden Session per group） | ✅ | `src/backend.rs:1578`（`member_session_key` 首次调用）/`:2404`（`member_session_key` 定义） | 无 |
+| C06 | 每成员每群一个独立隐藏会话 | `ds-bot/README.md`（hidden Session per group） | ✅ | `src/backend.rs:1578`（`member_session_key` 首次调用）/`:2423`（`member_session_key` 定义） | 无 |
 | C07 | 群目标 Goal（对齐/阶段/验收） | `ds-bot/src/host/goals.js:670`（group_goal） | ✅ | `src/group_goal.rs:55`（`group_goal::read`）/`:105`（`write`，私有）/`:117`（`group_goal::apply`）、`crates/bot-team/src/goal.rs:208`（`migrate_goal`）/`:577`（`render_goal_prompt`）、UI `src/main.rs:1099`（`GoalStageEdit`）/`:1131`（`group_goal::apply` 调用）/`:1636`（`goal-stage-pass-*`） | 无 |
 | C08 | 阶段“证据”校验后才推进 | `ds-bot/src/host/goals.js:19`（STAGE_ACCEPTANCE_MAX）、`:760/767`（pass/rework） | ✅ | `crates/bot-team/src/goal.rs:136/142/147`（SetAcceptance/PassStage/ReworkStage）、`:208`（migrate_goal）、`src/team_tools.rs:193/208/223`（三个工具）、UI `src/main.rs:1636`（`goal-stage-pass-*`）、`:1662`（`goal-stage-rework-*`）、`:1683`（`goal-stage-acceptance-*`）、`goal-acceptance-save`）、`:1727`（`goal-stage-error-*` 行内错误） | 无 |
 | C09 | 派活台账（子任务 + 负责人 + 期望结果） | `ds-bot/src/host/tools.js:167`、`groups.js` | ✅ | `src/group_tasks.rs:210/253`、`team_assign` 工具名） | 无 |
@@ -155,9 +155,9 @@
 | J03 | 飞书 | `ds-bot/src/host/im/platforms/feishu.js` | 🟡 | 外挂适配器 `adapters/feishu/adapter.mjs`（长连接帧协议按官方 SDK 结构实现：outbound_ws endpoint + 二进制帧 SIGNAL/DATA/CONTROL，OpenAPI 文本/图片/文件回复）；IM 频道页飞书卡可凭据创建（App ID/Secret） | 官方帧协议未公开、待真实凭据联调确认（出入可发适配器包在线修正） 〔降级 v0.7（待联调）〕 |
 | J04 | 钉钉 | `ds-bot/src/host/im/platforms/dingtalk.js` | 🟡 | Stream 模式已接入：`crates/bots-service/src/dingtalk.rs`（gateway/帧/事件解析）、`src/im_runtime.rs`（refresh_dingtalk + stream 循环 + sessionWebhook 回复）、IM 频道页凭据创建（App Key/Secret） | 代码与 UI 完整，缺真实凭据联调；发文件未做（webhook 仅文本） 〔降级 待凭据联调〕 |
 | J05 | QQ / Telegram / Discord / Slack | 对应 `platforms/*.js` | ❌ | `crates/bots-service/src/lib.rs:60` 把 telegram/webhook/discord 列为“已下线直接丢弃” | 无 〔降级 不在路线图〕 |
-| J06 | 绑定码（私聊/群绑定到工作区） | `ds-bot/src/host/im/index.js`（pairing） | ✅ | `src/im_service.rs:183`（BindCodeStore）、`src/im_runtime.rs:2701`（`handle_bind`） | 无 |
+| J06 | 绑定码（私聊/群绑定到工作区） | `ds-bot/src/host/im/index.js`（pairing） | ✅ | `src/im_service.rs:183`（BindCodeStore）、`src/im_runtime.rs:2745`（`handle_bind`） | 无 |
 | J07 | 心跳（静默巡检） | `ds-bot/src/client/im-page.js`（heartbeat） | ✅ | `src/im_runtime.rs:520/547`（tick_heartbeats） | 无 |
-| J08 | 卡片按钮（微信/QQ 用数字编号回选） | `ds-bot/src/shared/im-platforms.js`（buttons） | ✅ | 审批卡：`src/im_runtime.rs:3170`（`PermissionRespond`，即 `/permission <序号>` 的处理）、`:3218`（`Deny`，即 `/deny`）、帮助文案 `:3026`；提问卡：`src/im_runtime.rs:2237`（`SessionEvent::Question` → `notice`）、`:3249`（`BotCommand::QuestionRespond`，`/question`）、`:2403`（`pending_questions` 轮询） | 无平台原生按钮，靠 `/question` 文本回选（与微信审批卡同一套编号语义） |
+| J08 | 卡片按钮（微信/QQ 用数字编号回选） | `ds-bot/src/shared/im-platforms.js`（buttons） | ✅ | 审批卡：`src/im_runtime.rs:3214`（`PermissionRespond`，即 `/permission <序号>` 的处理）、`:3262`（`Deny`，即 `/deny`）、帮助文案 `:3070`；提问卡：`src/im_runtime.rs:2282`（`SessionEvent::Question` → `notice`）、`:3293`（`BotCommand::QuestionRespond`，`/question`）、`:2447`（`pending_questions` 轮询） | 无平台原生按钮，靠 `/question` 文本回选（与微信审批卡同一套编号语义） |
 | J09 | IM 消息镜像到主窗口 | `ds-bot/src/host/im/index.js`（mirror） | ✅ | `src/im_runtime.rs:182-238`（`deliver_mirror`） | 无 |
 
 ## K. 连接器与能力（9 项）

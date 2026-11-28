@@ -913,6 +913,76 @@ impl ImRuntimeManager {
         *slot = Some(handle);
     }
 
+    /// 主动推送用的 sink：微信走 HTTP、企微走运行中的 WS 连接。
+    fn reply_sink_for(&self, bot: &BotConfig) -> Option<Arc<dyn BotReplySink>> {
+        if bot.provider == BotProvider::Wecom {
+            let outbound = self
+                .running_wecom
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&bot.id)
+                .map(|entry| entry.outbound.clone())?;
+            return Some(Arc::new(WeComReplySink::new(
+                &bot.id,
+                outbound,
+                Arc::new(Mutex::new(HashMap::new())),
+                WeComRequestBroker::new(),
+            )));
+        }
+        let from_user_id = bot
+            .provider_self_id
+            .clone()
+            .or_else(|| bot.provider_user_id.clone())
+            .unwrap_or_default();
+        Some(Arc::new(ImReplySink::new(
+            Arc::clone(&self.http),
+            self.tokens.loader(),
+            &bot.id,
+            &from_user_id,
+        )))
+    }
+
+    /// 后台任务终态时给绑定用户推一条 IM 通知（微信/企微；适配器通道暂无主动发送）。
+    pub async fn notify_task_finished(&self, bot_id: &str, title: &str, ok: bool) {
+        let repo = BotsRepo::new(&self.data_root);
+        let Ok(config) = repo.read_config() else {
+            return;
+        };
+        let Some(bot) = config
+            .bots
+            .into_iter()
+            .find(|bot| bot.id == bot_id && bot.enabled)
+        else {
+            return;
+        };
+        if !matches!(bot.provider, BotProvider::Weixin | BotProvider::Wecom) {
+            return;
+        }
+        let Ok(state) = repo.read_state() else {
+            return;
+        };
+        let conversations = crate::im_heartbeat::heartbeat_conversations(&state, bot_id);
+        let Some(conversation) = conversations.first() else {
+            return;
+        };
+        let Some(sink) = self.reply_sink_for(&bot) else {
+            im_log!("[im] 任务通知跳过：推送通道未就绪 bot={bot_id}");
+            return;
+        };
+        let text = if ok {
+            format!("✅ 后台任务完成：{title}")
+        } else {
+            format!("⚠️ 后台任务失败：{title}")
+        };
+        match sink
+            .send_reply(bot_id, &conversation.conversation_key, None, &text)
+            .await
+        {
+            Ok(()) => im_log!("[im] 任务通知已推送 bot={bot_id}"),
+            Err(error) => im_log!("[im] 任务通知推送失败 bot={bot_id}: {error}"),
+        }
+    }
+
     async fn tick_heartbeats(&self) {
         let repo = BotsRepo::new(&self.data_root);
         let config = match repo.read_config() {
@@ -953,34 +1023,8 @@ impl ImRuntimeManager {
             let instructions =
                 crate::im_heartbeat::read_heartbeat_instructions(&conversation.workspace_path);
             let prompt = build_heartbeat_prompt(locale, instructions.as_deref());
-            let sink: Arc<dyn BotReplySink> = if bot.provider == BotProvider::Wecom {
-                let outbound = self
-                    .running_wecom
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .get(&bot.id)
-                    .map(|entry| entry.outbound.clone());
-                let Some(outbound) = outbound else {
-                    continue;
-                };
-                Arc::new(WeComReplySink::new(
-                    &bot.id,
-                    outbound,
-                    Arc::new(Mutex::new(HashMap::new())),
-                    WeComRequestBroker::new(),
-                ))
-            } else {
-                let from_user_id = bot
-                    .provider_self_id
-                    .clone()
-                    .or_else(|| bot.provider_user_id.clone())
-                    .unwrap_or_default();
-                Arc::new(ImReplySink::new(
-                    Arc::clone(&self.http),
-                    self.tokens.loader(),
-                    &bot.id,
-                    &from_user_id,
-                ))
+            let Some(sink) = self.reply_sink_for(&bot) else {
+                continue;
             };
             let ops: Arc<dyn BotTurnOps> = turn_ops(&self.data_root);
             let store = ConversationStore::new(BotsRepo::new(&self.data_root));

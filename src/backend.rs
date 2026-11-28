@@ -1904,6 +1904,13 @@ async fn run_agent(
                                     let _ = pump_events.send(BackendEvent::Task {
                                         record: record.clone(),
                                     });
+                                    if let Some(service) = crate::im_service::handle() {
+                                        service.notify_task_finished(
+                                            record.bot_id.clone(),
+                                            record.title.clone(),
+                                            true,
+                                        );
+                                    }
                                     break;
                                 }
                                 SessionEvent::Error { message, .. } => {
@@ -1914,6 +1921,13 @@ async fn run_agent(
                                     let _ = pump_events.send(BackendEvent::Task {
                                         record: record.clone(),
                                     });
+                                    if let Some(service) = crate::im_service::handle() {
+                                        service.notify_task_finished(
+                                            record.bot_id.clone(),
+                                            record.title.clone(),
+                                            false,
+                                        );
+                                    }
                                     break;
                                 }
                                 _ => {}

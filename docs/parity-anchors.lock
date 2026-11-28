@@ -101,9 +101,9 @@ src/backend.rs:1686|.filter(|(_, member)| parsed.ids.contains(&member.member_id)
 src/backend.rs:1740|member_is_admin: member.is_admin
 src/backend.rs:191|Delta {
 src/backend.rs:194|}
-src/backend.rs:2256|active_internal.get(&key).cloned().unwrap_or_else(|| key.clone());
-src/backend.rs:2404|let text = rest[..end].trim();
-src/backend.rs:2482|&atomic_file::WriteOptions::default()
+src/backend.rs:2256|let _ = events.send(BackendEvent::AttachmentImage {
+src/backend.rs:2423|pub fn member_session_key(group_key: &str, member_id: &str) -> String {
+src/backend.rs:2482|fn read_review_session(path: &Path) -> ReviewSessionState {
 src/backend.rs:320|/// 建一个内嵌 rpi 会话（新会话/恢复历史共用）。
 src/backend.rs:335|.ok_or_else(|| "未选择模型：请先在右栏或设置里为这个 Bot 选一个模型".to_string())?;
 src/backend.rs:345|context_window
@@ -172,16 +172,16 @@ src/i18n.rs:21|LANG.load(Ordering::Relaxed) == 1
 src/i18n.rs:257|"当前引擎不支持附件发送" => Some("The current engine cannot send attachments")
 src/i18n.rs:319|"会话还没有可导出的消息" => Some("This conversation has nothing to export")
 src/i18n.rs:9|static LANG: AtomicU8 = AtomicU8::new(0);
-src/im_runtime.rs:1016|fn start_loop(self: &Arc<Self>, bot: BotConfig) {
+src/im_runtime.rs:1016|continue;
 src/im_runtime.rs:182|pub fn mirror_targets(
-src/im_runtime.rs:2237|// 现在记进 questions 并把问题文本挂到 notice，由 runner 发出去。
+src/im_runtime.rs:2282|crate::backend::SessionEvent::Question(card) => {
 src/im_runtime.rs:238|.find(|bot| bot.id == target.bot_id)
-src/im_runtime.rs:2403|fn pending_questions<'a>(
-src/im_runtime.rs:2701|fn handle_bind(&self, message: &WeixinInboundMessage, code: &str) -> bool {
-src/im_runtime.rs:3026|fn help_text(&self) -> String {
-src/im_runtime.rs:3170|BotCommand::PermissionRespond { value } => {
-src/im_runtime.rs:3218|BotCommand::Deny { request_id } => {
-src/im_runtime.rs:3249|BotCommand::QuestionRespond { value } => {
+src/im_runtime.rs:2447|fn pending_questions<'a>(
+src/im_runtime.rs:2745|fn handle_bind(&self, message: &WeixinInboundMessage, code: &str) -> bool {
+src/im_runtime.rs:3070|fn help_text(&self) -> String {
+src/im_runtime.rs:3214|BotCommand::PermissionRespond { value } => {
+src/im_runtime.rs:3262|BotCommand::Deny { request_id } => {
+src/im_runtime.rs:3293|BotCommand::QuestionRespond { value } => {
 src/im_runtime.rs:520|handle.block_on(crate::im_adapter::spawn_adapter(
 src/im_runtime.rs:547|self.set_wecom_status(&bot_id, "error", Some(error));
 src/im_runtime.rs:719|fn start_wecom_loop(self: &Arc<Self>, bot: BotConfig, secret: Option<String>) {

@@ -449,6 +449,14 @@ impl ImService {
     }
 
     /// 配置/账号变更后让运行时按新配置重建轮询循环。
+    /// 后台任务终态 → 给绑定 IM 用户推一条通知（后台线程跑，不阻塞调用方）。
+    pub fn notify_task_finished(&self, bot_id: String, title: String, ok: bool) {
+        let manager = Arc::clone(&self.manager);
+        tokio::spawn(async move {
+            manager.notify_task_finished(&bot_id, &title, ok).await;
+        });
+    }
+
     pub fn refresh_runtime(&self) {
         let _ = self.tx.send(ImTask::RefreshRuntime);
     }
