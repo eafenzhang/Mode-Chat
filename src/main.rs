@@ -12060,6 +12060,127 @@ impl PilotApp {
             .into_any_element()
     }
 
+    /// 电脑操控分级（H03）+ 暂停（H05）+ 应用授权与禁止清单（H04/H06）说明。
+    fn computer_grade_section(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let identity = self
+            .selected_bot()
+            .map(|bot| bot.identity())
+            .unwrap_or_default();
+        let level = crate::tool_scope::computer_level(&identity);
+        let paused = crate::tool_scope::computer_paused();
+        let grants = crate::tool_scope::computer_app_grants(&identity);
+        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+        // 每 Bot 档位：只看 / 后台 / 完全
+        let mut chips = div().flex().items_center().gap(px(ui_kit::S1));
+        for (value, label) in [
+            (crate::tool_scope::ComputerLevel::Look, i18n::t("只看")),
+            (crate::tool_scope::ComputerLevel::Background, i18n::t("后台")),
+            (crate::tool_scope::ComputerLevel::Foreground, i18n::t("完全")),
+        ] {
+            let active = level == value;
+            chips = chips.child(
+                ui_kit::chip(
+                    SharedString::from(format!("computer-level-{label}")),
+                    label,
+                    active,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    let Some(bot_id) = this.selected_bot().map(|bot| bot.id.clone()) else {
+                        this.toast(i18n::t("先选一个 Bot").to_string(), cx);
+                        return;
+                    };
+                    if let Err(message) = crate::tool_scope::set_computer_level(&bot_id, value) {
+                        this.toast(message, cx);
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        rows.push(
+            settings_row(
+                i18n::t("档位").to_string(),
+                Some(i18n::t("只看：仅截屏/读窗口；后台：可操作但不可切前台；完全：全允许").to_string()),
+            )
+            .child(chips)
+            .into_any_element(),
+        );
+        // 暂停 / 恢复（全局）
+        let pause_label = if paused {
+            i18n::t("恢复")
+        } else {
+            i18n::t("暂停")
+        };
+        rows.push(
+            settings_row(
+                i18n::t("全局暂停").to_string(),
+                Some(if paused {
+                    i18n::t("已暂停：所有 Bot 的电脑操控都被拒绝").to_string()
+                } else {
+                    i18n::t("暂停后所有 Bot 的电脑操控都被拒绝（含截屏）").to_string()
+                }),
+            )
+            .child(
+                settings_button(
+                    SharedString::from("computer-pause-toggle"),
+                    SharedString::from(pause_label),
+                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    let next = !crate::tool_scope::computer_paused();
+                    if let Err(message) = crate::tool_scope::set_computer_paused(next) {
+                        this.toast(message, cx);
+                    } else {
+                        this.toast(
+                            if next {
+                                i18n::t("电脑操控已暂停").to_string()
+                            } else {
+                                i18n::t("电脑操控已恢复").to_string()
+                            },
+                            cx,
+                        );
+                    }
+                    cx.notify();
+                })),
+            )
+            .into_any_element(),
+        );
+        // 应用授权（H04）：展示当前 Bot 的白名单（空 = 不限制）；同应用租约说明。
+        rows.push(
+            settings_row(
+                i18n::t("应用授权").to_string(),
+                Some(if grants.is_empty() {
+                    i18n::t("不限制（所有应用可操控）；同一应用同时只归一个 Bot").to_string()
+                } else {
+                    grants.join(" / ")
+                }),
+            )
+            .into_any_element(),
+        );
+        // 永久禁止（H06）：内置系统设置/密码管理器等，不可解除。
+        rows.push(
+            settings_row(
+                i18n::t("永久禁止").to_string(),
+                Some(
+                    i18n::t("系统设置、凭据管理器、密码管理器（1Password/Bitwarden/KeePass 等）、锁屏")
+                        .to_string(),
+                ),
+            )
+            .into_any_element(),
+        );
+        let count = rows.len();
+        let mut card = ui_kit::card(vec![]);
+        for (index, row) in rows.into_iter().enumerate() {
+            card = card.child(ui_kit::card_row(row, index + 1 == count));
+        }
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(ui_kit::S2))
+            .child(ui_kit::section(i18n::t("分级与安全")))
+            .child(card)
+            .into_any_element()
+    }
+
     fn settings_page_computer(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let (width, height) = crate::computer_tools::screen_size();
         let body = settings_page_body(i18n::t("电脑操控"))
@@ -12092,6 +12213,7 @@ impl PilotApp {
                 "电脑操控插件",
                 cx,
             ))
+            .child(self.computer_grade_section(cx))
             .child(settings_tool_scope_section(
                 crate::tool_scope::Family::Computer,
                 self.computer_enabled,

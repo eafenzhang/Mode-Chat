@@ -23,6 +23,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, SendInput,
 };
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use windows_sys::core::BOOL;
@@ -500,6 +502,79 @@ struct WindowInfo {
     active: bool,
 }
 
+/// H04 应用租约：app（进程名，小写）→ (bot_id, 最近占用时间)。同一应用同时只给一个 Bot。
+static APP_LEASES: OnceLock<Mutex<HashMap<String, (String, std::time::Instant)>>> = OnceLock::new();
+/// 租约空闲超时：超过这个时间没再操作就释放，避免 Bot 中断后永久占着。
+const LEASE_IDLE: Duration = Duration::from_secs(300);
+
+fn acquire_app_lease(scope: &str, hwnd: HWND) -> Result<(), String> {
+    let process = window_process_name(hwnd).to_ascii_lowercase();
+    if process.is_empty() {
+        return Ok(());
+    }
+    let owner = crate::tool_scope::teammate_id(scope).unwrap_or_else(|| "ui".to_string());
+    let leases = APP_LEASES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut leases = leases.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, (_, at)| at.elapsed() < LEASE_IDLE);
+    match leases.get(&process) {
+        Some((holder, _)) if holder != &owner => Err(format!(
+            "应用 {process} 正由另一个 Bot（{holder}）操控，等它空闲 5 分钟或先停掉那边。"
+        )),
+        _ => {
+            leases.insert(process, (owner, std::time::Instant::now()));
+            Ok(())
+        }
+    }
+}
+
+/// 永久禁止清单判定：窗口标题 + 进程名命中即拒绝（系统设置/密码管理器等）。
+fn ensure_window_allowed(hwnd: HWND, scope: &str) -> Result<(), String> {
+    if hwnd.is_null() {
+        return Ok(());
+    }
+    let title = window_title(hwnd);
+    let process = window_process_name(hwnd);
+    if let Some(keyword) = crate::tool_scope::blocked_window(&title, &process) {
+        return Err(format!(
+            "该窗口属于永久禁止操控的范围（命中「{keyword}」：{title} / {process}），已拒绝。"
+        ));
+    }
+    crate::tool_scope::ensure_app_granted(scope, &process)?;
+    acquire_app_lease(scope, hwnd)
+}
+
+/// 前台窗口归属的进程可执行文件名（取不到返回空串）。
+fn window_process_name(hwnd: HWND) -> String {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+    let mut pid = 0u32;
+    // SAFETY: 只读窗口归属进程；句柄成对关闭。
+    unsafe {
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return String::new();
+        }
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return String::new();
+        }
+        let mut buffer = [0u16; 1024];
+        let mut size = buffer.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut size);
+        CloseHandle(handle);
+        if ok == 0 {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&buffer[..size as usize]);
+        path.rsplit(['\\', '/'])
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
 fn window_title(hwnd: HWND) -> String {
     let length = unsafe { GetWindowTextLengthW(hwnd) };
     if length <= 0 {
@@ -846,10 +921,23 @@ impl AgentTool for ComputerTool {
         _signal: CancellationToken,
         _on_update: Arc<dyn Fn(rpi_agent::ToolResultPartial) + Send + Sync>,
     ) -> Result<AgentToolResult, rpi_agent::AgentError> {
-        if !crate::tool_scope::allowed(crate::tool_scope::Family::Computer, &self.scope) {
-            return Err(rpi_agent::AgentError::Tool(crate::tool_scope::denial(
-                crate::tool_scope::Family::Computer,
-            )));
+        // H03 档位：只看/后台/完全；H06 禁止清单在输入与聚焦时再查窗口。
+        let kind = match self.action {
+            Action::Screenshot
+            | Action::ScreenSize
+            | Action::Windows
+            | Action::WindowScreenshot
+            | Action::ClipboardGet
+            | Action::CursorPos => crate::tool_scope::ComputerAction::Inspect,
+            Action::FocusWindow => crate::tool_scope::ComputerAction::Focus,
+            _ => crate::tool_scope::ComputerAction::Input,
+        };
+        crate::tool_scope::ensure_computer_action(&self.scope, kind)
+            .map_err(rpi_agent::AgentError::Tool)?;
+        // 输入打到前台、聚焦改前台：先过永久禁止清单（系统设置/密码管理器等）。
+        if kind == crate::tool_scope::ComputerAction::Input {
+            ensure_window_allowed(unsafe { GetForegroundWindow() }, &self.scope)
+                .map_err(rpi_agent::AgentError::Tool)?;
         }
         let result = match self.action {
             Action::Screenshot => {
@@ -958,6 +1046,7 @@ impl AgentTool for ComputerTool {
             }
             Action::FocusWindow => {
                 let hwnd = find_window(&params).map_err(rpi_agent::AgentError::Tool)?;
+                ensure_window_allowed(hwnd, &self.scope).map_err(rpi_agent::AgentError::Tool)?;
                 focus_window(hwnd).map_err(rpi_agent::AgentError::Tool)?;
                 text_result(format!("已聚焦窗口 {}", window_title(hwnd)))
             }

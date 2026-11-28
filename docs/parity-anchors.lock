@@ -122,8 +122,8 @@ src/browser_tools.rs:46|fn session_key(scope: &str) -> String {
 src/browser_tools.rs:651|"browser_close"
 src/capabilities.rs:15|pub fn rows() -> Vec<CapabilityRow> {
 src/composer_input.rs:16|gpui::actions!(composer, [Send, SendSecondary]);
-src/computer_tools.rs:250|}
-src/computer_tools.rs:98|pub fn tools(identity: &str) -> Vec<HarnessTool> {
+src/computer_tools.rs:100|pub fn tools(identity: &str) -> Vec<HarnessTool> {
+src/computer_tools.rs:252|}
 src/connectors.rs:38|pub fn missing_secrets(spec: &ConnectorSpec, configured: &[String]) -> Vec<&'sta
 src/cua_tree.rs:272|pub fn tools(identity: &str) -> Vec<HarnessTool> {
 src/cua_tree.rs:320|
@@ -201,49 +201,49 @@ src/main.rs:1131|fn apply(&mut self, action: GoalAction, cx: &mut Context<Self>)
 src/main.rs:11591|&self
 src/main.rs:11601|.collect();
 src/main.rs:11608|.iter()
-src/main.rs:12256|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
-src/main.rs:12305|SharedString::from(format!("private-archive-row-{id}"))
-src/main.rs:12839|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
-src/main.rs:13175|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
-src/main.rs:13940|cx.notify();
-src/main.rs:14450|.child(settings_group(vec![
-src/main.rs:15661|cx.notify();
-src/main.rs:16312|cx.notify();
-src/main.rs:16322|.child(ui::stat_card(
+src/main.rs:12378|// ---- W3：删除隐私 Bot 后仍受保护的目录 ----
+src/main.rs:12427|SharedString::from(format!("private-archive-row-{id}"))
+src/main.rs:12961|fn permission_menu_overlay(&mut self, cx: &mut Context<Self>) -> Option<gpui::An
+src/main.rs:13297|// 测试连接：只在有 key 时出现（没 key 测了也没意义）。
+src/main.rs:14062|cx.notify();
+src/main.rs:14572|.child(settings_group(vec![
+src/main.rs:15783|cx.notify();
 src/main.rs:1636|strip = strip.child(stage_action_chip(
-src/main.rs:16360|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
+src/main.rs:16434|cx.notify();
+src/main.rs:16444|.child(ui::stat_card(
+src/main.rs:16482|tri!("最近 {range} 天还没有用量。", "No usage in the last {range} days.")
 src/main.rs:1662|strip = strip.child(stage_action_chip(
 src/main.rs:1683|strip = strip.child(stage_action_chip(
 src/main.rs:1727|.id(SharedString::from(format!(
-src/main.rs:18739|Err(message) => {
-src/main.rs:19076|if this.screenshot_watching {
-src/main.rs:19480|.font_family(theme::FONT_FAMILY)
-src/main.rs:19542|return;
-src/main.rs:19983|mix(author_id.len());
-src/main.rs:20248|.line_height(px(18.))
-src/main.rs:20449|"会话尚未建立"
-src/main.rs:20724|if boundary_ok {
-src/main.rs:20756|///
-src/main.rs:20788|.pointer()
-src/main.rs:20806|if let Some(code) = fenced_code(text) {
+src/main.rs:18861|Err(message) => {
+src/main.rs:19198|if this.screenshot_watching {
+src/main.rs:19602|.font_family(theme::FONT_FAMILY)
+src/main.rs:19664|return;
+src/main.rs:20105|mix(author_id.len());
+src/main.rs:20370|.line_height(px(18.))
+src/main.rs:20571|"会话尚未建立"
+src/main.rs:20846|if boundary_ok {
+src/main.rs:20878|///
+src/main.rs:20910|.pointer()
+src/main.rs:20928|if let Some(code) = fenced_code(text) {
 src/main.rs:2099|fn cancel_subtree(&mut self, task_id: String, cx: &mut Context<Self>) {
-src/main.rs:21028|.line_height(px(16.))
-src/main.rs:21048|"用量"
-src/main.rs:21058|enum SettingsDetail {
+src/main.rs:21150|.line_height(px(16.))
+src/main.rs:21170|"用量"
+src/main.rs:21180|enum SettingsDetail {
 src/main.rs:2143|/// 重试（None）/改派（Some(owner)）：先推进台账，再让后端派发成员回合。
 src/main.rs:216|fn panel_target_width(
-src/main.rs:21808|Err(message) => this.toast(message, cx)
-src/main.rs:22506|bot_team::approval::ApprovalLevel::Full => "full"
-src/main.rs:22534|.options
+src/main.rs:21930|Err(message) => this.toast(message, cx)
+src/main.rs:22628|bot_team::approval::ApprovalLevel::Full => "full"
+src/main.rs:22656|.options
 src/main.rs:2309|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:233|}
 src/main.rs:2389|"task-reassign-{}"
-src/main.rs:24226|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2432|"task-reassign-{}-{}"
-src/main.rs:24868|.into_any_element()
+src/main.rs:24348|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+src/main.rs:24990|.into_any_element()
 src/main.rs:2503|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
 src/main.rs:254|const TRANSCRIPT_WINDOW: usize = 120;
-src/main.rs:27152|.text_size(px(ui_kit::T_LABEL))
+src/main.rs:27274|.text_size(px(ui_kit::T_LABEL))
 src/main.rs:2858|fn push_member_delta(&mut self, member: &str, delta: &str) {
 src/main.rs:2876|fn finish_member(&mut self, member: &str) {
 src/main.rs:3322|/// 用量页时间范围（天）：1/7/30/90。
@@ -321,8 +321,6 @@ src/theme.rs:143|///
 src/theme.rs:499|pub const RADIUS_BUBBLE: f32 = 18.0;
 src/tool_render.rs:26|pub fn family(name: &str) -> ToolFamily {
 src/tool_render.rs:68||| has("browser")
-src/tool_scope.rs:1|//! 浏览器 / 电脑控制的「使用范围」。
-src/tool_scope.rs:9|//! 因此设置页关掉后立即生效，不必重开会话。
 src/ui_kit.rs:129|fn pointer(mut self) -> Self {
 src/ui_kit.rs:26|pub const S1: f32 = 4.;
 src/ui_kit.rs:407|button_state(id, text, false)
