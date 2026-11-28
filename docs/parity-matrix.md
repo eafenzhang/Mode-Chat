@@ -152,7 +152,7 @@
 | --- | --- | --- | --- | --- | --- |
 | J01 | 微信（iLink 扫码 + 长轮询） | `ds-bot/src/host/im/platforms/weixin.js` | ✅ | `src/im_service.rs:155`（`ImQrProvider` 枚举）/`:153`（其文档注）、`src/im_runtime.rs:1016`（start_loop） | 无 |
 | J02 | 企业微信（智能机器人扫码） | `ds-bot/src/host/im/platforms/wecom.js` | ✅ | `src/im_runtime.rs:719`（start_wecom_loop）、`src/im_service.rs:17` | 无 |
-| J03 | 飞书 | `ds-bot/src/host/im/platforms/feishu.js` | ❌ | 仅枚举 `crates/bots-service/src/lib.rs:69`；`src/im_runtime.rs` 无 feishu 运行时（长连接协议未公开，需逆向官方 SDK 才能接） | 配得上、跑不起来 〔降级 v0.6（已按空态交付）〕 |
+| J03 | 飞书 | `ds-bot/src/host/im/platforms/feishu.js` | 🟡 | 外挂适配器 `adapters/feishu/adapter.mjs`（长连接帧协议按官方 SDK 结构实现：outbound_ws endpoint + 二进制帧 SIGNAL/DATA/CONTROL，OpenAPI 文本/图片/文件回复）；IM 频道页飞书卡可凭据创建（App ID/Secret） | 官方帧协议未公开、待真实凭据联调确认（出入可发适配器包在线修正） 〔降级 v0.7（待联调）〕 |
 | J04 | 钉钉 | `ds-bot/src/host/im/platforms/dingtalk.js` | 🟡 | Stream 模式已接入：`crates/bots-service/src/dingtalk.rs`（gateway/帧/事件解析）、`src/im_runtime.rs`（refresh_dingtalk + stream 循环 + sessionWebhook 回复）、IM 频道页凭据创建（App Key/Secret） | 代码与 UI 完整，缺真实凭据联调；发文件未做（webhook 仅文本） 〔降级 待凭据联调〕 |
 | J05 | QQ / Telegram / Discord / Slack | 对应 `platforms/*.js` | ❌ | `crates/bots-service/src/lib.rs:60` 把 telegram/webhook/discord 列为“已下线直接丢弃” | 无 〔降级 不在路线图〕 |
 | J06 | 绑定码（私聊/群绑定到工作区） | `ds-bot/src/host/im/index.js`（pairing） | ✅ | `src/im_service.rs:183`（BindCodeStore）、`src/im_runtime.rs:2701`（`handle_bind`） | 无 |
@@ -251,8 +251,8 @@
 | 状态 | v0.4.0 | v0.6.0 | 占比（v0.6.0） |
 | --- | --- | --- | --- |
 | ✅ 已有 | 73 | **91** | 66.9% |
-| 🟡 半成品 | 22 | **21** | 15.4% |
-| ❌ 缺失 | 41 | **24** | 17.6% |
+| 🟡 半成品 | 22 | **22** | 16.2% |
+| ❌ 缺失 | 41 | **23** | 16.9% |
 | 合计 | 136 | 136 | 100% |
 
 分域明细（✅/🟡/❌，合计 136）：
@@ -268,7 +268,7 @@
 | G 浏览器 | 6 | 2/1/3 | 每 Bot 独立 profile 已补（G02）；缺内嵌面板、Cookie 导入、插件（降级 v0.6） |
 | H 电脑操控 | 6 | 2/0/4 | 工具齐，分级/租约/接管/永久禁止全未做（降级 v0.6） |
 | I 本地 Agent | 5 | 3/1/1 | ACP 齐，codex/claude 原生驱动缺（降级 v0.6） |
-| J IM | 9 | 6/1/2 | IM 提问卡可用 `/question` 编号回选（J08）；钉钉 Stream 已接入待凭据联调，飞书无公开长连接协议保持空态 |
+| J IM | 9 | 6/2/1 | IM 提问卡可用 `/question` 编号回选（J08）；钉钉 Stream 已接入待凭据联调，飞书无公开长连接协议保持空态 |
 | K 连接器与能力 | 9 | 3/3/3 | 目录扩到 24（16 stdio + 8 远程 HTTP，K01）；OAuth/邮件/能力管理降级 v0.6 |
 | L Office | 3 | 0/0/3 | 全缺（降级 v0.6） |
 | M 用量 | 4 | 3/1/0 | 范围 1/7/30/90 + 按 Bot/按模型分组已补（M02/M03）；无日历选日（降级 v0.6） |

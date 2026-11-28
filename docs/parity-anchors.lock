@@ -3,7 +3,6 @@ crates/automation-schedule/src/cron.rs:1|//! 五段/六段/七段 cron 解析与
 crates/automation-schedule/src/cron.rs:49|pub fn parse(pattern: &str) -> Result<Self, String> {
 crates/bots-service/src/lib.rs:59|/// 已下线通道：解析阶段直接丢弃（与 TS `stripRetiredBotProviders` 同义）。
 crates/bots-service/src/lib.rs:60|pub const RETIRED_BOT_PROVIDERS: &[&str] = &["telegram", "webhook", "discord", "
-crates/bots-service/src/lib.rs:69|Feishu
 crates/bots-service/src/memory_store.rs:1133|maybe_daily_tidy(root);
 crates/bots-service/src/memory_store.rs:1161|maybe_daily_tidy(root);
 crates/bots-service/src/memory_store.rs:1224|pub fn history(root: &Path, limit: usize) -> Result<Vec<MemoryHistoryRecord>, St
