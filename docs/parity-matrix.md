@@ -32,7 +32,7 @@
 | A09 | 侧栏分组（section）归组/折叠/染色 | `ds-bot/src/client/folder-menu.js`、`host/folders.js` | ✅ | `fn sidebar_sections_section`，分组 CRUD）、`:13114`（`section-up-*`）、`:13166`（`section-delete-*`）、`src/main.rs:748`（`sidebar_section_dot` 染色辅助） | 无 |
 | A10 | 置顶 / 隐藏 / 恢复显示 | `ds-bot/src/client/sidebar.js`（pushpin） | ✅ | `src/data.rs:40`（`pinned`）、`:79`（`hidden_bots`）、`set_bot_flags`）、`src/main.rs`（「隐藏」菜单项）、`src/main.rs:13699`（「已隐藏」区） | 无 |
 | A11 | Bot 实时状态（正在做什么） | `ds-bot/src/client/member-status.js`、`host/feed.js` | 🟡 | `src/backend.rs:191`（`SessionEvent::Delta` 带 `member`，成员状态事件）、`src/main.rs:2854`（`push_member_delta`） | 只有“正在输出”，没有“正在做什么/在哪一步” 〔降级 v0.6〕 |
-| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | 🟡 | `src/data.rs:37`（`is_main` / `is_chief` 字段在）；微信壳 `fn wechat_nav`（`src/main.rs`，唯一侧栏） | v0.6 删 classic 后，`main_bot_card` 随 `sidebar` 一并删除；微信壳侧栏内 `is_chief`/`is_main`/`chief` **0 命中**，侧栏行 `fn wechat_list_row`（`src/main.rs`）只画头像/名字/时间/未读点，**无「谁是主 Bot」的视觉位**。〔降级 v0.7：补主卡位〕 |
+| A12 | 主卡位（Main bot 卡片） | `README.zh.md:68` | ✅ | `src/data.rs:37`（`is_main`）→ `fn main_bot_card`（`src/main.rs:23985`：会话列表顶部固定突出卡，accent 软底 + 主 Bot 徽标 + 状态点 + 最近预览，点击直达；普通列表不重复占行，未设主 Bot 时不占位） | 无 |
 | A13 | Bot 详情页用量/待办 | `ds-bot/src/client/usage-page.js` | ✅ | `ui::section(i18n::t("待办"))`，微信壳详情栏；classic 的 `bot_details` 已随 v0.6 D-CUT 删除）、`im-group-activation-{label}`，用量） | 无 |
 
 ## B. Main bot 与权限（5 项）
@@ -102,9 +102,9 @@
 | F03 | 回合中插话（steer，不打断） | `ds-bot/src/host/steer.js` | ✅ | `src/composer_input.rs:16`（SendSecondary）、`src/rpi_engine.rs:1299-1322` | 无 |
 | F04 | 输入排队（Enter 排队 / 回合结束自动放行） | `ds-bot/src/client/queue-dock.js` | 🟡 | `src/main.rs:5416`（`queue_current`）/`:5443`（`flush_queue`）、`queued: Vec<QueuedSend>`）、`:5404`（`MAX_QUEUED = 5`）；上限 5 条 | 逻辑有，但无排队条 UI（DS 有独立 dock），用户看不到排了几条 〔降级 v0.6〕 |
 | F05 | 旁路会话 `/side`（不写主 transcript） | `ds-bot/src/host/side.js:1-5` | ✅ | `strip_prefix("/side")` 命令入口）、`fn open_side`）、`fn apply_side_event`，旁路事件不进主 chat） | 无 |
-| F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`harness.events().watch` 监听）、`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs`（`chat.compacting` 写入）、`:24818`（`chat.compacting` 读点）、`:19212`（`WecomRow::Compacting` 行分支）、行定义 `fn compaction_status_row`，`id="chat-compaction-status"` 在 `:21617`）、`:1030`（`PaletteCmd::Compact` 定义）→ `:7600`（派发）、入口：命令面板（`PaletteCmd::Compact`） | checkpoint/handoff 语义未做（明确降级 v0.6） | 〔降级 v0.6：checkpoint/handoff 语义〕 |
+| F06 | 上下文压缩 / checkpoint / handoff（按模型窗口的比例触发） | `ds-bot/src/host/steward.js:20-32` | 🟡 | 自动压缩：引擎默认已开（`crates/rpi-harness/src/types.rs:327-330`，pi-rust checkout）；MC 接入：`harness.events().watch` 监听）、`SessionEvent::Compaction`）、`:1212`（`RpiSession::compact()`）；UI `src/main.rs`（`chat.compacting` 写入）、`:24818`（`chat.compacting` 读点）、`:19212`（`WecomRow::Compacting` 行分支）、行定义 `fn compaction_status_row`，`id="chat-compaction-status"` 在 `:21617`）、`:1030`（`PaletteCmd::Compact` 定义）→ `:7600`（派发）、入口：命令面板（`PaletteCmd::Compact`） | IM 侧 `/compact` 已接（BotCommand::Compact → compact_session）；checkpoint/handoff 语义未做（上游 pi-rust 无公开 API） | 〔降级 v0.6：checkpoint/handoff 语义〕 |
 | F07 | 全库聊天搜索 | `ds-bot/src/host/chat-index.js:4` | ✅ | `src/rpi_engine.rs:1591-1630`、`src/main.rs:7256`（`on_find_shortcut`）/`search_sessions` 调用）/`fn find_dialog_overlay`（`src/main.rs`） | 无 |
-| F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | 🟡 | 线性扫 JSONL（`src/rpi_engine.rs:1591` `search_sessions`） | 会话多时慢、无 part 概念 〔降级 v0.6〕 |
+| F08 | FTS5 索引（快、可搜历史全部 part） | `ds-bot/src/host/chat-index.js:48` | ✅ | `src/search_index.rs`（独立 FTS5 索引库 `v2/search-index.sqlite`，trigram 分词 CJK 友好，`refresh` @ `:52`，mtime 增量重建）；Ctrl+F 先查索引、不可用回退 `src/rpi_engine.rs:1591` 线性扫；隐私目录/workspace 排除 | 旧 db.sqlite 走原 LIKE（新会话全在 JSONL） |
 | F09 | 长会话窗口化渲染 | `ds-bot/src/client/cells.js` | ✅ | `docs/pilot-notes.md:146`（最近 120 条）、`src/main.rs:252`（`const TRANSCRIPT_WINDOW = 120`）、`transcript_limit.saturating_add`，累计翻页） | 无 |
 | F10 | Markdown（表格/代码块/列表/引用） | `ds-bot/src/client/text.js`、`mark.js` | 🟡 | `src/main.rs:22293`（`kit_markdown_el`，`.selectable(true)` `:22265`）**v0.6 删除 classic 后只剩微信壳一条路径**（`wechat_transcript:25421`）。**Q-04 的动作条**：`wechat_message_actions`（`:20483`）在 `wechat_row_el`（`:19742`）内两个调用点；动作条默认显示在正文下面（icon 样式），流式回答结束才出现；含「复制」`:20515`（按钮 id `wecom-copy-{index}`）、「引用」`:20547`（id `wechat-quote-{index}`）与「复制代码」（仅当 `:20565` 的 `fenced_code` 命中）。classic 的 `message_actions` 已随 D-CUT 删除 | 引用条已接入 composer；动作条 2026-11-27 改为正文下方 icon 样式 〔降级 v0.6〕 |
 | F11 | 思考过程折叠显示 | `ds-bot/src/client/turn-reasoning.js` | 🟡 | `src/main.rs:800`（`MsgKind::Reasoning`，枚举在 `:798`）、`:3693`（`WecomRow::ToolGroup` 折叠组变体；渲染分支 `WecomRow::ToolGroup` 两处（`src/main.rs`/`:20007`）） | 思考段可显示，折叠组只覆盖工具卡 〔降级 v0.6〕 |
@@ -167,12 +167,12 @@
 | K01 | 连接器目录 | `ds-bot/src/host/connectors/catalog.js:20-`（37 个，多数 remote+OAuth） | 🟡 | `crates/connectors-service/src/lib.rs:174`（16 个 stdio 内置）、`:75`（`REMOTE_CATALOG` 8 个 HTTP 远程：huggingface/exa/deepwiki/context7/mslearn/cloudflare-docs/amap/github-copilot）、`:360`（`remote_spec`） | 总数 24（16+8），仍少于 DS 的 37；OAuth 型（GitHub/Gmail/Notion/Drive）不在内，见 K04 〔降级 v0.6（本轮已扩到 24）〕 |
 | K02 | 填连接器密钥 | `ds-bot/src/client/connectors-page.js` | ✅ | `src/main.rs:9683`（`SettingsDetail::ConnectorSecret`）、`:15420`（`ConnectorSecret` 打开点）、`src/connectors.rs:38` | 无 |
 | K03 | MCP stdio 工具接入（`mcp__<id>__*`） | `ds-bot/src/host/connectors/gateway.js` | ✅ | `src/mcp_host.rs:43/482`、`src/backend.rs:320`（`open_rpi_session`）/`:345`（`mcp_host::for_workspace`） | 无 |
-| K04 | OAuth 登录（GitHub / Gmail / Notion / Google Drive） | `ds-bot/src/host/connectors/oauth.js` | ❌ | `src/main.rs` 自认“Figma / Linear / Google Drive 等登录授权仍走外部凭据” | 需要 token 手填 〔降级 v0.6〕 |
+| K04 | OAuth 登录（GitHub / Gmail / Notion / Google Drive） | `ds-bot/src/host/connectors/oauth.js` | ✅ | `src/oauth.rs`（PKCE S256 + state + 本地回调 `127.0.0.1:17890`，GitHub/Google/Notion token 交换，`begin` @ `:110`）；连接器页「OAuth 授权」区块；token 落 secrets.json `oauth:<平台>`，连接器按 Bearer 直接可用 | 各平台 OAuth 应用需用户自建（回调填本机地址） |
 | K05 | 邮箱连接器（Gmail/QQ/163） | `ds-bot/src/host/connectors/mail/` | ❌ | 无 | 无 〔降级 v0.6〕 |
 | K06 | 从 Claude Desktop / Cursor / VS Code 导入配置 | `ds-bot/src/client/connectors-page.js`（import） | ❌ | 无 | 无 〔降级 v0.6〕 |
 | K07 | 能力页（团队共享 MCP/技能/能力包） | `README.zh.md:112`、`ds-bot/src/host/capabilities.js` | 🟡 | `src/capabilities.rs:15`（`capabilities::rows`，`:15-52` 只读 4 行、无开关） | 只能看，不能管 〔降级 v0.6〕 |
 | K08 | 能力/能力包增删 + 按 Bot 启用 | `ds-bot/src/host/capabilities.js:21`、`client/capability-settings.js` | ❌ | grep `"save_capability"`/`list_capabilities` = 0 命中 | 无 〔降级 v0.6〕 |
-| K09 | 插件宿主（第三方插件） | `ds-bot/README.md`（plugin bundle） | ❌ | 「暂未接入插件宿主；MCP 连接器见「连接器」」这句空态文案（`src/main.rs`，无可唯一定位的符号） | 页面在，功能空 〔降级 v0.6〕 |
+| K09 | 插件宿主（第三方插件） | `ds-bot/README.md`（plugin bundle） | 🟡 | 内置插件开关已接工具注入链（`src/backend.rs` 两处注入点叠加 workspace enabledPlugins，浏览器/电脑操控子页有开关行）；插件页去掉「未接入」占位 | 第三方市场插件清单协议在闭源主程序，第三方能力走连接器（MCP） 〔降级 v0.7〕 |
 
 ## L. Office 文件（3 项）
 
@@ -189,7 +189,7 @@
 | M01 | 总量 / 输入 / 输出 / 缓存 | `ds-bot/src/host/usage.js:41-45` | ✅ | `src/rpi_engine.rs:1022`（`AgentEnd` 聚合 `input_tokens`/`output_tokens`/`cache_read`/`reasoning_tokens`）、`src/main.rs:16081-16119`（四张 `ui::stat_card`：回合 / 总 tokens / 输入 / 输出） | 无 |
 | M02 | 按天趋势 | `ds-bot/src/client/usage-page.js` | ✅ | `usage-range-{days}` chip）、`usage_grouped(days)` 的 `by_day`） | 无 |
 | M03 | 按 Bot / 按模型拆分 | `ds-bot/src/host/usage.js`（byBot/byModel） | ✅ | `usage-group-{mode}` chip）、`src/rpi_engine.rs:1786`（`GroupedUsage{by_bot, by_model, sessions}`）、`:1969`（老会话按 header `cwd` 反查名册兜底） | 无 |
-| M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16071` 四档（1/7/30/90 天）、`src/main.rs:3311`（`usage_range`） | 四档够用；无日历选日、无 12 个月（明确降级，v0.6 再加） 〔降级 v0.6〕 |
+| M04 | 时间范围（24h～12 月 / 日历选日） | `ds-bot/src/client/usage-page.js`（range picker） | 🟡 | `src/main.rs:16071` 六档（1/7/30/90/180/365 天）、`src/main.rs:3311`（`usage_range`） | 12 个月有档位；无日历选日（明确降级） 〔降级 v0.6〕 |
 
 ## N. 定时任务（6 项）
 
@@ -250,26 +250,26 @@
 
 | 状态 | v0.4.0 | v0.6.0 | 占比（v0.6.0） |
 | --- | --- | --- | --- |
-| ✅ 已有 | 73 | **88** | 64.7% |
-| 🟡 半成品 | 22 | **22** | 16.2% |
-| ❌ 缺失 | 41 | **26** | 19.1% |
+| ✅ 已有 | 73 | **91** | 66.9% |
+| 🟡 半成品 | 22 | **21** | 15.4% |
+| ❌ 缺失 | 41 | **24** | 17.6% |
 | 合计 | 136 | 136 | 100% |
 
 分域明细（✅/🟡/❌，合计 136）：
 
 | 域 | 项数 | ✅/🟡/❌ | 结论 |
 | --- | --- | --- | --- |
-| A Bot 身份 | 13 | 8/5/0 | 记忆行与管理入口已补（A08）；A12 主卡位随 classic 删除降为 🟡（微信壳无主 Bot 视觉位）；缺指令编辑、形象上传、换目录重建会话（降级 v0.6） |
+| A Bot 身份 | 13 | 9/4/0 | 记忆行与管理入口已补（A08）；A12 主卡位已补（会话列表顶部突出卡）；缺指令编辑、形象上传、换目录重建会话（降级 v0.6） |
 | B Main bot | 5 | 3/1/1 | Bot 互相可见/互发消息已补（B05）；缺 Bot 自治建改 Bot（降级 v0.6） |
 | C 群聊 | 15 | 11/2/2 | 阶段证据/通过/打回（C08）、群外发言（C13）已补；缺 notice、引用整段对话（降级 v0.6） |
 | D 隐私 bot | 5 | 5/0/0 | 隔离闭环：会话/搜索/群 + 文件路径守卫（D05）+ 删除后归档（D04）全通 |
 | E 记忆 | 13 | 11/1/1 | Bot 记忆进提示（E03）、三工具（E05）、面板（E09）、拒写凭据（E13）全通；私聊自动回顾降级 v0.6 |
-| F 会话与输入 | 16 | 9/5/2 | F02 新会话入口三条（v0.5.1 Q-05：Ctrl+N `:6813`、标题栏「+」`:24445`、命令面板 `:7539`）、F06 压缩状态行（Q-01/Q-02，`fn compaction_status_row` `:21579`、行分支 `:19510`）、F10 消息复制（Q-04，`wechat_message_actions` `:19949`、复制 `:19987`）均在微信壳接通；注意 `:7539` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；另缺 show_view、语音、FTS5（降级 v0.6） |
+| F 会话与输入 | 16 | 10/4/2 | F02 新会话入口三条（v0.5.1 Q-05：Ctrl+N `:6813`、标题栏「+」`:24445`、命令面板 `:7539`）、F06 压缩状态行（Q-01/Q-02，`fn compaction_status_row` `:21579`、行分支 `:19510`）、F10 消息复制（Q-04，`wechat_message_actions` `:19949`、复制 `:19987`）均在微信壳接通；注意 `:7539` 命令面板是**行为等价但独立**的实现，未调 `new_session_for_selected`（去重记 v0.6）；F10 的引用条因 `wechat_composer` 无引用 UI 保留〔降级 v0.6〕；FTS5 已补（search_index.rs）；另缺 show_view、语音（降级 v0.6） |
 | G 浏览器 | 6 | 2/1/3 | 每 Bot 独立 profile 已补（G02）；缺内嵌面板、Cookie 导入、插件（降级 v0.6） |
 | H 电脑操控 | 6 | 2/0/4 | 工具齐，分级/租约/接管/永久禁止全未做（降级 v0.6） |
 | I 本地 Agent | 5 | 3/1/1 | ACP 齐，codex/claude 原生驱动缺（降级 v0.6） |
 | J IM | 9 | 6/1/2 | IM 提问卡可用 `/question` 编号回选（J08）；钉钉 Stream 已接入待凭据联调，飞书无公开长连接协议保持空态 |
-| K 连接器与能力 | 9 | 2/2/5 | 目录扩到 24（16 stdio + 8 远程 HTTP，K01）；OAuth/邮件/能力管理降级 v0.6 |
+| K 连接器与能力 | 9 | 3/3/3 | 目录扩到 24（16 stdio + 8 远程 HTTP，K01）；OAuth/邮件/能力管理降级 v0.6 |
 | L Office | 3 | 0/0/3 | 全缺（降级 v0.6） |
 | M 用量 | 4 | 3/1/0 | 范围 1/7/30/90 + 按 Bot/按模型分组已补（M02/M03）；无日历选日（降级 v0.6） |
 | N 定时任务 | 6 | 6/0/0 | 四型人类选择器 + 实时规则预览（N06）已补，写库经实测 |

@@ -237,6 +237,7 @@ src/main.rs:22293|.options
 src/main.rs:2305|.id(SharedString::from(format!("task-stop-{}", task_id_stop)))
 src/main.rs:231|}
 src/main.rs:2385|"task-reassign-{}"
+src/main.rs:23985|fn main_bot_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
 src/main.rs:2428|"task-reassign-{}-{}"
 src/main.rs:24627|.into_any_element()
 src/main.rs:2499|.child(dialog_field("group-name", i18n::t("名称"), &self.name))
